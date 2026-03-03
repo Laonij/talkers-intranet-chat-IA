@@ -74,15 +74,12 @@ app.use(express.static(path.join(__dirname, "public")));
 // upload for conversation files and for KB (admin)
 const upload = multer({ dest: uploadsDir, limits: { fileSize: 25 * 1024 * 1024 } });
 
-function setSessionCookie(req, res, token) {
-  const xfProto = String(req.headers["x-forwarded-proto"] || "");
-  const isHttps = xfProto.includes("https");
-
+function setSessionCookie(res, token) {
+  const isRender = !!process.env.RENDER || String(process.env.BASE_URL || "").startsWith("https://");
   res.cookie("session", token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: isHttps, // no Render fica TRUE (HTTPS)
-    path: "/",
+    secure: isRender, // ✅ no Render precisa ser true (HTTPS)
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }

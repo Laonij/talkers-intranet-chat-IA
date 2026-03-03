@@ -1,46 +1,40 @@
-// scripts/seed.js
+require("dotenv").config();
 const bcrypt = require("bcryptjs");
-const { getDb } = require("../db");
+const { migrate, get, run } = require("../db");
 
 (async () => {
-  const db = getDb();
+  try {
+    migrate();
 
-  const email = (process.env.ADMIN_EMAIL || "admin@local").trim();
-  const password = (process.env.ADMIN_PASSWORD || "Admin#1234").trim();
+    const email = String(process.env.ADMIN_EMAIL || "admin@local").trim().toLowerCase();
+    const password = String(process.env.ADMIN_PASSWORD || "Admin#1234");
 
-  if (!email || !password) {
-    console.error("❌ ADMIN_EMAIL ou ADMIN_PASSWORD vazios.");
+    if (!email || !password) {
+      console.log("❌ ADMIN_EMAIL ou ADMIN_PASSWORD não definidos.");
+      process.exit(1);
+    }
+
+    const existing = await get("SELECT id, email FROM users WHERE email=?", [email]);
+
+    const hash = await bcrypt.hash(password, 10);
+
+    if (!existing) {
+      await run(
+        "INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)",
+        [email, "Admin", hash, "admin"]
+      );
+      console.log("✅ Admin criado");
+      console.log("Email:", email);
+      console.log("Senha:", password);
+    } else {
+      await run("UPDATE users SET password_hash=?, role='admin' WHERE email=?", [hash, email]);
+      console.log("✅ Admin já existe (senha atualizada)");
+      console.log("Email:", email);
+    }
+
+    process.exit(0);
+  } catch (e) {
+    console.error("❌ Seed falhou:", e);
     process.exit(1);
   }
-
-  const passHash = await bcrypt.hash(password, 10);
-
-  // garante tabela
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user',
-      created_at TEXT NOT NULL
-    )
-  `).run();
-
-  // UPSERT (cria ou atualiza a senha do admin sempre)
-  db.prepare(`
-    INSERT INTO users (id, email, password_hash, role, created_at)
-    VALUES (@id, @email, @password_hash, 'admin', @created_at)
-    ON CONFLICT(email) DO UPDATE SET
-      password_hash = excluded.password_hash,
-      role = 'admin'
-  `).run({
-    id: "admin",
-    email,
-    password_hash: passHash,
-    created_at: new Date().toISOString(),
-  });
-
-  console.log("✅ Admin pronto (criado/atualizado)");
-  console.log("Email:", email);
-  console.log("Senha: (definida via ADMIN_PASSWORD no Render)");
 })();

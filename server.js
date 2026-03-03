@@ -16,6 +16,34 @@ const JWT_SECRET = process.env.JWT_SECRET || "troque-por-um-segredo-grande";
 
 migrate();
 
+async function ensureAdminUser() {
+  try {
+    const adminEmail = String(process.env.ADMIN_EMAIL || "admin@local").trim().toLowerCase();
+    const adminPass = String(process.env.ADMIN_PASSWORD || "Admin#1234");
+    const adminName = String(process.env.ADMIN_NAME || "Admin").trim() || "Admin";
+
+    const existing = await get("SELECT id, email FROM users WHERE email=?", [adminEmail]);
+    if (existing) {
+      console.log("✅ Admin já existe:", adminEmail);
+      return;
+    }
+
+    const hash = await bcrypt.hash(adminPass, 10);
+    await run(
+      "INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)",
+      [adminEmail, adminName, hash, "admin"]
+    );
+
+    console.log("✅ Admin criado:", adminEmail);
+    // NÃO imprima senha em produção
+  } catch (e) {
+    console.log("⚠️ Falha ao criar admin (não vou derrubar o server):", e?.message || e);
+  }
+}
+
+// cria admin automaticamente no boot (sem precisar Shell)
+ensureAdminUser();
+
 // AUTO SEED/INDEX (demo)
 if (String(process.env.AUTO_SEED_ON_BOOT || "false").toLowerCase() === "true") {
   try {
@@ -75,11 +103,11 @@ app.use(express.static(path.join(__dirname, "public")));
 const upload = multer({ dest: uploadsDir, limits: { fileSize: 25 * 1024 * 1024 } });
 
 function setSessionCookie(res, token) {
-  const isRender = !!process.env.RENDER || String(process.env.BASE_URL || "").startsWith("https://");
+  const isHttps = true; // Render sempre HTTPS
   res.cookie("session", token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: isRender, // ✅ no Render precisa ser true (HTTPS)
+    secure: isHttps,
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }

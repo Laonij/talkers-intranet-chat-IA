@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat - Intranet</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-title">Chat Interno</div>
+        <div class="brand-sub" id="userSub">—</div>
+      </div>
+
+      <button class="btn primary" id="btnNewChat">+ Nova conversa</button>
+
+      <div class="section">
+        <div class="section-title">Conversas</div>
+        <div class="conversations" id="convList"></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Conta</div>
+        <div class="row">
+          <a class="btn" href="/admin.html" id="adminBtn" style="display:none;">Admin</a>
+          <button class="btn danger" id="btnLogout">Sair</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div class="title" id="convTitle">—</div>
+        <div class="mode">
+          <label>Modo:</label>
+          <select id="modeSelect">
+            <option value="geral">Geral</option>
+            <option value="empresa">Empresa</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="hint">
+          <b>Empresa</b>: pesquisa na pasta do Google Drive (via <b>INDEX_FOLDER</b>) usando SQLite FTS (sem custo).
+          <br/>Rode <code>npm run index</code> (uma vez) e <code>npm run watch</code> (para atualizar sozinho).
+        </div>
+
+        <div class="chat" id="chat"></div>
+
+        <div class="files">
+          <div class="files-header">
+            <div><b>Arquivos da conversa</b></div>
+            <form id="uploadForm">
+              <input type="file" id="fileInput" name="file" />
+              <button class="btn" type="submit">Enviar arquivo</button>
+            </form>
+          </div>
+          <div class="files-list" id="filesList"></div>
+        </div>
+
+        <div class="composer">
+          <textarea id="msg" placeholder="Escreva sua pergunta... (Enter envia, Shift+Enter quebra linha)"></textarea>
+          <button class="btn primary" id="btnSend">Enviar</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script src="/client.js"></script>
+</body>
+</html>

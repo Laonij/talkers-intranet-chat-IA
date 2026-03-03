@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin - Intranet Chat</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="center">
+  <div class="card wide">
+    <div class="row" style="justify-content:space-between;align-items:center;">
+      <h1>Admin</h1>
+      <a class="btn" href="/index.html">Voltar</a>
+    </div>
+
+    <h2>Base interna (Google Drive via pasta sincronizada)</h2>
+    <div class="row" style="align-items:center;">
+      <button class="btn primary" id="btnReindex">Reindexar agora</button>
+      <div class="muted small" id="reindexMsg"></div>
+    </div>
+    <div class="muted small" style="margin-top:6px;">
+      Também dá para rodar no terminal: <code>npm run index</code> (uma vez) e <code>npm run watch</code> (monitorar alterações).
+    </div>
+
+    <h2>Criar usuário</h2>
+    <div class="grid">
+      <div>
+        <label>Nome</label>
+        <input id="name" placeholder="Nome" />
+      </div>
+      <div>
+        <label>Email</label>
+        <input id="email" placeholder="email@empresa.com" />
+      </div>
+      <div>
+        <label>Senha</label>
+        <input id="password" type="password" placeholder="Senha" />
+      </div>
+      <div>
+        <label>Role</label>
+        <select id="role">
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn primary" id="btnCreate">Criar</button>
+    <div class="muted small" id="msg"></div>
+
+    <h2>Base interna (KB)</h2>
+<div class="muted small">
+  • Upload de arquivos para a KB (servidor)<br/>
+  • (Opcional) Sync de uma pasta do Google Drive (Service Account)<br/>
+  Depois rode <b>Reindexar</b> para atualizar a busca.
+</div>
+
+<h3>Upload para KB</h3>
+<form id="kbUploadForm">
+  <input type="file" id="kbFile" />
+  <button class="btn" type="submit">Enviar para KB</button>
+</form>
+<div class="muted small" id="kbUploadMsg" style="margin-top:6px;"></div>
+
+<h3>Sincronizar Google Drive → KB</h3>
+<button class="btn" id="btnSyncDrive">Sincronizar Drive</button>
+<div class="muted small" id="syncMsg" style="margin-top:6px;"></div>
+
+<h2>Usuários</h2>
+
+    <table class="table" id="usersTable">
+      <thead><tr><th>ID</th><th>Nome</th><th>Email</th><th>Role</th><th>Criado</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+<script>
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    credentials: 'include',
+    ...opts
+  });
+  const txt = await res.text();
+  let json = null;
+  try { json = txt ? JSON.parse(txt) : null; } catch {}
+  if (!res.ok) throw new Error(json?.error || txt || `HTTP ${res.status}`);
+  return json;
+}
+
+async function loadUsers(){
+  const data = await api('/api/admin/users');
+  const tb = document.querySelector('#usersTable tbody');
+  tb.innerHTML = '';
+  for (const u of data.users) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${u.id}</td><td>${u.name}</td><td>${u.email}</td><td>${u.role}</td><td>${u.created_at}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+document.getElementById('btnCreate').onclick = async () => {
+  const msg = document.getElementById('msg');
+  msg.textContent = '';
+  try {
+    await api('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.getElementById('name').value,
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value,
+        role: document.getElementById('role').value
+      })
+    });
+    msg.textContent = 'Usuário criado!';
+    await loadUsers();
+  } catch (e) {
+    msg.textContent = 'Erro: ' + e.message;
+  }
+};
+
+document.getElementById('btnReindex').onclick = async () => {
+  const m = document.getElementById('reindexMsg');
+  m.textContent = 'Iniciando... veja o terminal para progresso.';
+  try {
+    await api('/api/admin/reindex', { method:'POST', body: '{}' });
+    m.textContent = 'Reindex iniciado. Veja o terminal.';
+  } catch (e) {
+    m.textContent = 'Erro: ' + e.message;
+  }
+};
+
+document.getElementById('kbUploadForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const out = document.getElementById('kbUploadMsg');
+  out.textContent = '';
+  const f = document.getElementById('kbFile').files?.[0];
+  if (!f) { out.textContent = 'Selecione um arquivo.'; return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  const res = await fetch('/api/admin/kb/upload', { method:'POST', body: fd, credentials:'include' });
+  if (!res.ok) { out.textContent = 'Erro no upload: ' + await res.text(); return; }
+  out.textContent = 'Enviado! Agora clique em Reindexar.';
+  document.getElementById('kbFile').value = '';
+});
+
+document.getElementById('btnSyncDrive').onclick = async () => {
+  const m = document.getElementById('syncMsg');
+  m.textContent = 'Iniciando sync... veja logs do servidor.';
+  try {
+    await api('/api/admin/sync-drive', { method:'POST', body:'{}' });
+    m.textContent = 'Sync iniciado. Ao terminar, clique em Reindexar.';
+  } catch (e) {
+    m.textContent = 'Erro: ' + e.message;
+  }
+};
+
+loadUsers().catch(()=>location.href='/login.html');
+
+</script>
+</body>
+</html>

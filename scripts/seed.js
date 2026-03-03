@@ -1,82 +1,46 @@
 // scripts/seed.js
-// Seed "idempotente": cria admin se não existir e nunca derruba o deploy.
-
 const bcrypt = require("bcryptjs");
+const { getDb } = require("../db");
 
-function env(name, fallback = "") {
-  return (process.env[name] || fallback).trim();
-}
+(async () => {
+  const db = getDb();
 
-function resolveDbModule() {
-  const mod = require("../db");
+  const email = (process.env.ADMIN_EMAIL || "admin@local").trim();
+  const password = (process.env.ADMIN_PASSWORD || "Admin#1234").trim();
 
-  // tenta achar init
-  const init =
-    mod.init ||
-    mod.initDb ||
-    mod.initialize ||
-    (async () => {});
-
-  // tenta achar a conexão db
-  const db =
-    mod.db ||
-    (typeof mod.getDb === "function" ? mod.getDb() : null) ||
-    mod.connection ||
-    null;
-
-  return { db, init, mod };
-}
-
-async function run() {
-  const { db, init, mod } = resolveDbModule();
-
-  // inicializa se existir init
-  await init();
-
-  // se não achou db, tenta novamente após init (alguns projetos criam db dentro do init)
-  const { db: db2 } = resolveDbModule();
-  const conn = db2 || db;
-
-  if (!conn) {
-    console.log("⚠️ seed: não consegui obter conexão do banco. Vou ignorar seed para não quebrar deploy.");
-    return;
+  if (!email || !password) {
+    console.error("❌ ADMIN_EMAIL ou ADMIN_PASSWORD vazios.");
+    process.exit(1);
   }
 
-  const ADMIN_EMAIL = env("ADMIN_EMAIL", "admin@local");
-  const ADMIN_PASSWORD = env("ADMIN_PASSWORD", "Admin#1234");
+  const passHash = await bcrypt.hash(password, 10);
 
-  // tenta detectar tabela users (não quebra se não existir)
-  try {
-    const existing = conn
-      .prepare("SELECT id, email FROM users WHERE email = ? LIMIT 1")
-      .get(ADMIN_EMAIL);
+  // garante tabela
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      created_at TEXT NOT NULL
+    )
+  `).run();
 
-    if (existing) {
-      console.log("✅ Admin já existe");
-      console.log("Email:", existing.email);
-      return;
-    }
-
-    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-
-    // tenta inserir com colunas comuns
-    // ajuste se seu schema for diferente
-    conn.prepare(
-      "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, 'admin', datetime('now'))"
-    ).run(ADMIN_EMAIL, hash);
-
-    console.log("✅ Admin criado");
-    console.log("Email:", ADMIN_EMAIL);
-    console.log("Senha:", ADMIN_PASSWORD);
-  } catch (e) {
-    console.log("⚠️ seed: não consegui criar/verificar admin (schema pode ser diferente). Vou ignorar para não quebrar deploy.");
-    console.log("Detalhe:", e?.message || e);
-  }
-}
-
-run()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.log("⚠️ seed falhou, mas não vou quebrar o deploy:", err?.message || err);
-    process.exit(0);
+  // UPSERT (cria ou atualiza a senha do admin sempre)
+  db.prepare(`
+    INSERT INTO users (id, email, password_hash, role, created_at)
+    VALUES (@id, @email, @password_hash, 'admin', @created_at)
+    ON CONFLICT(email) DO UPDATE SET
+      password_hash = excluded.password_hash,
+      role = 'admin'
+  `).run({
+    id: "admin",
+    email,
+    password_hash: passHash,
+    created_at: new Date().toISOString(),
   });
+
+  console.log("✅ Admin pronto (criado/atualizado)");
+  console.log("Email:", email);
+  console.log("Senha: (definida via ADMIN_PASSWORD no Render)");
+})();

@@ -17,7 +17,7 @@
         </div>
       </div>
 
-      <button class="btn primary" id="btnNewChat">+ Nova conversa</button>
+      <button class="btn primary" id="btnNewChat"><span>+ Nova conversa</span></button>
 
       <div class="section">
         <div class="section-title">Conversas</div>
@@ -27,14 +27,17 @@
       <div class="section">
         <div class="section-title">Conta</div>
         <div class="row">
-          <a class="btn" href="/admin.html" id="adminBtn" style="display:none;">Admin</a>
-          <button class="btn danger" id="btnLogout">Sair</button>
+          <a class="btn" href="/admin.html" id="adminBtn" style="display:none;"><span>Admin</span></a>
+          <button class="btn danger" id="btnLogout"><span>Sair</span></button>
         </div>
       </div>
     </aside>
 
+    <div class="backdrop" id="sidebarBackdrop"></div>
+
     <main class="main">
       <div class="topbar">
+        <button class="toggle" id="btnToggleSidebar" aria-label="Menu">☰</button>
         <div class="title" id="convTitle">—</div>
 
         <div class="mode" id="modeWrap" style="display:none;">

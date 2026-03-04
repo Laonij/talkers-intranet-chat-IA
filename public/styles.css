@@ -103,18 +103,24 @@ h1{margin:0; font-size:30px; letter-spacing:-.02em}
 .error{color:#b91c1c; background:#fff5f5; border:1px solid #fecaca; padding:10px 12px; border-radius:12px; margin-top:12px}
 
 /* App layout */
-.app{
+.app {
   display:grid;
   grid-template-columns: 320px 1fr;
   height:100vh;
+
+  height: 100vh;
+  overflow: hidden;
 }
-.sidebar{
+.sidebar {
   background:var(--panel);
   border-right:1px solid var(--border);
   padding:14px;
   display:flex;
   flex-direction:column;
   gap:14px;
+
+  min-height: 0;
+  overflow: hidden;
 }
 .brand{
   display:flex;
@@ -140,10 +146,14 @@ h1{margin:0; font-size:30px; letter-spacing:-.02em}
   text-transform:uppercase;
   margin:6px 8px;
 }
-.conversations{
+.conversations {
   display:flex;
   flex-direction:column;
   gap:8px;
+
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .conv{
   padding:10px 12px;
@@ -157,11 +167,13 @@ h1{margin:0; font-size:30px; letter-spacing:-.02em}
 .conv-title{font-weight:700; font-size:13px}
 .conv-sub{font-size:12px; color:var(--muted); margin-top:3px}
 
-.main{
+.main {
   display:flex;
   flex-direction:column;
   height:100%;
   overflow:hidden;
+
+  min-height: 0;
 }
 .topbar{
   display:flex;
@@ -177,22 +189,29 @@ h1{margin:0; font-size:30px; letter-spacing:-.02em}
 .mode label{margin:0}
 .mode select{width:auto; padding:10px 12px}
 
-.panel{
+.panel {
   padding:16px 18px;
   display:flex;
   flex-direction:column;
   gap:12px;
   overflow:hidden;
   height:100%;
+
+  flex: 1;
+  min-height: 0;
 }
 
-.chat{
+.chat {
   flex:1;
   overflow:auto;
   background:var(--panel);
   border:1px solid var(--border);
   border-radius:var(--radius);
   padding:16px;
+
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .msg{
   display:flex;
@@ -298,4 +317,93 @@ h1{margin:0; font-size:30px; letter-spacing:-.02em}
   .files-header{flex-direction:column; align-items:stretch}
   .files-header form{justify-content:space-between}
   .row{flex-direction:column}
+}
+
+
+/* Conversation actions */
+.conv {
+  position: relative;
+}
+.conv-actions {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.conv:hover .conv-actions,
+.conv:focus-within .conv-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: white;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-btn:hover { background: var(--panel); }
+.icon-btn.danger { border-color: rgba(239,68,68,.35); }
+.icon-btn.danger:hover { background: rgba(239,68,68,.08); }
+
+/* Sidebar collapse (desktop) */
+body.sidebar-collapsed .app { grid-template-columns: 84px 1fr; }
+body.sidebar-collapsed .sidebar { padding: 14px 10px; }
+body.sidebar-collapsed .brand { gap: 0; }
+body.sidebar-collapsed .brand-sub,
+body.sidebar-collapsed .section-title,
+body.sidebar-collapsed .btn span,
+body.sidebar-collapsed .conv-title,
+body.sidebar-collapsed .conv-meta { display: none; }
+body.sidebar-collapsed .btn { justify-content: center; padding: 10px 10px; }
+body.sidebar-collapsed .brand-title { display: none; }
+body.sidebar-collapsed .logo-sm { width: 40px; height: 40px; }
+
+/* Toggle button */
+.topbar .toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: white;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 10px;
+}
+.topbar .toggle:hover { background: var(--panel); }
+
+/* Mobile: off-canvas sidebar */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.25);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+  z-index: 50;
+}
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 280px;
+    transform: translateX(-110%);
+    transition: transform .2s ease;
+    z-index: 60;
+    border-right: 1px solid var(--border);
+  }
+  body.sidebar-open .sidebar { transform: translateX(0); }
+  body.sidebar-open .backdrop { opacity: 1; pointer-events: auto; }
 }

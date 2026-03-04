@@ -47,6 +47,20 @@ function renderConversations() {
 
     item.appendChild(t);
     item.appendChild(s);
+
+    const actions = document.createElement("div");
+    actions.className = "conv-actions";
+
+    const del = document.createElement("button");
+    del.className = "icon-btn danger";
+    del.title = "Apagar conversa";
+    del.type = "button";
+    del.textContent = "🗑";
+    del.onclick = (e) => { e.stopPropagation(); deleteConversation(c.id); };
+
+    actions.appendChild(del);
+    item.appendChild(actions);
+
     list.appendChild(item);
   }
 }
@@ -103,6 +117,8 @@ async function refreshConversations() {
 
 async function openConversation(id) {
   currentConvId = id;
+  // close sidebar on mobile after selecting a conversation
+  document.body.classList.remove("sidebar-open");
   renderConversations();
 
   const { conversation, messages, files } = await api(`/api/conversations/${id}/messages`);
@@ -126,6 +142,23 @@ async function createConversation() {
   await refreshConversations();
   await openConversation(conversation_id);
 }
+
+async function deleteConversation(id) {
+  if (!confirm("Apagar esta conversa? Isso não pode ser desfeito.")) return;
+  await api(`/api/conversations/${id}`, { method: "DELETE" });
+
+  if (currentConvId === id) currentConvId = null;
+
+  await loadConversations();
+  if (!currentConvId && conversations.length) {
+    await openConversation(conversations[0].id);
+  } else if (!conversations.length) {
+    await createConversation();
+  }
+}
+
+
+
 
 async function sendMessage() {
   const text = el("msg").value.trim();
@@ -169,6 +202,39 @@ async function init() {
     };
 
     el("btnNewChat").onclick = createConversation;
+
+    // Sidebar toggle (ChatGPT-like)
+    const applySidebarState = () => {
+      const mobile = window.matchMedia("(max-width: 900px)").matches;
+      if (mobile) {
+        // on mobile, keep collapsed flag but ignore it
+        document.body.classList.remove("sidebar-collapsed");
+      } else {
+        const collapsed = localStorage.getItem("sidebarCollapsed") === "1";
+        document.body.classList.toggle("sidebar-collapsed", collapsed);
+        document.body.classList.remove("sidebar-open");
+      }
+    };
+
+    applySidebarState();
+    window.addEventListener("resize", applySidebarState);
+
+    const toggleBtn = document.getElementById("btnToggleSidebar");
+    const backdrop = document.getElementById("sidebarBackdrop");
+    if (toggleBtn) {
+      toggleBtn.onclick = () => {
+        const mobile = window.matchMedia("(max-width: 900px)").matches;
+        if (mobile) {
+          document.body.classList.toggle("sidebar-open");
+        } else {
+          const next = !document.body.classList.contains("sidebar-collapsed");
+          document.body.classList.toggle("sidebar-collapsed", next);
+          localStorage.setItem("sidebarCollapsed", next ? "1" : "0");
+        }
+      };
+    }
+    if (backdrop) backdrop.onclick = () => document.body.classList.remove("sidebar-open");
+
     el("btnSend").onclick = sendMessage;
 
     el("msg").addEventListener("keydown", (e) => {

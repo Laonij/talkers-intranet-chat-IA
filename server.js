@@ -24,6 +24,27 @@ const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "Talkers#2026!");
 // Boot DB
 migrate();
 
+// ---- Helpers ----
+function asyncWrap(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+// Page auth (redirect to login instead of JSON)
+function requirePageAuth(jwtSecret) {
+  const jwt = require("jsonwebtoken");
+  return (req, res, next) => {
+    const token = req.cookies?.session;
+    if (!token) return res.redirect("/login.html");
+    try {
+      req.user = jwt.verify(token, jwtSecret);
+      next();
+    } catch {
+      return res.redirect("/login.html");
+    }
+  };
+}
+
+
 // Ensure folders exist
 fs.mkdirSync(uploadsDir, { recursive: true });
 fs.mkdirSync(kbDir, { recursive: true });
@@ -106,6 +127,20 @@ app.set("trust proxy", 1);
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 
+// ---- Public pages ----
+app.get("/", (req, res) => res.redirect("/index.html"));
+app.get("/login", (req, res) => res.redirect("/login.html"));
+
+// ---- Protected pages ----
+// Prevent direct access to index/admin without a valid session cookie.
+app.get("/index.html", requirePageAuth(JWT_SECRET), (req, res) =>
+  res.sendFile(path.join(__dirname, "public", "index.html"))
+);
+app.get("/admin.html", requirePageAuth(JWT_SECRET), (req, res) =>
+  res.sendFile(path.join(__dirname, "public", "admin.html"))
+);
+
+
 // Upload config
 const upload = multer({ dest: uploadsDir, limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -170,7 +205,7 @@ function titleFromMessage(text) {
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 // --- AUTH ---
-app.post("/api/login", async (req, res) => {
+app.post("/api/login", asyncWrap(async (req, res) => {
   if (tooManyAttempts(req)) return res.status(429).json({ error: "too_many_attempts" });
 
   const email = String(req.body?.email || "").trim().toLowerCase();
@@ -199,35 +234,34 @@ app.post("/api/login", async (req, res) => {
   setSessionCookie(req, res, token);
   logEvent(user.id, "login", { email });
   res.json({ ok: true });
-});
-
-app.post("/api/logout", requireAuth(JWT_SECRET), async (req, res) => {
+}));
+app.post("/api/logout", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   res.clearCookie("session");
   logEvent(req.user.sub, "logout", {});
   res.json({ ok: true });
-});
+}));
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => res.json({ user: req.user }));
 
 // --- Conversations ---
-app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
+app.get("/api/conversations", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const rows = await all(
     "SELECT id, title, mode, created_at, updated_at FROM conversations WHERE user_id=? ORDER BY datetime(updated_at) DESC",
     [req.user.sub]
   );
   res.json({ conversations: rows });
-});
+}));
 
-app.post("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
+app.post("/api/conversations", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const title = String(req.body?.title || "Nova conversa").trim() || "Nova conversa";
   // Default to "geral"; only admins can set empresa
   const requested = req.body?.mode === "empresa" ? "empresa" : "geral";
   const mode = req.user.role === "admin" ? requested : "geral";
   const r = await run("INSERT INTO conversations (user_id, title, mode) VALUES (?, ?, ?)", [req.user.sub, title, mode]);
   res.json({ conversation_id: r.lastID });
-});
+}));
 
-app.patch("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) => {
+app.patch("/api/conversations/:id", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const id = Number(req.params.id);
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
@@ -239,7 +273,7 @@ app.patch("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) =>
   res.json({ ok: true });
 
 // Apagar conversa (usuário dono)
-app.delete("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) => {
+app.delete("/api/conversations/:id", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const id = Number(req.params.id);
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
@@ -259,11 +293,11 @@ app.delete("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) =
 
   logEvent(req.user.sub, "delete_conversation", { conversation_id: id });
   res.json({ ok: true });
-});
+}));
 
-});
+}));
 
-app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, res) => {
+app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const id = Number(req.params.id);
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
@@ -278,10 +312,10 @@ app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, 
   );
 
   res.json({ conversation: conv, messages, files });
-});
+}));
 
 // --- Files (conversation) ---
-app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), async (req, res) => {
+app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), asyncWrap(async (req, res) => {
   const id = Number(req.params.id);
   const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
@@ -296,9 +330,9 @@ app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
 
   res.json({ ok: true });
-});
+}));
 
-app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => {
+app.get("/api/files/:id/download", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const id = Number(req.params.id);
   const file = await get(
     `SELECT f.*, c.user_id AS owner_user_id
@@ -312,7 +346,7 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
   const full = path.join(uploadsDir, file.stored_name);
   if (!fs.existsSync(full)) return res.status(404).send("missing_on_disk");
   res.download(full, file.original_name);
-});
+}));
 
 // --- Internal search ---
 async function searchInternal(query, limit = 8) {
@@ -340,7 +374,7 @@ async function searchInternal(query, limit = 8) {
   return rows.map((r) => ({ ref: String(r.id), title: r.rel_path, snippet: r.snippet || "" }));
 }
 
-app.get("/api/empresa/doc/:ref/download", requireAuth(JWT_SECRET), async (req, res) => {
+app.get("/api/empresa/doc/:ref/download", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const ref = decodeURIComponent(req.params.ref || "");
   let doc = null;
 
@@ -352,10 +386,10 @@ app.get("/api/empresa/doc/:ref/download", requireAuth(JWT_SECRET), async (req, r
   const full = doc.source_path;
   if (!fs.existsSync(full)) return res.status(404).send("missing_on_disk");
   res.download(full, path.basename(full));
-});
+}));
 
 // --- Chat ---
-app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res) => {
+app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const id = Number(req.params.id);
   const text = String(req.body?.message || "").trim();
   if (!text) return res.status(400).json({ error: "empty_message" });
@@ -407,15 +441,15 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
 
   res.json({ reply });
-});
+}));
 
 // --- Admin ---
-app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyncWrap(async (req, res) => {
   const users = await all("SELECT id, name, email, role, created_at FROM users ORDER BY id DESC", []);
   res.json({ users });
-});
+}));
 
-app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyncWrap(async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const email = String(req.body?.email || "").trim().toLowerCase();
   if (!canAttemptLogin(req, email)) return res.status(429).json({ error: "too_many_attempts" });
@@ -430,10 +464,10 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   const r = await run("INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)", [email, name, hash, role]);
   logEvent(req.user.sub, "admin_create_user", { user_id: r.lastID, email, role });
   res.json({ ok: true, user_id: r.lastID });
-});
+}));
 
 // Delete user (except self and main admin)
-app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), asyncWrap(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "invalid_id" });
 
@@ -450,20 +484,20 @@ app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin")
 
   logEvent(req.user.sub, "admin_delete_user", { user_id: id, email: user.email });
   res.json({ ok: true });
-});
+}));
 
 // Upload to KB (server)
-app.post("/api/admin/kb/upload", requireAuth(JWT_SECRET), requireRole("admin"), upload.single("file"), async (req, res) => {
+app.post("/api/admin/kb/upload", requireAuth(JWT_SECRET), requireRole("admin"), upload.single("file"), asyncWrap(async (req, res) => {
   const f = req.file;
   if (!f) return res.status(400).send("missing_file");
   const dest = path.join(kbDir, f.originalname);
   fs.renameSync(path.join(uploadsDir, f.filename), dest);
   logEvent(req.user.sub, "admin_kb_upload", { name: f.originalname, size: f.size });
   res.json({ ok: true });
-});
+}));
 
 // Sync Drive (service account)
-app.post("/api/admin/sync-drive", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+app.post("/api/admin/sync-drive", requireAuth(JWT_SECRET), requireRole("admin"), asyncWrap(async (req, res) => {
   try {
     const p = spawn(process.execPath, ["scripts/sync_drive.js"], { stdio: "inherit" });
     p.on("close", () => {});
@@ -471,10 +505,10 @@ app.post("/api/admin/sync-drive", requireAuth(JWT_SECRET), requireRole("admin"),
   } catch (e) {
     res.status(500).json({ error: "failed_to_spawn_sync" });
   }
-});
+}));
 
 // Reindex
-app.post("/api/admin/reindex", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+app.post("/api/admin/reindex", requireAuth(JWT_SECRET), requireRole("admin"), asyncWrap(async (req, res) => {
   try {
     const p = spawn(process.execPath, ["scripts/index_drive.js"], { stdio: "inherit" });
     p.on("close", () => {});
@@ -482,7 +516,7 @@ app.post("/api/admin/reindex", requireAuth(JWT_SECRET), requireRole("admin"), as
   } catch (e) {
     res.status(500).json({ error: "failed_to_spawn_indexer" });
   }
-});
+}));
 
 // --- Protected pages (server-side) ---
 const publicDir = path.join(__dirname, "public");
@@ -506,7 +540,7 @@ app.get("/index.html", (req, res) => {
   const user = tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
   return res.sendFile(path.join(publicDir, "index.html"));
-});
+}));
 
 app.get("/admin.html", (req, res) => {
   const user = tryDecodeSession(req);
@@ -519,7 +553,18 @@ app.get("/admin.html", (req, res) => {
 app.use(express.static(publicDir, { maxAge: "1h" }));
 
 ensureAdmin().finally(() => {
-  app.listen(PORT, () => {
+  
+
+// ---- Error handler (avoid crashing and returning 502) ----
+app.use((err, req, res, next) => {
+  console.error("❌ Unhandled error:", err);
+  if (res.headersSent) return next(err);
+  if (req.path && req.path.startsWith("/api/")) {
+    return res.status(500).json({ error: "server_error" });
+  }
+  return res.status(500).send("server_error");
+});
+app.listen(PORT, () => {
     console.log(`✅ The Boss IA rodando em ${BASE_URL}`);
     console.log(`➡️ Login: ${BASE_URL}/login.html`);
   });

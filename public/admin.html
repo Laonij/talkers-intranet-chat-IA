@@ -3,75 +3,45 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Admin - Intranet Chat</title>
+  <title>Admin - Talkers Chat</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="center">
-  <div class="card wide">
-    <div class="row" style="justify-content:space-between;align-items:center;">
-      <h1>Admin</h1>
+  <div class="card" style="width:min(980px,100%);">
+    <div class="row" style="justify-content:space-between;">
+      <h1 style="margin:0;">Admin</h1>
       <a class="btn" href="/index.html">Voltar</a>
     </div>
-
-    <h2>Base interna (Google Drive via pasta sincronizada)</h2>
-    <div class="row" style="align-items:center;">
-      <button class="btn primary" id="btnReindex">Reindexar agora</button>
-      <div class="muted small" id="reindexMsg"></div>
-    </div>
-    <div class="muted small" style="margin-top:6px;">
-      Também dá para rodar no terminal: <code>npm run index</code> (uma vez) e <code>npm run watch</code> (monitorar alterações).
-    </div>
+    <p class="muted small" style="margin-top:6px;">Gerencie usuários e sincronização.</p>
 
     <h2>Criar usuário</h2>
-    <div class="grid">
-      <div>
-        <label>Nome</label>
-        <input id="name" placeholder="Nome" />
-      </div>
-      <div>
-        <label>Email</label>
-        <input id="email" placeholder="email@empresa.com" />
-      </div>
-      <div>
-        <label>Senha</label>
-        <input id="password" type="password" placeholder="Senha" />
-      </div>
-      <div>
-        <label>Role</label>
-        <select id="role">
-          <option value="user">user</option>
-          <option value="admin">admin</option>
-        </select>
-      </div>
+    <div class="row" style="flex-wrap:wrap;">
+      <input id="name" placeholder="Nome" style="flex:1; min-width:160px;" />
+      <input id="email" placeholder="Email" style="flex:1; min-width:220px;" />
+      <input id="password" placeholder="Senha" type="password" style="flex:1; min-width:160px;" />
+      <select id="role" style="width:140px;">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+      <button class="btn primary" id="btnCreate">Criar</button>
     </div>
-    <button class="btn primary" id="btnCreate">Criar</button>
-    <div class="muted small" id="msg"></div>
+    <div class="muted small" id="createMsg" style="margin-top:6px;"></div>
 
-    <h2>Base interna (KB)</h2>
-<div class="muted small">
-  • Upload de arquivos para a KB (servidor)<br/>
-  • (Opcional) Sync de uma pasta do Google Drive (Service Account)<br/>
-  Depois rode <b>Reindexar</b> para atualizar a busca.
-</div>
-
-<h3>Upload para KB</h3>
-<form id="kbUploadForm">
-  <input type="file" id="kbFile" />
-  <button class="btn" type="submit">Enviar para KB</button>
-</form>
-<div class="muted small" id="kbUploadMsg" style="margin-top:6px;"></div>
-
-<h3>Sincronizar Google Drive → KB</h3>
-<button class="btn" id="btnSyncDrive">Sincronizar Drive</button>
-<div class="muted small" id="syncMsg" style="margin-top:6px;"></div>
-
-<h2>Usuários</h2>
+    <h2 style="margin-top:22px;">Usuários</h2>
+    <div class="muted small" style="margin-bottom:10px;">Dica: você não consegue excluir seu próprio usuário.</div>
 
     <table class="table" id="usersTable">
-      <thead><tr><th>ID</th><th>Nome</th><th>Email</th><th>Role</th><th>Criado</th></tr></thead>
-      <button class="btn danger sm" data-del-user="ID_AQUI">Excluir</button>
+      <thead>
+        <tr><th>ID</th><th>Nome</th><th>Email</th><th>Role</th><th>Criado</th><th>Ações</th></tr>
+      </thead>
       <tbody></tbody>
     </table>
+
+    <div class="row" style="margin-top:16px; gap:10px;">
+      <button class="btn" id="btnSyncDrive">Sincronizar Drive</button>
+      <button class="btn" id="btnReindex">Reindexar</button>
+      <span class="muted small" id="syncMsg"></span>
+    </div>
   </div>
 
 <script>
@@ -88,23 +58,57 @@ async function api(path, opts = {}) {
   return json;
 }
 
+let me = null;
+async function loadMe(){
+  const data = await api('/api/me');
+  me = data.user;
+}
+
+function fmtDate(s){
+  try{ return new Date(s).toLocaleString('pt-BR'); }catch{ return s||''; }
+}
+
 async function loadUsers(){
   const data = await api('/api/admin/users');
   const tb = document.querySelector('#usersTable tbody');
   tb.innerHTML = '';
-  for (const u of data.users) {
+  for (const u of data.users){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${u.id}</td><td>${u.name}</td><td>${u.email}</td><td>${u.role}</td><td>${u.created_at}</td>`;
+    tr.innerHTML = `
+      <td>${u.id}</td>
+      <td>${u.name||''}</td>
+      <td>${u.email||''}</td>
+      <td>${u.role||''}</td>
+      <td>${fmtDate(u.created_at)}</td>
+      <td>
+        <div class="actions">
+          <button class="btn danger sm" data-del="${u.id}" ${me && String(me.sub)===String(u.id) ? 'disabled' : ''}>Excluir</button>
+        </div>
+      </td>
+    `;
     tb.appendChild(tr);
   }
+
+  tb.querySelectorAll('button[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.getAttribute('data-del');
+      if (!confirm('Excluir o usuário #' + id + '?')) return;
+      try{
+        await api('/api/admin/users/' + id, { method:'DELETE' });
+        await loadUsers();
+      }catch(e){
+        alert('Erro: ' + e.message);
+      }
+    }
+  });
 }
 
-document.getElementById('btnCreate').onclick = async () => {
-  const msg = document.getElementById('msg');
+document.getElementById('btnCreate').onclick = async ()=>{
+  const msg = document.getElementById('createMsg');
   msg.textContent = '';
-  try {
+  try{
     await api('/api/admin/users', {
-      method: 'POST',
+      method:'POST',
       body: JSON.stringify({
         name: document.getElementById('name').value,
         email: document.getElementById('email').value,
@@ -112,51 +116,40 @@ document.getElementById('btnCreate').onclick = async () => {
         role: document.getElementById('role').value
       })
     });
-    msg.textContent = 'Usuário criado!';
+    msg.textContent = 'Usuário criado.';
+    document.getElementById('password').value = '';
     await loadUsers();
-  } catch (e) {
+  }catch(e){
     msg.textContent = 'Erro: ' + e.message;
   }
-};
+}
 
-document.getElementById('btnReindex').onclick = async () => {
-  const m = document.getElementById('reindexMsg');
-  m.textContent = 'Iniciando... veja o terminal para progresso.';
-  try {
-    await api('/api/admin/reindex', { method:'POST', body: '{}' });
-    m.textContent = 'Reindex iniciado. Veja o terminal.';
-  } catch (e) {
-    m.textContent = 'Erro: ' + e.message;
+document.getElementById('btnSyncDrive').onclick = async ()=>{
+  const el = document.getElementById('syncMsg');
+  el.textContent = 'Sincronizando...';
+  try{
+    await api('/api/admin/sync-drive', { method:'POST' });
+    el.textContent = 'OK. (Roda em background no servidor)';
+  }catch(e){
+    el.textContent = 'Erro: ' + e.message;
   }
-};
+}
 
-document.getElementById('kbUploadForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const out = document.getElementById('kbUploadMsg');
-  out.textContent = '';
-  const f = document.getElementById('kbFile').files?.[0];
-  if (!f) { out.textContent = 'Selecione um arquivo.'; return; }
-  const fd = new FormData();
-  fd.append('file', f);
-  const res = await fetch('/api/admin/kb/upload', { method:'POST', body: fd, credentials:'include' });
-  if (!res.ok) { out.textContent = 'Erro no upload: ' + await res.text(); return; }
-  out.textContent = 'Enviado! Agora clique em Reindexar.';
-  document.getElementById('kbFile').value = '';
-});
-
-document.getElementById('btnSyncDrive').onclick = async () => {
-  const m = document.getElementById('syncMsg');
-  m.textContent = 'Iniciando sync... veja logs do servidor.';
-  try {
-    await api('/api/admin/sync-drive', { method:'POST', body:'{}' });
-    m.textContent = 'Sync iniciado. Ao terminar, clique em Reindexar.';
-  } catch (e) {
-    m.textContent = 'Erro: ' + e.message;
+document.getElementById('btnReindex').onclick = async ()=>{
+  const el = document.getElementById('syncMsg');
+  el.textContent = 'Reindexando...';
+  try{
+    await api('/api/admin/reindex', { method:'POST' });
+    el.textContent = 'OK. (Roda em background no servidor)';
+  }catch(e){
+    el.textContent = 'Erro: ' + e.message;
   }
-};
+}
 
-loadUsers().catch(()=>location.href='/login.html');
-
+(async ()=>{
+  await loadMe();
+  await loadUsers();
+})();
 </script>
 </body>
 </html>

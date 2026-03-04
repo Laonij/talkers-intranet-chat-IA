@@ -3,26 +3,33 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Login - Intranet Chat</title>
+  <title>Login - Talkers</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body class="center">
-  <div class="card">
-    <h1>Entrar</h1>
-    <p class="muted small">Use seu email e senha.</p>
+<body class="page page-auth">
+  <main class="auth">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <img class="auth-logo" src="/logo.png" alt="Talkers" width="256" height="256" />
+        <div>
+          <h1>Entrar</h1>
+          <p class="muted">Use seu email e senha.</p>
+        </div>
+      </div>
 
-    <label>Email</label>
-    <input id="email" placeholder="email" />
+      <form id="loginForm" class="auth-form">
+        <label for="email">Email</label>
+        <input id="email" name="email" autocomplete="username" placeholder="seuemail@empresa.com" />
 
-    <label>Senha</label>
-    <input id="password" type="password" placeholder="senha" />
+        <label for="password">Senha</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" />
 
-    <div style="margin-top:16px;">
-  <button class="btn primary full" id="btnLogin">Entrar</button>
-</div>
+        <button class="btn btn-primary" id="btnLogin" type="submit">Entrar</button>
 
-    <div class="muted small" id="msg" style="margin-top:10px;"></div>
-  </div>
+        <div class="auth-msg" id="msg" role="status" aria-live="polite"></div>
+      </form>
+    </div>
+  </main>
 
 <script>
 async function api(path, opts = {}) {
@@ -38,9 +45,11 @@ async function api(path, opts = {}) {
   return json;
 }
 
-document.getElementById('btnLogin').onclick = async () => {
+document.getElementById('loginForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
   const msg = document.getElementById('msg');
   msg.textContent = '';
+  msg.classList.remove('error','ok');
   try {
     await api('/api/login', {
       method: 'POST',
@@ -49,11 +58,14 @@ document.getElementById('btnLogin').onclick = async () => {
         password: document.getElementById('password').value,
       })
     });
-    location.href = '/index.html';
+    msg.textContent = 'Entrando...';
+    msg.classList.add('ok');
+    location.href = '/';
   } catch (e) {
-    msg.textContent = 'Erro: ' + e.message;
+    msg.textContent = 'Erro: ' + (e.message || 'falha no login');
+    msg.classList.add('error');
   }
-};
+});
 </script>
 </body>
 </html>

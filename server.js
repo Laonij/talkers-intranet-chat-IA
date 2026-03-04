@@ -10,27 +10,67 @@ const { spawn } = require("child_process");
 const { migrate, get, all, run, uploadsDir, kbDir, logEvent } = require("./db");
 const { signSession, requireAuth, requireRole } = require("./auth");
 
-// Render defines PORT. Keep a safe default locally.
-const PORT = Number(process.env.PORT || 10000);
+const PORT = Number(process.env.PORT || 8080);
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const JWT_SECRET = process.env.JWT_SECRET || "troque-por-um-segredo-grande";
 
-// Make sure DB + FTS tables exist
 migrate();
 
-// Optional background tasks (safe: doesn't block boot)
-function spawnScript(relPath) {
-  try {
-    const p = spawn(process.execPath, [relPath], { stdio: "inherit" });
-    p.on("close", () => {});
-  } catch {}
+const app = express();
+app.set("trust proxy", 1); // importante no Render (HTTPS atrás de proxy)
+
+app.use(express.json({ limit: "10mb" }));
+app.use(cookieParser());
+app.use(express.static(path.join(__dirname, "public")));
+
+const upload = multer({ dest: uploadsDir, limits: { fileSize: 25 * 1024 * 1024 } });
+
+function setSessionCookie(req, res, token) {
+  // em HTTPS, o cookie "secure" precisa ser true (Render usa proxy)
+  const secure = Boolean(req.secure);
+  res.cookie("session", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
 }
 
-if (String(process.env.AUTO_SEED_ON_BOOT || "false").toLowerCase() === "true") {
-  spawnScript("scripts/seed.js");
+function titleFromMessage(text) {
+  const t = (text || "").trim().split("\n")[0].slice(0, 60);
+  return t || "Nova conversa";
 }
+
+// cria/atualiza admin sempre que ADMIN_EMAIL e ADMIN_PASSWORD existirem
+async function ensureAdminFromEnv() {
+  const email = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+  const password = String(process.env.ADMIN_PASSWORD || "");
+  if (!email || !password) return;
+
+  const name = String(process.env.ADMIN_NAME || "Admin").trim() || "Admin";
+  const existing = await get("SELECT id FROM users WHERE email=?", [email]);
+  const hash = await bcrypt.hash(password, 10);
+
+  if (!existing) {
+    await run("INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, 'admin')", [email, name, hash]);
+    console.log("✅ Admin criado (ENV)");
+    console.log("Email:", email);
+  } else {
+    await run("UPDATE users SET name=?, password_hash=?, role='admin' WHERE id=?", [name, hash, existing.id]);
+    console.log("✅ Admin atualizado (ENV)");
+    console.log("Email:", email);
+  }
+}
+
+// roda 1x no boot
+ensureAdminFromEnv().catch((e) => console.log("⚠️ ensureAdminFromEnv error:", e?.message || e));
+
+// OPTIONAL: auto seed/index (se quiser no futuro)
 if (String(process.env.AUTO_INDEX_ON_BOOT || "false").toLowerCase() === "true") {
-  spawnScript("scripts/index_drive.js");
+  try {
+    const p = spawn(process.execPath, ["scripts/index_drive.js"], { stdio: "inherit" });
+    p.on("close", () => {});
+  } catch {}
 }
 
 async function openaiReply(userText, contextText) {
@@ -58,7 +98,6 @@ async function openaiReply(userText, contextText) {
   }
   const data = await resp.json();
   if (data.output_text) return data.output_text;
-
   try {
     const out = (data.output || [])
       .map((o) => (o.content || []).map((c) => c.text || "").join(""))
@@ -69,33 +108,8 @@ async function openaiReply(userText, contextText) {
   }
 }
 
-const app = express();
-app.use(express.json({ limit: "10mb" }));
-app.use(cookieParser());
-
-// STATIC
-app.use(express.static(path.join(__dirname, "public")));
-
-// uploads for conversation files and for KB (admin)
-const upload = multer({ dest: uploadsDir, limits: { fileSize: 25 * 1024 * 1024 } });
-
-// Cookies: Render is HTTPS and sits behind a proxy.
-// Use x-forwarded-proto safely and set secure cookie only for https.
-function setSessionCookie(req, res, token) {
-  const xfProto = String((req && req.headers && req.headers["x-forwarded-proto"]) || "");
-  const isHttps = xfProto.includes("https") || (process.env.BASE_URL || "").startsWith("https://");
-  res.cookie("session", token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: isHttps,        // IMPORTANT on Render
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
-}
-
-function titleFromMessage(text) {
-  const t = (text || "").trim().split("\n")[0].slice(0, 60);
-  return t || "Nova conversa";
-}
+// HOME -> index.html
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 // AUTH
 app.post("/api/login", async (req, res) => {
@@ -201,7 +215,7 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
   res.download(full, file.original_name);
 });
 
-// BUSCA INTERNA (SQLite FTS)
+// BUSCA INTERNA (Empresa)
 async function searchInternal(query, limit = 8) {
   const q = String(query || "").trim();
   if (!q) return [];
@@ -254,16 +268,12 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   let reply = "";
   let meta = null;
 
-  if (conv.mode === "empresa") {
+  if (conv.mode === "empresa" && req.user.role === "admin") {
     const sources = await searchInternal(text, 8);
     meta = { sources };
 
     if (!sources.length) {
-      reply =
-        "Não encontrei nada na base interna ainda.\n\n" +
-        "• Confira INDEX_FOLDER\n" +
-        "• Rode: npm run index\n" +
-        "• (Opcional) Rode: npm run watch";
+      reply = "Não encontrei nada na base interna ainda.\n\n• Confira INDEX_FOLDER\n• Rode: npm run index";
     } else {
       const context = sources.map((s, i) => `[#${i + 1}] ${s.title}\n${s.snippet}`).join("\n\n");
       const ai = await openaiReply(text, context);
@@ -274,12 +284,12 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         reply =
           "Encontrei estes resultados na base interna:\n\n" +
           sources.map((s, i) => `${i + 1}) ${s.title}\n   ${s.snippet}`.trim()).join("\n\n") +
-          "\n\n(Para responder com IA usando essas fontes, configure OPENAI_API_KEY no servidor.)";
+          "\n\n(Para responder com IA usando essas fontes, configure OPENAI_API_KEY.)";
       }
     }
   } else {
     const ai = await openaiReply(text, null);
-    reply = ai ? ai : "[MODO GERAL - sem IA configurada]\n\nConfigure OPENAI_API_KEY para respostas com IA.";
+    reply = ai ? ai : "Configure OPENAI_API_KEY para respostas com IA.";
   }
 
   await run(
@@ -313,22 +323,16 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   res.json({ ok: true, user_id: r.lastID });
 });
 
-// Delete user (admin)
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "invalid_id" });
-  if (String(id) === String(req.user.sub)) return res.status(400).json({ error: "cannot_delete_self" });
+  if (id === req.user.sub) return res.status(400).json({ error: "cannot_delete_self" });
 
-  const u = await get("SELECT id, email FROM users WHERE id=?", [id]);
+  const u = await get("SELECT id FROM users WHERE id=?", [id]);
   if (!u) return res.status(404).json({ error: "not_found" });
 
-  // Delete related data
-  await run("DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
-  await run("DELETE FROM files WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
-  await run("DELETE FROM conversations WHERE user_id=?", [id]);
   await run("DELETE FROM users WHERE id=?", [id]);
-
-  logEvent(req.user.sub, "admin_delete_user", { user_id: id, email: u.email });
+  logEvent(req.user.sub, "admin_delete_user", { user_id: id });
   res.json({ ok: true });
 });
 
@@ -342,23 +346,18 @@ app.post("/api/admin/kb/upload", requireAuth(JWT_SECRET), requireRole("admin"), 
   res.json({ ok: true });
 });
 
-// Sync Drive (service account)
-app.post("/api/admin/sync-drive", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  spawnScript("scripts/sync_drive.js");
-  res.json({ ok: true });
-});
-
 // Reindex
 app.post("/api/admin/reindex", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  spawnScript("scripts/index_drive.js");
-  res.json({ ok: true });
+  try {
+    const p = spawn(process.execPath, ["scripts/index_drive.js"], { stdio: "inherit" });
+    p.on("close", () => {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: "failed_to_spawn_indexer" });
+  }
 });
 
-// Health
-app.get("/api/health", (req, res) => res.json({ ok: true }));
-
 app.listen(PORT, () => {
-  const url = (process.env.BASE_URL || "").trim() || BASE_URL;
-  console.log(`✅ Intranet Chat rodando em ${url}`);
-  console.log(`➡️ Login: ${url.replace(/\/$/, "")}/login.html`);
+  console.log(`✅ Intranet Chat rodando em ${BASE_URL}`);
+  console.log(`➡️ Login: ${BASE_URL}/login.html`);
 });

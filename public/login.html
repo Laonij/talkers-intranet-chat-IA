@@ -3,26 +3,30 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Login - The Boss IA</title>
+  <title>Entrar • The Boss IA</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="center">
   <div class="card">
-    <img class="login-logo" src="/logo.png" alt="Logo" />
-    <h1>Entrar</h1>
-    <p class="muted small">Use seu email e senha.</p>
+    <div class="login-top">
+      <img class="logo-lg" src="/logo.png" alt="Logo" />
+      <div>
+        <h1>Entrar</h1>
+        <div class="muted">Use seu email e senha.</div>
+      </div>
+    </div>
 
     <label>Email</label>
-    <input id="email" placeholder="email" />
+    <input id="email" placeholder="seuemail@empresa.com" autocomplete="username" />
 
     <label>Senha</label>
-    <input id="password" type="password" placeholder="senha" />
+    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
 
-    <div style="margin-top:16px;">
-  <button class="btn primary full" id="btnLogin">Entrar</button>
-</div>
+    <div style="margin-top:14px;">
+      <button class="btn primary" id="btnLogin" style="width:100%;">Entrar</button>
+    </div>
 
-    <div class="muted small" id="msg" style="margin-top:10px;"></div>
+    <div id="msg" class="small" style="margin-top:12px;"></div>
   </div>
 
 <script>
@@ -42,6 +46,7 @@ async function api(path, opts = {}) {
 document.getElementById('btnLogin').onclick = async () => {
   const msg = document.getElementById('msg');
   msg.textContent = '';
+  msg.className = 'small';
   try {
     await api('/api/login', {
       method: 'POST',
@@ -52,6 +57,7 @@ document.getElementById('btnLogin').onclick = async () => {
     });
     location.href = '/index.html';
   } catch (e) {
+    msg.className = 'error';
     msg.textContent = 'Erro: ' + e.message;
   }
 };

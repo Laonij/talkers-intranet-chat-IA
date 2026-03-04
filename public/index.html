@@ -10,9 +10,11 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <img class="brand-logo" src="/logo.png" alt="Logo" />
-        <div class="brand-title">The Boss IA</div>
-        <div class="brand-sub" id="userSub">—</div>
+        <img class="logo-sm" src="/logo.png" alt="Logo" />
+        <div class="brand-meta">
+          <div class="brand-title">The Boss IA</div>
+          <div class="brand-sub" id="userSub">—</div>
+        </div>
       </div>
 
       <button class="btn primary" id="btnNewChat">+ Nova conversa</button>
@@ -34,15 +36,17 @@
     <main class="main">
       <div class="topbar">
         <div class="title" id="convTitle">—</div>
-        <div class="mode">
-  <label>Modo:</label>
-  <span style="font-weight:600;">Geral</span>
-</div>
+
+        <div class="mode" id="modeWrap" style="display:none;">
+          <label>Modo:</label>
+          <select id="modeSelect">
+            <option value="geral">Geral</option>
+            <option value="empresa">Empresa</option>
+          </select>
+        </div>
       </div>
 
       <div class="panel">
-       
-
         <div class="chat" id="chat"></div>
 
         <div class="files">
@@ -50,14 +54,14 @@
             <div><b>Arquivos da conversa</b></div>
             <form id="uploadForm">
               <input type="file" id="fileInput" name="file" />
-              <button class="btn" type="submit">Enviar arquivo</button>
+              <button class="btn" type="submit">Enviar</button>
             </form>
           </div>
           <div class="files-list" id="filesList"></div>
         </div>
 
         <div class="composer">
-          <textarea id="msg" placeholder="Escreva sua pergunta... (Enter envia, Shift+Enter quebra linha)"></textarea>
+          <textarea id="msg" placeholder="Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)"></textarea>
           <button class="btn primary" id="btnSend">Enviar</button>
         </div>
       </div>

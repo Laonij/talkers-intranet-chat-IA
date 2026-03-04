@@ -1,233 +1,218 @@
 async function api(path, opts = {}) {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-    credentials: 'include',
-    ...opts
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    credentials: "include",
+    ...opts,
   });
   const txt = await res.text();
   let json = null;
-  try { json = txt ? JSON.parse(txt) : null; } catch {}
+  try {
+    json = txt ? JSON.parse(txt) : null;
+  } catch {}
   if (!res.ok) throw new Error(json?.error || txt || `HTTP ${res.status}`);
   return json;
 }
 
-function el(id){ return document.getElementById(id); }
+const el = (id) => document.getElementById(id);
 
 let me = null;
-let activeConvId = null;
+let conversations = [];
+let currentConvId = null;
 
-function formatDate(s){
-  try { return new Date(s).toLocaleString(); } catch { return s; }
-}
-
-document.addEventListener("click", async (e) => {
-  const btn = e.target.closest("[data-del-user]");
-  if (!btn) return;
-
-  const id = Number(btn.getAttribute("data-del-user"));
-  if (!id) return;
-
-  if (!confirm("Tem certeza que deseja excluir este usuário? Isso apagará conversas e arquivos dele.")) return;
-
+function fmtDate(iso) {
   try {
-    await api(`/api/admin/users/${id}`, { method: "DELETE" });
-    alert("Usuário excluído.");
-    location.reload();
-  } catch (err) {
-    alert("Erro: " + (err?.message || err));
-  }
-});
-
-function renderMessages(messages){
-  const chat = el('chat');
-  chat.innerHTML = '';
-  for (const m of messages) {
-    const div = document.createElement('div');
-    div.className = `msg ${m.role === 'user' ? 'user' : 'assistant'}`;
-    div.textContent = m.content;
-
-    if (m.meta_json) {
-      try {
-        const meta = JSON.parse(m.meta_json);
-        if (meta?.sources?.length) {
-          const metaDiv = document.createElement('div');
-          metaDiv.className = 'muted small';
-          metaDiv.style.marginTop = '6px';
-          metaDiv.innerHTML = 'Fontes: ' + meta.sources.map(s => {
-            const id = encodeURIComponent(s.ref || '');
-            const title = (s.title || s.ref || '').replace(/[<>]/g,'');
-            return `<a href="/api/empresa/doc/${id}/download" target="_blank">${title}</a>`;
-          }).join(', ');
-          div.appendChild(metaDiv);
-        }
-      } catch {}
-    }
-
-    chat.appendChild(div);
-  }
-  chat.scrollTop = chat.scrollHeight;
-}
-
-function renderFiles(files){
-  const list = el('filesList');
-  list.innerHTML = '';
-  for (const f of files) {
-    const chip = document.createElement('div');
-    chip.className = 'file-chip';
-
-    const a = document.createElement('a');
-    a.href = `/api/files/${f.id}/download`;
-    a.textContent = f.original_name;
-    a.target = '_blank';
-    chip.appendChild(a);
-
-    const small = document.createElement('span');
-    small.style.opacity = '0.7';
-    small.style.fontSize = '12px';
-    small.textContent = `(${Math.round((f.size_bytes||0)/1024)} KB)`;
-    chip.appendChild(small);
-
-    list.appendChild(chip);
+    const d = new Date(iso);
+    return d.toLocaleDateString("pt-BR");
+  } catch {
+    return "";
   }
 }
 
-async function loadMe(){
-  const data = await api('/api/me');
-  me = data.user;
-  el('userSub').textContent = `${me.name} • ${me.email} • ${me.role}`;
-  if (me.role === 'admin') el('adminBtn').style.display = 'inline-flex';
-}
+function renderConversations() {
+  const list = el("convList");
+  list.innerHTML = "";
 
-async function loadConversations(){
-  const data = await api('/api/conversations');
-  const list = el('convList');
-  list.innerHTML = '';
-
-  for (const c of data.conversations) {
-    const item = document.createElement('div');
-    item.className = 'conv-item' + (c.id === activeConvId ? ' active' : '');
+  for (const c of conversations) {
+    const item = document.createElement("div");
+    item.className = "conv" + (c.id === currentConvId ? " active" : "");
     item.onclick = () => openConversation(c.id);
 
-    const t = document.createElement('div');
-    t.className = 'conv-title';
-    t.textContent = c.title;
+    const t = document.createElement("div");
+    t.className = "conv-title";
+    t.textContent = c.title || "Conversa";
 
-    const meta = document.createElement('div');
-    meta.className = 'conv-meta';
-    meta.innerHTML = `<span>${c.mode}</span><span>${formatDate(c.updated_at)}</span>`;
+    const s = document.createElement("div");
+    s.className = "conv-sub";
+    s.textContent = fmtDate(c.updated_at || c.created_at);
 
     item.appendChild(t);
-    item.appendChild(meta);
+    item.appendChild(s);
     list.appendChild(item);
   }
-  return data.conversations;
 }
 
-async function openConversation(id){
-  activeConvId = id;
-  await loadConversations();
+function addMessage(role, content) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + (role === "user" ? "user" : "assistant");
 
-  const data = await api(`/api/conversations/${id}/messages`);
-  el('convTitle').textContent = data.conversation.title;
-  el('modeSelect').value = data.conversation.mode;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = content || "";
 
-  renderMessages(data.messages);
-  renderFiles(data.files);
+  wrap.appendChild(bubble);
+  el("chat").appendChild(wrap);
+  el("chat").scrollTop = el("chat").scrollHeight;
 }
 
-async function createConversation(){
-  const title = prompt("Título da conversa:", "Nova conversa");
-  const mode = el('modeSelect').value || 'geral';
-  const data = await api('/api/conversations', { method:'POST', body: JSON.stringify({ title, mode }) });
-  await openConversation(data.conversation_id);
+function renderMessages(messages) {
+  const chat = el("chat");
+  chat.innerHTML = "";
+  for (const m of messages) {
+    addMessage(m.role, m.content);
+  }
 }
 
-async function sendMessage(){
-  const msgEl = el('msg');
-  const text = msgEl.value.trim();
+function renderFiles(files) {
+  const list = el("filesList");
+  list.innerHTML = "";
+  for (const f of files) {
+    const item = document.createElement("div");
+    item.className = "file-item";
+
+    const left = document.createElement("div");
+    const a = document.createElement("a");
+    a.href = `/api/files/${f.id}/download`;
+    a.textContent = f.original_name;
+    left.appendChild(a);
+
+    const right = document.createElement("div");
+    right.className = "meta";
+    right.textContent = `${Math.round((f.size_bytes || 0) / 1024)} KB • ${fmtDate(f.created_at)}`;
+
+    item.appendChild(left);
+    item.appendChild(right);
+    list.appendChild(item);
+  }
+}
+
+async function refreshConversations() {
+  const { conversations: rows } = await api("/api/conversations");
+  conversations = rows || [];
+  renderConversations();
+}
+
+async function openConversation(id) {
+  currentConvId = id;
+  renderConversations();
+
+  const { conversation, messages, files } = await api(`/api/conversations/${id}/messages`);
+  el("convTitle").textContent = conversation?.title || "Conversa";
+
+  // Mode is only visible/usable for admins
+  if (me?.role === "admin") {
+    el("modeWrap").style.display = "";
+    el("modeSelect").value = conversation?.mode || "geral";
+  } else {
+    el("modeWrap").style.display = "none";
+  }
+
+  renderMessages(messages || []);
+  renderFiles(files || []);
+}
+
+async function createConversation() {
+  const payload = { title: "Nova conversa", mode: "geral" };
+  const { conversation_id } = await api("/api/conversations", { method: "POST", body: JSON.stringify(payload) });
+  await refreshConversations();
+  await openConversation(conversation_id);
+}
+
+async function sendMessage() {
+  const text = el("msg").value.trim();
   if (!text) return;
 
-  if (!activeConvId) {
-    const data = await api('/api/conversations', { method:'POST', body: JSON.stringify({ title: 'Nova conversa', mode: el('modeSelect').value }) });
-    activeConvId = data.conversation_id;
-  }
+  el("msg").value = "";
+  addMessage("user", text);
 
-  msgEl.value = '';
-
-  const chat = el('chat');
-  const div = document.createElement('div');
-  div.className = 'msg user';
-  div.textContent = text;
-  chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight;
-
-  const res = await api(`/api/conversations/${activeConvId}/send`, { method:'POST', body: JSON.stringify({ message: text }) });
-
-  const a = document.createElement('div');
-  a.className = 'msg assistant';
-  a.textContent = res.reply;
-  chat.appendChild(a);
-  chat.scrollTop = chat.scrollHeight;
-
-  await loadConversations();
-}
-
-async function setMode(){
-  if (!activeConvId) return;
-  const mode = el('modeSelect').value;
-  await api(`/api/conversations/${activeConvId}`, { method:'PATCH', body: JSON.stringify({ mode }) });
-  await openConversation(activeConvId);
-}
-
-async function logout(){
-  await api('/api/logout', { method:'POST' });
-  location.href = '/login.html';
-}
-
-async function uploadFile(e){
-  e.preventDefault();
-  if (!activeConvId) {
-    alert("Crie/abra uma conversa antes de enviar arquivo.");
-    return;
-  }
-  const input = el('fileInput');
-  if (!input.files || !input.files[0]) return;
-
-  const fd = new FormData();
-  fd.append('file', input.files[0]);
-
-  const res = await fetch(`/api/conversations/${activeConvId}/upload`, { method:'POST', body: fd, credentials: 'include' });
-  if (!res.ok) {
-    const t = await res.text();
-    alert("Erro ao enviar arquivo: " + t);
-    return;
-  }
-  input.value = '';
-  await openConversation(activeConvId);
-}
-
-async function init(){
-  try {
-    await loadMe();
-    const convs = await loadConversations();
-    if (convs.length) await openConversation(convs[0].id);
-  } catch (e) {
-    location.href = '/login.html';
-    return;
-  }
-
-  el('btnNewChat').onclick = createConversation;
-  el('btnSend').onclick = sendMessage;
-  el('btnLogout').onclick = logout;
-  el('modeSelect').onchange = setMode;
-  el('uploadForm').addEventListener('submit', uploadFile);
-
-  el('msg').addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey) {
-      ev.preventDefault();
-      sendMessage();
-    }
+  const { reply } = await api(`/api/conversations/${currentConvId}/send`, {
+    method: "POST",
+    body: JSON.stringify({ message: text }),
   });
+
+  addMessage("assistant", reply || "");
+}
+
+async function init() {
+  try {
+    const r = await api("/api/me");
+    me = r.user;
+
+    el("userSub").textContent = `${me.name || "Usuário"} • ${me.email || ""}${me.role ? " • " + me.role : ""}`;
+
+    if (me.role === "admin") {
+      el("adminBtn").style.display = "";
+      el("modeWrap").style.display = "";
+      el("modeSelect").onchange = async () => {
+        if (!currentConvId) return;
+        const mode = el("modeSelect").value;
+        await api(`/api/conversations/${currentConvId}`, { method: "PATCH", body: JSON.stringify({ mode }) });
+        await openConversation(currentConvId);
+      };
+    } else {
+      el("adminBtn").style.display = "none";
+      el("modeWrap").style.display = "none";
+    }
+
+    el("btnLogout").onclick = async () => {
+      await api("/api/logout", { method: "POST" });
+      location.href = "/login.html";
+    };
+
+    el("btnNewChat").onclick = createConversation;
+    el("btnSend").onclick = sendMessage;
+
+    el("msg").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    el("uploadForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!currentConvId) return;
+
+      const file = el("fileInput").files?.[0];
+      if (!file) return;
+
+      const fd = new FormData();
+      fd.append("file", file);
+
+      const res = await fetch(`/api/conversations/${currentConvId}/upload`, {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        alert("Erro ao enviar arquivo: " + t);
+        return;
+      }
+
+      el("fileInput").value = "";
+      await openConversation(currentConvId);
+    });
+
+    await refreshConversations();
+    if (conversations.length) {
+      await openConversation(conversations[0].id);
+    } else {
+      await createConversation();
+    }
+  } catch (e) {
+    // Not logged in
+    location.href = "/login.html";
+  }
 }
 
 init();

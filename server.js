@@ -369,3 +369,32 @@ app.listen(PORT, () => {
   console.log(`✅ Intranet Chat rodando em ${BASE_URL}`);
   console.log(`➡️ Login: ${BASE_URL}/login.html`);
 });
+
+// Deletar usuário
+app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "invalid_id" });
+
+  // Não deixa apagar a si mesmo
+  if (id === Number(req.user.sub)) return res.status(400).json({ error: "cannot_delete_self" });
+
+  const target = await get("SELECT id, role, email FROM users WHERE id=?", [id]);
+  if (!target) return res.status(404).json({ error: "not_found" });
+
+  // Segurança: impedir apagar o último admin
+  if (target.role === "admin") {
+    const admins = await get("SELECT COUNT(*) AS c FROM users WHERE role='admin'", []);
+    if ((admins?.c || 0) <= 1) return res.status(400).json({ error: "cannot_delete_last_admin" });
+  }
+
+  // Apaga dependências
+  await run("DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
+  await run("DELETE FROM files WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
+  await run("DELETE FROM conversations WHERE user_id=?", [id]);
+
+  // Apaga usuário
+  await run("DELETE FROM users WHERE id=?", [id]);
+
+  logEvent(req.user.sub, "admin_delete_user", { user_id: id, email: target.email });
+  res.json({ ok: true });
+});

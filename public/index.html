@@ -3,18 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Chat - Intranet</title>
+  <title>Chat - Talkers</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="app">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <div class="brand-title">Chat Interno</div>
-        <div class="brand-sub" id="userSub">—</div>
+        <div class="brand-row">
+          <img class="logo" src="/logo.png" alt="Talkers" onerror="this.style.display='none'"/>
+          <div>
+            <div class="brand-title">Talkers Chat</div>
+            <div class="brand-sub" id="userSub">—</div>
+          </div>
+        </div>
       </div>
 
-      <button class="btn primary" id="btnNewChat">+ Nova conversa</button>
+      <button class="btn primary full" id="btnNewChat">Nova conversa</button>
 
       <div class="section">
         <div class="section-title">Conversas</div>
@@ -32,31 +37,26 @@
 
     <main class="main">
       <div class="topbar">
+        <button class="icon-btn" id="btnMenu" aria-label="Menu">☰</button>
         <div class="title" id="convTitle">—</div>
-        <div class="mode">
-  <label>Modo:</label>
-  <span style="font-weight:600;">Geral</span>
-</div>
       </div>
 
       <div class="panel">
-       
-
         <div class="chat" id="chat"></div>
 
         <div class="files">
           <div class="files-header">
-            <div><b>Arquivos da conversa</b></div>
-            <form id="uploadForm">
+            <div class="files-title">Arquivos</div>
+            <form id="uploadForm" class="upload-form">
               <input type="file" id="fileInput" name="file" />
-              <button class="btn" type="submit">Enviar arquivo</button>
+              <button class="btn" type="submit">Enviar</button>
             </form>
           </div>
           <div class="files-list" id="filesList"></div>
         </div>
 
         <div class="composer">
-          <textarea id="msg" placeholder="Escreva sua pergunta... (Enter envia, Shift+Enter quebra linha)"></textarea>
+          <textarea id="msg" placeholder="Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)"></textarea>
           <button class="btn primary" id="btnSend">Enviar</button>
         </div>
       </div>

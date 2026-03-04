@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Login - Intranet Chat</title>
+  <title>Login - Talkers Chat</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="center">
   <div class="card">
     <h1>Entrar</h1>
-    <p class="muted small">Use seu email e senha. ()</p>
+    <p class="muted small">Use seu email e senha.</p>
 
     <label>Email</label>
-    <input id="email" placeholder="email" />
+    <input id="email" placeholder="email" autocomplete="username" />
 
     <label>Senha</label>
-    <input id="password" type="password" placeholder="senha" />
+    <input id="password" type="password" placeholder="senha" autocomplete="current-password" />
 
-    <div style="margin-top:16px;">
-  <button class="btn primary full" id="btnLogin">Entrar</button>
-</div>
+    <div class="row" style="margin-top:12px;">
+      <button class="btn primary" id="btnLogin">Entrar</button>
+    </div>
 
     <div class="muted small" id="msg" style="margin-top:10px;"></div>
   </div>

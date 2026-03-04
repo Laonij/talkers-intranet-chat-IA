@@ -174,6 +174,7 @@ app.post("/api/login", async (req, res) => {
   if (tooManyAttempts(req)) return res.status(429).json({ error: "too_many_attempts" });
 
   const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!canAttemptLogin(req, email)) return res.status(429).json({ error: "too_many_attempts" });
   const password = String(req.body?.password || "");
   if (!email || !password) {
     bumpAttempt(req);
@@ -236,6 +237,30 @@ app.patch("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) =>
   const title = req.body?.title ? String(req.body.title).trim() : conv.title;
   await run("UPDATE conversations SET title=?, mode=?, updated_at=datetime('now') WHERE id=?", [title || conv.title, mode, id]);
   res.json({ ok: true });
+
+// Apagar conversa (usuário dono)
+app.delete("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) => {
+  const id = Number(req.params.id);
+  const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
+  if (!conv) return res.status(404).json({ error: "not_found" });
+
+  // remove files from disk
+  const files = await all("SELECT stored_name FROM files WHERE conversation_id=?", [id]);
+  for (const f of files) {
+    try {
+      const full = path.join(uploadsDir, f.stored_name);
+      if (fs.existsSync(full)) fs.unlinkSync(full);
+    } catch {}
+  }
+
+  await run("DELETE FROM messages WHERE conversation_id=?", [id]);
+  await run("DELETE FROM files WHERE conversation_id=?", [id]);
+  await run("DELETE FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
+
+  logEvent(req.user.sub, "delete_conversation", { conversation_id: id });
+  res.json({ ok: true });
+});
+
 });
 
 app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, res) => {
@@ -393,6 +418,7 @@ app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async
 app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!canAttemptLogin(req, email)) return res.status(429).json({ error: "too_many_attempts" });
   const password = String(req.body?.password || "");
   const role = req.body?.role === "admin" ? "admin" : "user";
   if (!name || !email || !password) return res.status(400).json({ error: "missing_fields" });

@@ -20,6 +20,24 @@ function formatDate(s){
   try { return new Date(s).toLocaleString(); } catch { return s; }
 }
 
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-del-user]");
+  if (!btn) return;
+
+  const id = Number(btn.getAttribute("data-del-user"));
+  if (!id) return;
+
+  if (!confirm("Tem certeza que deseja excluir este usuário? Isso apagará conversas e arquivos dele.")) return;
+
+  try {
+    await api(`/api/admin/users/${id}`, { method: "DELETE" });
+    alert("Usuário excluído.");
+    location.reload();
+  } catch (err) {
+    alert("Erro: " + (err?.message || err));
+  }
+});
+
 function renderMessages(messages){
   const chat = el('chat');
   chat.innerHTML = '';

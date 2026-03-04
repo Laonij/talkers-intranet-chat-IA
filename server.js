@@ -16,22 +16,31 @@ const JWT_SECRET = process.env.JWT_SECRET || "troque-por-um-segredo-grande";
 
 migrate();
 
+// Healthcheck (útil para Render)
 const app = express();
-app.set("trust proxy", 1); // importante no Render (HTTPS atrás de proxy)
+app.get("/api/health", (req, res) => res.json({ ok: true }));
 
+// JSON / Cookies / Static
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
 
+// upload for conversation files and for KB (admin)
 const upload = multer({ dest: uploadsDir, limits: { fileSize: 25 * 1024 * 1024 } });
 
+function isHttpsRequest(req) {
+  const xfProto = String(req.headers?.["x-forwarded-proto"] || "").toLowerCase();
+  // Render/Cloudflare costuma enviar x-forwarded-proto=https
+  if (xfProto === "https") return true;
+  // fallback
+  return String(process.env.BASE_URL || "").startsWith("https://");
+}
+
 function setSessionCookie(req, res, token) {
-  // em HTTPS, o cookie "secure" precisa ser true (Render usa proxy)
-  const secure = Boolean(req.secure);
   res.cookie("session", token, {
     httpOnly: true,
     sameSite: "lax",
-    secure,
+    secure: isHttpsRequest(req),
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }
@@ -41,77 +50,7 @@ function titleFromMessage(text) {
   return t || "Nova conversa";
 }
 
-// cria/atualiza admin sempre que ADMIN_EMAIL e ADMIN_PASSWORD existirem
-async function ensureAdminFromEnv() {
-  const email = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
-  const password = String(process.env.ADMIN_PASSWORD || "");
-  if (!email || !password) return;
-
-  const name = String(process.env.ADMIN_NAME || "Admin").trim() || "Admin";
-  const existing = await get("SELECT id FROM users WHERE email=?", [email]);
-  const hash = await bcrypt.hash(password, 10);
-
-  if (!existing) {
-    await run("INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, 'admin')", [email, name, hash]);
-    console.log("✅ Admin criado (ENV)");
-    console.log("Email:", email);
-  } else {
-    await run("UPDATE users SET name=?, password_hash=?, role='admin' WHERE id=?", [name, hash, existing.id]);
-    console.log("✅ Admin atualizado (ENV)");
-    console.log("Email:", email);
-  }
-}
-
-// roda 1x no boot
-ensureAdminFromEnv().catch((e) => console.log("⚠️ ensureAdminFromEnv error:", e?.message || e));
-
-// OPTIONAL: auto seed/index (se quiser no futuro)
-if (String(process.env.AUTO_INDEX_ON_BOOT || "false").toLowerCase() === "true") {
-  try {
-    const p = spawn(process.execPath, ["scripts/index_drive.js"], { stdio: "inherit" });
-    p.on("close", () => {});
-  } catch {}
-}
-
-async function openaiReply(userText, contextText) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-  if (!apiKey) return null;
-
-  const input = contextText
-    ? `Responda em pt-BR usando SOMENTE o contexto. Se não der para responder, diga que não encontrou na base interna.\n\n## Contexto\n${contextText}\n\n## Pergunta\n${userText}`
-    : userText;
-
-  const resp = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, input }),
-  });
-
-  if (!resp.ok) {
-    const t = await resp.text();
-    console.log("⚠️ OpenAI error:", resp.status, t);
-    return null;
-  }
-  const data = await resp.json();
-  if (data.output_text) return data.output_text;
-  try {
-    const out = (data.output || [])
-      .map((o) => (o.content || []).map((c) => c.text || "").join(""))
-      .join("\n");
-    return out || null;
-  } catch {
-    return null;
-  }
-}
-
-// HOME -> index.html
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-
-// AUTH
+// -------------------- AUTH --------------------
 app.post("/api/login", async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
@@ -137,7 +76,7 @@ app.post("/api/logout", requireAuth(JWT_SECRET), async (req, res) => {
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => res.json({ user: req.user }));
 
-// CONVERSAS
+// -------------------- CONVERSAS --------------------
 app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
   const rows = await all(
     "SELECT id, title, mode, created_at, updated_at FROM conversations WHERE user_id=? ORDER BY datetime(updated_at) DESC",
@@ -181,7 +120,7 @@ app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, 
   res.json({ conversation: conv, messages, files });
 });
 
-// FILES (conversa)
+// -------------------- FILES (conversa) --------------------
 app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), async (req, res) => {
   const id = Number(req.params.id);
   const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
@@ -215,7 +154,7 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
   res.download(full, file.original_name);
 });
 
-// BUSCA INTERNA (Empresa)
+// -------------------- BUSCA INTERNA (Empresa) --------------------
 async function searchInternal(query, limit = 8) {
   const q = String(query || "").trim();
   if (!q) return [];
@@ -250,7 +189,42 @@ app.get("/api/empresa/doc/:ref/download", requireAuth(JWT_SECRET), async (req, r
   res.download(full, path.basename(full));
 });
 
-// CHAT
+// -------------------- CHAT --------------------
+async function openaiReply(userText, contextText) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  if (!apiKey) return null;
+
+  const input = contextText
+    ? `Responda em pt-BR usando SOMENTE o contexto. Se não der para responder, diga que não encontrou na base interna.\n\n## Contexto\n${contextText}\n\n## Pergunta\n${userText}`
+    : userText;
+
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model, input }),
+  });
+
+  if (!resp.ok) {
+    const t = await resp.text();
+    console.log("⚠️ OpenAI error:", resp.status, t);
+    return null;
+  }
+  const data = await resp.json();
+  if (data.output_text) return data.output_text;
+  try {
+    const out = (data.output || [])
+      .map((o) => (o.content || []).map((c) => c.text || "").join(""))
+      .join("\n");
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res) => {
   const id = Number(req.params.id);
   const text = String(req.body?.message || "").trim();
@@ -268,12 +242,16 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   let reply = "";
   let meta = null;
 
-  if (conv.mode === "empresa" && req.user.role === "admin") {
+  if (conv.mode === "empresa") {
     const sources = await searchInternal(text, 8);
     meta = { sources };
 
     if (!sources.length) {
-      reply = "Não encontrei nada na base interna ainda.\n\n• Confira INDEX_FOLDER\n• Rode: npm run index";
+      reply =
+        "Não encontrei nada na base interna ainda.\n\n" +
+        "• Confira INDEX_FOLDER\n" +
+        "• Rode: npm run index\n" +
+        "• (Opcional) Rode: npm run watch";
     } else {
       const context = sources.map((s, i) => `[#${i + 1}] ${s.title}\n${s.snippet}`).join("\n\n");
       const ai = await openaiReply(text, context);
@@ -284,12 +262,12 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         reply =
           "Encontrei estes resultados na base interna:\n\n" +
           sources.map((s, i) => `${i + 1}) ${s.title}\n   ${s.snippet}`.trim()).join("\n\n") +
-          "\n\n(Para responder com IA usando essas fontes, configure OPENAI_API_KEY.)";
+          "\n\n(Para responder com IA usando essas fontes, configure OPENAI_API_KEY no servidor.)";
       }
     }
   } else {
     const ai = await openaiReply(text, null);
-    reply = ai ? ai : "Configure OPENAI_API_KEY para respostas com IA.";
+    reply = ai ? ai : "[MODO GERAL - sem IA configurada]\n\nConfigure OPENAI_API_KEY para respostas com IA.";
   }
 
   await run(
@@ -301,7 +279,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   res.json({ reply });
 });
 
-// ADMIN
+// -------------------- ADMIN --------------------
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const users = await all("SELECT id, name, email, role, created_at FROM users ORDER BY id DESC", []);
   res.json({ users });
@@ -323,15 +301,26 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   res.json({ ok: true, user_id: r.lastID });
 });
 
+// Excluir usuário
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "invalid_id" });
-  if (id === req.user.sub) return res.status(400).json({ error: "cannot_delete_self" });
 
-  const u = await get("SELECT id FROM users WHERE id=?", [id]);
+  // não permitir deletar a si mesmo
+  if (String(id) === String(req.user.sub)) return res.status(400).json({ error: "cannot_delete_self" });
+
+  const u = await get("SELECT id, role FROM users WHERE id=?", [id]);
   if (!u) return res.status(404).json({ error: "not_found" });
 
+  // se for admin, garantir que não é o último admin
+  if (u.role === "admin") {
+    const admins = await get("SELECT COUNT(1) AS c FROM users WHERE role='admin'", []);
+    const c = Number(admins?.c || 0);
+    if (c <= 1) return res.status(400).json({ error: "cannot_delete_last_admin" });
+  }
+
   await run("DELETE FROM users WHERE id=?", [id]);
+  await run("DELETE FROM conversations WHERE user_id=?", [id]);
   logEvent(req.user.sub, "admin_delete_user", { user_id: id });
   res.json({ ok: true });
 });
@@ -344,6 +333,17 @@ app.post("/api/admin/kb/upload", requireAuth(JWT_SECRET), requireRole("admin"), 
   fs.renameSync(path.join(uploadsDir, f.filename), dest);
   logEvent(req.user.sub, "admin_kb_upload", { name: f.originalname, size: f.size });
   res.json({ ok: true });
+});
+
+// Sync Drive (service account)
+app.post("/api/admin/sync-drive", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  try {
+    const p = spawn(process.execPath, ["scripts/sync_drive.js"], { stdio: "inherit" });
+    p.on("close", () => {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: "failed_to_spawn_sync" });
+  }
 });
 
 // Reindex

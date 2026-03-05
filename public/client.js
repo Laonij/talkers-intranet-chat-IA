@@ -1,408 +1,358 @@
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    credentials: "include",
-    ...opts,
-  });
-  const txt = await res.text();
-  let json = null;
-  try {
-    json = txt ? JSON.parse(txt) : null;
-  } catch {}
-  if (!res.ok) throw new Error(json?.error || txt || `HTTP ${res.status}`);
-  return json;
-}
+/* The Boss IA - client */
 
 const el = (id) => document.getElementById(id);
 
-// Attach menu (ChatGPT-like) + toast
-const btnAttach = el("btnAttach");
-const attachMenu = el("attachMenu");
-const menuAddFiles = el("menuAddFiles");
-const menuKnowledge = el("menuKnowledge");
-const menuCreateImage = el("menuCreateImage");
-const menuDeep = el("menuDeep");
-const menuWeb = el("menuWeb");
-const toastEl = el("toast");
+const state = {
+  me: null,
+  conversations: [],
+  currentConvId: null,
+  sidebarOpenMobile: false,
+};
 
-function toast(msg){
-  if(!toastEl) return;
-  toastEl.textContent = msg;
-  toastEl.classList.add('show');
-  clearTimeout(toastEl._t);
-  toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), 2200);
+function escapeHtml(s) {
+  return (s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
-let me = null;
-let conversations = [];
-let currentConvId = null;
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    credentials: 'include',
+    headers: opts.body instanceof FormData ? undefined : { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    ...opts,
+  });
 
-function fmtDate(iso) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString("pt-BR");
-  } catch {
-    return "";
+  const txt = await res.text();
+  let data = null;
+  try { data = txt ? JSON.parse(txt) : null; } catch { data = txt; }
+
+  if (!res.ok) {
+    const msg = (data && data.error) ? data.error : `HTTP ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+function openSidebarMobile(v) {
+  state.sidebarOpenMobile = v;
+  document.body.classList.toggle('sidebar-open', v);
+  const bd = el('sidebarBackdrop');
+  if (bd) bd.style.display = v ? 'block' : 'none';
+}
+
+function renderUser() {
+  const sub = el('userSub');
+  if (sub && state.me) {
+    sub.textContent = `${state.me.name} • ${state.me.email} • ${state.me.role}`;
+  }
+  const adminBtn = el('adminBtn');
+  if (adminBtn) {
+    adminBtn.style.display = state.me?.role === 'admin' ? 'inline-flex' : 'none';
   }
 }
 
-function renderConversations() {
-  const list = el("convList");
-  list.innerHTML = "";
-
-  for (const c of conversations) {
-    const item = document.createElement("div");
-    item.className = "conv" + (c.id === currentConvId ? " active" : "");
-    item.onclick = () => openConversation(c.id);
-
-    const t = document.createElement("div");
-    t.className = "conv-title";
-    t.textContent = c.title || "Conversa";
-
-    const s = document.createElement("div");
-    s.className = "conv-sub";
-    s.textContent = fmtDate(c.updated_at || c.created_at);
-
-    item.appendChild(t);
-    item.appendChild(s);
-
-    const actions = document.createElement("div");
-    actions.className = "conv-actions";
-
-    const del = document.createElement("button");
-    del.className = "icon-btn danger";
-    del.title = "Apagar conversa";
-    del.type = "button";
-    del.textContent = "🗑";
-    del.onclick = (e) => { e.stopPropagation(); deleteConversation(c.id); };
-
-    actions.appendChild(del);
-    item.appendChild(actions);
-
-    list.appendChild(item);
-  }
-}
-
-function addMessage(role, content) {
-  const wrap = document.createElement("div");
-  wrap.className = "msg " + (role === "user" ? "user" : "assistant");
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = content || "";
-
-  wrap.appendChild(bubble);
-  el("chat").appendChild(wrap);
-  el("chat").scrollTop = el("chat").scrollHeight;
-}
-
-function renderMessages(messages) {
-  const chat = el("chat");
-  chat.innerHTML = "";
-  for (const m of messages) {
-    addMessage(m.role, m.content);
-  }
-}
-
-function renderFiles(files) {
-  const list = el("filesList");
-  list.innerHTML = "";
-  for (const f of files) {
-    const item = document.createElement("div");
-    item.className = "file-item";
-
-    const left = document.createElement("div");
-    const a = document.createElement("a");
-    a.href = `/api/files/${f.id}/download`;
-    a.textContent = f.original_name;
-    left.appendChild(a);
-
-    const right = document.createElement("div");
-    right.className = "meta";
-    right.textContent = `${Math.round((f.size_bytes || 0) / 1024)} KB • ${fmtDate(f.created_at)}`;
-
-    item.appendChild(left);
-    item.appendChild(right);
-    list.appendChild(item);
-  }
+function formatDate(d) {
+  if (!d) return '';
+  const s = String(d).slice(0, 10);
+  const [y,m,dd] = s.split('-');
+  if (!y || !m || !dd) return s;
+  return `${dd}/${m}/${y}`;
 }
 
 async function refreshConversations() {
-  const { conversations: rows } = await api("/api/conversations");
-  conversations = rows || [];
+  state.conversations = await api('/api/conversations');
   renderConversations();
+}
+
+function renderConversations() {
+  const list = el('convList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  for (const c of state.conversations) {
+    const item = document.createElement('div');
+    item.className = 'conv' + (c.id === state.currentConvId ? ' active' : '');
+
+    const left = document.createElement('div');
+    left.style.flex = '1';
+
+    const title = document.createElement('div');
+    title.className = 'conv-title';
+    title.textContent = c.title || 'Nova conversa';
+
+    const meta = document.createElement('div');
+    meta.className = 'conv-meta';
+    meta.textContent = formatDate(c.updated_at || c.created_at);
+
+    left.appendChild(title);
+    left.appendChild(meta);
+
+    const del = document.createElement('button');
+    del.className = 'conv-del';
+    del.title = 'Apagar conversa';
+    del.innerHTML = '🗑️';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Apagar esta conversa? Isso não pode ser desfeito.')) return;
+      try {
+        await api(`/api/conversations/${c.id}`, { method: 'DELETE' });
+        if (state.currentConvId === c.id) state.currentConvId = null;
+        await refreshConversations();
+        if (state.conversations.length) {
+          await openConversation(state.conversations[0].id);
+        } else {
+          clearChat();
+        }
+      } catch (err) {
+        alert('Não foi possível apagar a conversa. ' + err.message);
+      }
+    });
+
+    item.appendChild(left);
+    item.appendChild(del);
+
+    item.addEventListener('click', async () => {
+      await openConversation(c.id);
+      openSidebarMobile(false);
+    });
+
+    list.appendChild(item);
+  }
+}
+
+function clearChat() {
+  const chat = el('chat');
+  if (chat) chat.innerHTML = '';
+}
+
+function scrollChatToBottom() {
+  const chat = el('chat');
+  if (!chat) return;
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function addBubble({ role, content, created_at, meta }) {
+  const chat = el('chat');
+  if (!chat) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + (role === 'user' ? 'user' : 'assistant');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+
+  if (meta && meta.type === 'file' && meta.file_id) {
+    const isImg = (meta.mimetype || '').startsWith('image/');
+    const dlUrl = `/api/files/${meta.file_id}/download`;
+
+    const card = document.createElement('div');
+    card.className = 'file-card';
+
+    if (isImg) {
+      const img = document.createElement('img');
+      img.className = 'file-thumb';
+      img.src = dlUrl;
+      img.alt = meta.filename || 'imagem';
+      card.appendChild(img);
+    } else {
+      const ic = document.createElement('div');
+      ic.className = 'file-ic';
+      ic.textContent = '📎';
+      card.appendChild(ic);
+    }
+
+    const txt = document.createElement('div');
+    txt.innerHTML = `
+      <div><a href="${dlUrl}" target="_blank" rel="noopener">${escapeHtml(meta.filename || 'arquivo')}</a></div>
+      <div style="font-size:12px;opacity:.7;">${escapeHtml(meta.mimetype || '')}</div>
+    `;
+    card.appendChild(txt);
+    bubble.appendChild(card);
+  } else {
+    bubble.innerHTML = escapeHtml(content || '').replace(/\n/g, '<br/>');
+  }
+
+  const time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = created_at ? new Date(created_at).toLocaleString() : '';
+
+  wrap.appendChild(bubble);
+  wrap.appendChild(time);
+  chat.appendChild(wrap);
 }
 
 async function openConversation(id) {
-  currentConvId = id;
-  // close sidebar on mobile after selecting a conversation
-  document.body.classList.remove("sidebar-open");
+  state.currentConvId = id;
   renderConversations();
+  clearChat();
 
-  const { conversation, messages, files } = await api(`/api/conversations/${id}/messages`);
-  el("convTitle").textContent = conversation?.title || "Conversa";
+  const title = el('convTitle');
+  const c = state.conversations.find((x) => x.id === id);
+  if (title) title.textContent = c?.title || 'Conversa';
 
-  // Mode is only visible/usable for admins
-  if (me?.role === "admin") {
-    el("modeWrap").style.display = "";
-    el("modeSelect").value = conversation?.mode || "geral";
-  } else {
-    el("modeWrap").style.display = "none";
+  const data = await api(`/api/conversations/${id}/messages`);
+  const msgs = data?.messages || [];
+  for (const m of msgs) {
+    addBubble({ role: m.role, content: m.content, created_at: m.created_at, meta: m.meta || null });
   }
-
-  renderMessages(messages || []);
-  renderFiles(files || []);
+  scrollChatToBottom();
 }
 
-async function createConversation() {
-  const payload = { title: "Nova conversa", mode: "geral" };
-  const { conversation_id } = await api("/api/conversations", { method: "POST", body: JSON.stringify(payload) });
+async function ensureConversation() {
+  if (state.currentConvId) return state.currentConvId;
+  const created = await api('/api/conversations', { method: 'POST', body: JSON.stringify({ title: 'Nova conversa' }) });
   await refreshConversations();
-  await openConversation(conversation_id);
+  await openConversation(created.id);
+  return created.id;
 }
-
-async function deleteConversation(id) {
-  if (!confirm("Apagar esta conversa? Isso não pode ser desfeito.")) return;
-  await api(`/api/conversations/${id}`, { method: "DELETE" });
-
-  if (currentConvId === id) currentConvId = null;
-
-  // Refresh list after deletion
-  await refreshConversations();
-  if (!currentConvId && conversations.length) {
-    await openConversation(conversations[0].id);
-  } else if (!conversations.length) {
-    await createConversation();
-  }
-}
-
-
-
 
 async function sendMessage() {
-  const text = el("msg").value.trim();
-  if (!text) return;
+  const textarea = el('msg');
+  const mode = el('modeSelect')?.value || 'geral';
+  const content = (textarea?.value || '').trim();
+  if (!content) return;
 
-  el("msg").value = "";
-  addMessage("user", text);
+  const convId = await ensureConversation();
 
-  const { reply } = await api(`/api/conversations/${currentConvId}/send`, {
-    method: "POST",
-    body: JSON.stringify({ message: text }),
+  textarea.value = '';
+  addBubble({ role: 'user', content, created_at: new Date().toISOString() });
+  scrollChatToBottom();
+
+  const chat = el('chat');
+  const typing = document.createElement('div');
+  typing.className = 'msg assistant';
+  typing.innerHTML = `<div class="bubble">...</div><div class="time"></div>`;
+  chat.appendChild(typing);
+  scrollChatToBottom();
+
+  try {
+    const resp = await api(`/api/conversations/${convId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content, mode }),
+    });
+    typing.remove();
+    addBubble({ role: 'assistant', content: resp.reply || 'OK', created_at: new Date().toISOString() });
+    await refreshConversations();
+    scrollChatToBottom();
+  } catch (err) {
+    typing.remove();
+    addBubble({ role: 'assistant', content: 'Erro: ' + err.message, created_at: new Date().toISOString() });
+    scrollChatToBottom();
+  }
+}
+
+function closeAttachMenu() {
+  const menu = el('attachMenu');
+  if (menu) menu.style.display = 'none';
+}
+
+async function uploadFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+
+  const convId = await ensureConversation();
+
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      await api(`/api/conversations/${convId}/files`, { method: 'POST', body: fd });
+    } catch (err) {
+      addBubble({ role: 'assistant', content: `Erro ao enviar arquivo "${file.name}": ${err.message}`, created_at: new Date().toISOString() });
+    }
+  }
+
+  await openConversation(convId);
+  await refreshConversations();
+  closeAttachMenu();
+}
+
+function setupAttachments() {
+  const btnAttach = el('btnAttach');
+  const menu = el('attachMenu');
+  const menuUpload = el('menuUpload');
+  const input = el('attachInput');
+
+  btnAttach?.addEventListener('click', () => {
+    if (!menu) return;
+    menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'block' : 'none';
   });
 
-  addMessage("assistant", reply || "");
+  menuUpload?.addEventListener('click', () => input?.click());
+
+  input?.addEventListener('change', async () => {
+    await uploadFiles(input.files);
+    input.value = '';
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!menu || menu.style.display === 'none') return;
+    const inside = menu.contains(e.target) || btnAttach?.contains(e.target);
+    if (!inside) closeAttachMenu();
+  });
+
+  const textarea = el('msg');
+  textarea?.addEventListener('paste', async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imgs = [];
+    for (const it of items) {
+      if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f && (f.type || '').startsWith('image/')) imgs.push(f);
+      }
+    }
+    if (!imgs.length) return;
+
+    e.preventDefault();
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const renamed = imgs.map((f, i) => new File([f], `print-${stamp}${i ? '-' + i : ''}.png`, { type: f.type || 'image/png' }));
+    await uploadFiles(renamed);
+  });
 }
 
 async function init() {
   try {
-    const r = await api("/api/me");
-    me = r.user;
-
-    el("userSub").textContent = `${me.name || "Usuário"} • ${me.email || ""}${me.role ? " • " + me.role : ""}`;
-
-    if (me.role === "admin") {
-      el("adminBtn").style.display = "";
-      el("modeWrap").style.display = "";
-      el("modeSelect").onchange = async () => {
-        if (!currentConvId) return;
-        const mode = el("modeSelect").value;
-        await api(`/api/conversations/${currentConvId}`, { method: "PATCH", body: JSON.stringify({ mode }) });
-        await openConversation(currentConvId);
-      };
-    } else {
-      el("adminBtn").style.display = "none";
-      el("modeWrap").style.display = "none";
-    }
-
-    el("btnLogout").onclick = async () => {
-      await api("/api/logout", { method: "POST" });
-      location.href = "/login.html";
-    };
-
-    el("btnNewChat").onclick = createConversation;
-
-    // Sidebar toggle (ChatGPT-like)
-    const applySidebarState = () => {
-      const mobile = window.matchMedia("(max-width: 900px)").matches;
-      if (mobile) {
-        // on mobile, keep collapsed flag but ignore it
-        document.body.classList.remove("sidebar-collapsed");
-      } else {
-        const collapsed = localStorage.getItem("sidebarCollapsed") === "1";
-        document.body.classList.toggle("sidebar-collapsed", collapsed);
-        document.body.classList.remove("sidebar-open");
-      }
-    };
-
-    applySidebarState();
-    window.addEventListener("resize", applySidebarState);
-
-    const toggleBtn = document.getElementById("btnToggleSidebar");
-    const backdrop = document.getElementById("sidebarBackdrop");
-    if (toggleBtn) {
-      toggleBtn.onclick = () => {
-        const mobile = window.matchMedia("(max-width: 900px)").matches;
-        if (mobile) {
-          document.body.classList.toggle("sidebar-open");
-        } else {
-          const next = !document.body.classList.contains("sidebar-collapsed");
-          document.body.classList.toggle("sidebar-collapsed", next);
-          localStorage.setItem("sidebarCollapsed", next ? "1" : "0");
-        }
-      };
-    }
-    if (backdrop) backdrop.onclick = () => document.body.classList.remove("sidebar-open");
-
-    // -------- Attach menu + paste screenshot --------
-    const closeAttachMenu = () => {
-      if (!attachMenu || !btnAttach) return;
-      attachMenu.hidden = true;
-      btnAttach.setAttribute("aria-expanded", "false");
-    };
-    const openAttachMenu = () => {
-      if (!attachMenu || !btnAttach) return;
-      attachMenu.hidden = false;
-      btnAttach.setAttribute("aria-expanded", "true");
-    };
-    if (btnAttach && attachMenu) {
-      closeAttachMenu();
-      btnAttach.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (attachMenu.hidden) openAttachMenu();
-        else closeAttachMenu();
-      };
-      document.addEventListener("click", (e) => {
-        if (attachMenu.hidden) return;
-        const t = e.target;
-        if (t && (attachMenu.contains(t) || btnAttach.contains(t))) return;
-        closeAttachMenu();
-      });
-    }
-
-    const uploadFile = async (file) => {
-      if (!currentConvId) return;
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch(`/api/conversations/${currentConvId}/upload`, {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || "upload_failed");
-      }
-      await openConversation(currentConvId);
-    };
-
-    if (menuAddFiles) {
-      menuAddFiles.onclick = (e) => {
-        e.preventDefault();
-        closeAttachMenu();
-        el("fileInput")?.click();
-      };
-    }
-    if (menuKnowledge) {
-      menuKnowledge.onclick = (e) => {
-        e.preventDefault();
-        closeAttachMenu();
-        // Apenas um atalho: seleciona o modo Empresa (quando existir) e dá feedback.
-        const sel = el("modeSelect");
-        if (sel) {
-          sel.value = "empresa";
-          toast("Modo: Conhecimento da empresa");
-        } else {
-          toast("Conhecimento da empresa");
-        }
-      };
-    }
-    const soon = (label) => (e) => {
-      e.preventDefault();
-      closeAttachMenu();
-      toast(label + " (em breve)");
-    };
-    if (menuCreateImage) menuCreateImage.onclick = soon("Criar imagem");
-    if (menuDeep) menuDeep.onclick = soon("Pesquisa aprofundada");
-    if (menuWeb) menuWeb.onclick = soon("Busca na web");
-
-    // Auto-upload ao escolher arquivo
-    el("fileInput").addEventListener("change", async () => {
-      const f = el("fileInput").files?.[0];
-      if (!f) return;
-      try {
-        toast("Enviando arquivo...");
-        await uploadFile(f);
-        toast("Arquivo enviado");
-      } catch (err) {
-        alert("Erro ao enviar arquivo: " + (err?.message || err));
-      } finally {
-        el("fileInput").value = "";
-      }
-    });
-
-    // Colar print (Ctrl+V) direto no chat
-    el("msg").addEventListener("paste", async (e) => {
-      const items = e.clipboardData?.items;
-      if (!items || !items.length) return;
-      const images = [];
-      for (const it of items) {
-        if (it.kind === "file" && it.type && it.type.startsWith("image/")) {
-          const blob = it.getAsFile();
-          if (blob) images.push(blob);
-        }
-      }
-      if (!images.length) return;
-      e.preventDefault();
-      try {
-        toast(`Enviando ${images.length} imagem(ns)...`);
-        for (const img of images) {
-          const ts = new Date().toISOString().replace(/[:.]/g, "-");
-          const file = new File([img], `print-${ts}.${(img.type.split("/")[1] || "png")}`, { type: img.type });
-          await uploadFile(file);
-        }
-        toast("Print enviado");
-      } catch (err) {
-        alert("Erro ao enviar print: " + (err?.message || err));
-      }
-    });
-
-    el("btnSend").onclick = sendMessage;
-
-    el("msg").addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-
-    // Mantém o form (fallback), mas o upload principal é pelo botão/cola.
-    el("uploadForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const f = el("fileInput").files?.[0];
-      if (!f) return;
-      try {
-        toast("Enviando arquivo...");
-        await uploadFile(f);
-        toast("Arquivo enviado");
-      } catch (err) {
-        alert("Erro ao enviar arquivo: " + (err?.message || err));
-      } finally {
-        el("fileInput").value = "";
-      }
-    });
-
-    await refreshConversations();
-    if (conversations.length) {
-      await openConversation(conversations[0].id);
-    } else {
-      await createConversation();
-    }
-  } catch (e) {
-    // Not logged in
-    location.href = "/login.html";
+    state.me = await api('/api/me');
+  } catch {
+    location.href = '/login.html';
+    return;
   }
+
+  renderUser();
+
+  el('btnToggleSidebar')?.addEventListener('click', () => openSidebarMobile(!state.sidebarOpenMobile));
+  el('sidebarBackdrop')?.addEventListener('click', () => openSidebarMobile(false));
+
+  el('btnNewChat')?.addEventListener('click', async () => {
+    state.currentConvId = null;
+    await ensureConversation();
+    openSidebarMobile(false);
+  });
+
+  el('btnLogout')?.addEventListener('click', async () => {
+    location.href = '/logout';
+  });
+
+  el('btnSend')?.addEventListener('click', sendMessage);
+  el('msg')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  await refreshConversations();
+  if (state.conversations.length) {
+    await openConversation(state.conversations[0].id);
+  } else {
+    await ensureConversation();
+  }
+
+  setupAttachments();
 }
 
-init();
+window.addEventListener('DOMContentLoaded', init);

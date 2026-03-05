@@ -243,6 +243,9 @@ app.post("/api/logout", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => res.json({ user: req.user }));
 
+// Basic healthcheck for Render / monitoring
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
 // --- Conversations ---
 app.get("/api/conversations", requireAuth(JWT_SECRET), asyncWrap(async (req, res) => {
   const rows = await all(
@@ -540,7 +543,7 @@ app.get("/index.html", (req, res) => {
   const user = tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
   return res.sendFile(path.join(publicDir, "index.html"));
-}));
+});
 
 app.get("/admin.html", (req, res) => {
   const user = tryDecodeSession(req);
@@ -552,8 +555,8 @@ app.get("/admin.html", (req, res) => {
 // Static files
 app.use(express.static(publicDir, { maxAge: "1h" }));
 
-ensureAdmin().finally(() => {
-  
+// Ensure admin exists (does not block startup)
+ensureAdmin().catch((e) => console.error("ensureAdmin failed:", e));
 
 // ---- Error handler (avoid crashing and returning 502) ----
 app.use((err, req, res, next) => {
@@ -564,8 +567,8 @@ app.use((err, req, res, next) => {
   }
   return res.status(500).send("server_error");
 });
+
 app.listen(PORT, () => {
-    console.log(`✅ The Boss IA rodando em ${BASE_URL}`);
-    console.log(`➡️ Login: ${BASE_URL}/login.html`);
-  });
+  console.log(`✅ The Boss IA rodando em ${BASE_URL}`);
+  console.log(`➡️ Login: ${BASE_URL}/login.html`);
 });

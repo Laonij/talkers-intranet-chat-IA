@@ -276,7 +276,7 @@ app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, 
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
 
-  const messages = await all(
+  const messagesRaw = await all(
     "SELECT id, role, content, meta_json, created_at FROM messages WHERE conversation_id=? ORDER BY datetime(created_at) ASC",
     [id]
   );
@@ -285,11 +285,21 @@ app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, 
     [id]
   );
 
+  const safeJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
+
+  const messages = messagesRaw.map(m => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    created_at: m.created_at,
+    meta: m.meta_json ? safeJson(m.meta_json) : null
+  }));
+
   res.json({ conversation: conv, messages, files });
 });
 
 // --- Files (conversation) ---
-app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), async (req, res) => {
+async function handleConversationUpload(req, res) {
   const id = Number(req.params.id);
   const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
@@ -297,14 +307,32 @@ app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single
   const f = req.file;
   if (!f) return res.status(400).json({ error: "missing_file" });
 
-  await run(
+  const r = await run(
     "INSERT INTO files (conversation_id, uploaded_by, original_name, stored_name, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
     [id, req.user.sub, f.originalname, f.filename, f.mimetype || null, f.size || null]
   );
-  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
 
-  res.json({ ok: true });
-});
+  // Create a message entry so the file appears inside the chat (ChatGPT-like)
+  const meta = {
+    type: "file",
+    file_id: r.lastID,
+    filename: f.originalname,
+    mimetype: f.mimetype || null,
+    size: f.size || null
+  };
+  await run(
+    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, ?, ?, ?)",
+    [id, "user", "", JSON.stringify(meta)]
+  );
+
+  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
+  res.json({ ok: true, file_id: r.lastID });
+}
+
+// New endpoint (preferred)
+app.post("/api/conversations/:id/files", requireAuth(JWT_SECRET), upload.single("file"), handleConversationUpload);
+// Backwards compatibility
+app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), handleConversationUpload);
 
 app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => {
   const id = Number(req.params.id);

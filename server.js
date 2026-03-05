@@ -196,6 +196,11 @@ function clearAttempts(req) {
   loginAttempts.delete(loginKey(req));
 }
 
+// compat helper used by some routes
+function canAttemptLogin(req, _email) {
+  return !tooManyAttempts(req);
+}
+
 function titleFromMessage(text) {
   const t = (text || "").trim().split("\n")[0].slice(0, 60);
   return t || "Nova conversa";

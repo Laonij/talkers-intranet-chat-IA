@@ -64,12 +64,44 @@
         </div>
 
         <div class="composer">
-          <textarea id="msg" placeholder="Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)"></textarea>
+          <div class="composer-left">
+            <button class="icon-btn" id="btnAttach" title="Adicionar arquivos" aria-haspopup="true" aria-expanded="false">
+              <span aria-hidden="true">📎</span>
+            </button>
+
+            <div class="menu" id="attachMenu" role="menu" aria-label="Menu de anexos" hidden>
+              <button class="menu-item" id="menuAddFiles" role="menuitem">
+                <span class="mi-ico" aria-hidden="true">📎</span>
+                <span>Adicionar fotos e arquivos</span>
+              </button>
+              <button class="menu-item" id="menuKnowledge" role="menuitem">
+                <span class="mi-ico" aria-hidden="true">🧠</span>
+                <span>Conhecimento da empresa</span>
+              </button>
+              <div class="menu-sep" role="separator"></div>
+              <button class="menu-item" id="menuCreateImage" role="menuitem">
+                <span class="mi-ico" aria-hidden="true">🖼️</span>
+                <span>Criar imagem</span>
+              </button>
+              <button class="menu-item" id="menuDeep" role="menuitem">
+                <span class="mi-ico" aria-hidden="true">🔎</span>
+                <span>Pesquisa aprofundada</span>
+              </button>
+              <button class="menu-item" id="menuWeb" role="menuitem">
+                <span class="mi-ico" aria-hidden="true">🌐</span>
+                <span>Busca na web</span>
+              </button>
+            </div>
+          </div>
+
+          <textarea id="msg" placeholder="Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)\nDica: você pode colar prints (Ctrl+V) aqui."></textarea>
           <button class="btn primary" id="btnSend">Enviar</button>
         </div>
       </div>
     </main>
   </div>
+
+  <div class="toast" id="toast" aria-live="polite" aria-atomic="true"></div>
 
 <script src="/client.js"></script>
 </body>

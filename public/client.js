@@ -15,6 +15,24 @@ async function api(path, opts = {}) {
 
 const el = (id) => document.getElementById(id);
 
+// Attach menu (ChatGPT-like) + toast
+const btnAttach = el("btnAttach");
+const attachMenu = el("attachMenu");
+const menuAddFiles = el("menuAddFiles");
+const menuKnowledge = el("menuKnowledge");
+const menuCreateImage = el("menuCreateImage");
+const menuDeep = el("menuDeep");
+const menuWeb = el("menuWeb");
+const toastEl = el("toast");
+
+function toast(msg){
+  if(!toastEl) return;
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), 2200);
+}
+
 let me = null;
 let conversations = [];
 let currentConvId = null;
@@ -236,6 +254,120 @@ async function init() {
     }
     if (backdrop) backdrop.onclick = () => document.body.classList.remove("sidebar-open");
 
+    // -------- Attach menu + paste screenshot --------
+    const closeAttachMenu = () => {
+      if (!attachMenu || !btnAttach) return;
+      attachMenu.hidden = true;
+      btnAttach.setAttribute("aria-expanded", "false");
+    };
+    const openAttachMenu = () => {
+      if (!attachMenu || !btnAttach) return;
+      attachMenu.hidden = false;
+      btnAttach.setAttribute("aria-expanded", "true");
+    };
+    if (btnAttach && attachMenu) {
+      closeAttachMenu();
+      btnAttach.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (attachMenu.hidden) openAttachMenu();
+        else closeAttachMenu();
+      };
+      document.addEventListener("click", (e) => {
+        if (attachMenu.hidden) return;
+        const t = e.target;
+        if (t && (attachMenu.contains(t) || btnAttach.contains(t))) return;
+        closeAttachMenu();
+      });
+    }
+
+    const uploadFile = async (file) => {
+      if (!currentConvId) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/conversations/${currentConvId}/upload`, {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || "upload_failed");
+      }
+      await openConversation(currentConvId);
+    };
+
+    if (menuAddFiles) {
+      menuAddFiles.onclick = (e) => {
+        e.preventDefault();
+        closeAttachMenu();
+        el("fileInput")?.click();
+      };
+    }
+    if (menuKnowledge) {
+      menuKnowledge.onclick = (e) => {
+        e.preventDefault();
+        closeAttachMenu();
+        // Apenas um atalho: seleciona o modo Empresa (quando existir) e dá feedback.
+        const sel = el("modeSelect");
+        if (sel) {
+          sel.value = "empresa";
+          toast("Modo: Conhecimento da empresa");
+        } else {
+          toast("Conhecimento da empresa");
+        }
+      };
+    }
+    const soon = (label) => (e) => {
+      e.preventDefault();
+      closeAttachMenu();
+      toast(label + " (em breve)");
+    };
+    if (menuCreateImage) menuCreateImage.onclick = soon("Criar imagem");
+    if (menuDeep) menuDeep.onclick = soon("Pesquisa aprofundada");
+    if (menuWeb) menuWeb.onclick = soon("Busca na web");
+
+    // Auto-upload ao escolher arquivo
+    el("fileInput").addEventListener("change", async () => {
+      const f = el("fileInput").files?.[0];
+      if (!f) return;
+      try {
+        toast("Enviando arquivo...");
+        await uploadFile(f);
+        toast("Arquivo enviado");
+      } catch (err) {
+        alert("Erro ao enviar arquivo: " + (err?.message || err));
+      } finally {
+        el("fileInput").value = "";
+      }
+    });
+
+    // Colar print (Ctrl+V) direto no chat
+    el("msg").addEventListener("paste", async (e) => {
+      const items = e.clipboardData?.items;
+      if (!items || !items.length) return;
+      const images = [];
+      for (const it of items) {
+        if (it.kind === "file" && it.type && it.type.startsWith("image/")) {
+          const blob = it.getAsFile();
+          if (blob) images.push(blob);
+        }
+      }
+      if (!images.length) return;
+      e.preventDefault();
+      try {
+        toast(`Enviando ${images.length} imagem(ns)...`);
+        for (const img of images) {
+          const ts = new Date().toISOString().replace(/[:.]/g, "-");
+          const file = new File([img], `print-${ts}.${(img.type.split("/")[1] || "png")}`, { type: img.type });
+          await uploadFile(file);
+        }
+        toast("Print enviado");
+      } catch (err) {
+        alert("Erro ao enviar print: " + (err?.message || err));
+      }
+    });
+
     el("btnSend").onclick = sendMessage;
 
     el("msg").addEventListener("keydown", (e) => {
@@ -245,29 +377,20 @@ async function init() {
       }
     });
 
+    // Mantém o form (fallback), mas o upload principal é pelo botão/cola.
     el("uploadForm").addEventListener("submit", async (e) => {
       e.preventDefault();
-      if (!currentConvId) return;
-
-      const file = el("fileInput").files?.[0];
-      if (!file) return;
-
-      const fd = new FormData();
-      fd.append("file", file);
-
-      const res = await fetch(`/api/conversations/${currentConvId}/upload`, {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        alert("Erro ao enviar arquivo: " + t);
-        return;
+      const f = el("fileInput").files?.[0];
+      if (!f) return;
+      try {
+        toast("Enviando arquivo...");
+        await uploadFile(f);
+        toast("Arquivo enviado");
+      } catch (err) {
+        alert("Erro ao enviar arquivo: " + (err?.message || err));
+      } finally {
+        el("fileInput").value = "";
       }
-
-      el("fileInput").value = "";
-      await openConversation(currentConvId);
     });
 
     await refreshConversations();

@@ -149,7 +149,8 @@ async function deleteConversation(id) {
 
   if (currentConvId === id) currentConvId = null;
 
-  await loadConversations();
+  // Refresh list after deletion
+  await refreshConversations();
   if (!currentConvId && conversations.length) {
     await openConversation(conversations[0].id);
   } else if (!conversations.length) {

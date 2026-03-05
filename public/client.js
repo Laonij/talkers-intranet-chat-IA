@@ -149,7 +149,7 @@ async function deleteConversation(id) {
 
   if (currentConvId === id) currentConvId = null;
 
-  await loadConversations();
+  await refreshConversations();
   if (!currentConvId && conversations.length) {
     await openConversation(conversations[0].id);
   } else if (!conversations.length) {
@@ -282,13 +282,3 @@ async function init() {
 }
 
 init();
-
-// Close mobile sidebar when clicking outside
-document.addEventListener("click", (e) => {
-  const isMobile = window.matchMedia("(max-width: 900px)").matches;
-  if (!isMobile) return;
-  if (!elSidebar.classList.contains("open")) return;
-  const within = elSidebar.contains(e.target) || (btnToggleSidebar && btnToggleSidebar.contains(e.target));
-  if (!within) elSidebar.classList.remove("open");
-});
-

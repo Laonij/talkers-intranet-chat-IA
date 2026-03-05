@@ -147,9 +147,8 @@ h1{margin:0; font-size:30px; letter-spacing:-.02em}
   margin:6px 8px;
 }
 
-/* permite scroll interno na sidebar (lista de conversas) */
-.section{min-height:0;}
-.section-grow{flex:1; min-height:0; display:flex; flex-direction:column;}
+/* Faz a lista de conversas rolar dentro da sidebar */
+.conversations-section{flex:1;display:flex;flex-direction:column;min-height:0;}
 .conversations {
   display:flex;
   flex-direction:column;
@@ -411,3 +410,15 @@ body.sidebar-collapsed .logo-sm { width: 40px; height: 40px; }
   body.sidebar-open .sidebar { transform: translateX(0); }
   body.sidebar-open .backdrop { opacity: 1; pointer-events: auto; }
 }
+
+/* Login (layout com logo grande, igual ao mock) */
+.login-card{padding:28px}
+.login-hero{display:flex; justify-content:center; margin-bottom:10px}
+.logo-hero{
+  width:clamp(180px, 40vw, 280px);
+  height:auto;
+  object-fit:contain;
+}
+.login-title{margin:10px 0 0 0; font-size:34px; letter-spacing:-.02em}
+.login-subtitle{margin-top:6px}
+.login-form label{display:block; margin-top:14px; font-size:13px; color:#64748b}

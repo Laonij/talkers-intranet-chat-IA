@@ -17,7 +17,9 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const JWT_SECRET = process.env.JWT_SECRET || "troque-por-um-segredo-grande";
 
 // Admin seed defaults via env (Render → Environment)
-const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || "admin@talkers.com").trim().toLowerCase();
+// Obs: se ADMIN_EMAIL vier errado (ex: sem "@"), usamos o padrão seguro.
+const _ADMIN_EMAIL_RAW = String(process.env.ADMIN_EMAIL || "admin@talkers.com").trim().toLowerCase();
+const ADMIN_EMAIL = _ADMIN_EMAIL_RAW.includes("@") ? _ADMIN_EMAIL_RAW : "admin@talkers.com";
 const ADMIN_NAME = String(process.env.ADMIN_NAME || "Admin").trim() || "Admin";
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "Talkers#2026!");
 
@@ -161,6 +163,11 @@ function clearAttempts(req) {
   loginAttempts.delete(loginKey(req));
 }
 
+// Compat: alguns patches chamam isso diretamente.
+function canAttemptLogin(req /*, email */) {
+  return !tooManyAttempts(req);
+}
+
 function titleFromMessage(text) {
   const t = (text || "").trim().split("\n")[0].slice(0, 60);
   return t || "Nova conversa";
@@ -262,6 +269,7 @@ app.delete("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) =
   logEvent(req.user.sub, "delete_conversation", { conversation_id: id });
   res.json({ ok: true });
 });
+
 
 app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, res) => {
   const id = Number(req.params.id);

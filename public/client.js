@@ -149,7 +149,7 @@ async function deleteConversation(id) {
 
   if (currentConvId === id) currentConvId = null;
 
-  await refreshConversations();
+  await loadConversations();
   if (!currentConvId && conversations.length) {
     await openConversation(conversations[0].id);
   } else if (!conversations.length) {

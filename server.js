@@ -216,6 +216,13 @@ app.post("/api/logout", requireAuth(JWT_SECRET), async (req, res) => {
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => res.json({ user: req.user }));
 
+
+app.get('/logout', async (req, res) => {
+  res.clearCookie('session');
+  return res.redirect('/login.html');
+});
+
+
 // --- Conversations ---
 app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
   const rows = await all(

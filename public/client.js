@@ -61,7 +61,7 @@ function formatDate(d) {
 }
 
 async function refreshConversations() {
-  state.conversations = await api('/api/conversations');
+  state.conversations = (await api('/api/conversations')).conversations || [];
   renderConversations();
 }
 
@@ -203,7 +203,7 @@ async function ensureConversation() {
   if (state.currentConvId) return state.currentConvId;
   const created = await api('/api/conversations', { method: 'POST', body: JSON.stringify({ title: 'Nova conversa' }) });
   await refreshConversations();
-  await openConversation(created.id);
+  await openConversation(created.conversation_id);
   return created.id;
 }
 
@@ -227,9 +227,9 @@ async function sendMessage() {
   scrollChatToBottom();
 
   try {
-    const resp = await api(`/api/conversations/${convId}/messages`, {
+    const resp = await api(`/api/conversations/${convId}/send`, {
       method: 'POST',
-      body: JSON.stringify({ content, mode }),
+      body: JSON.stringify({ message: content, mode }),
     });
     typing.remove();
     addBubble({ role: 'assistant', content: resp.reply || 'OK', created_at: new Date().toISOString() });
@@ -316,7 +316,7 @@ function setupAttachments() {
 
 async function init() {
   try {
-    state.me = await api('/api/me');
+    state.me = (await api('/api/me')).user;
   } catch {
     location.href = '/login.html';
     return;
@@ -334,7 +334,8 @@ async function init() {
   });
 
   el('btnLogout')?.addEventListener('click', async () => {
-    location.href = '/logout';
+    await api('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
   });
 
   el('btnSend')?.addEventListener('click', sendMessage);

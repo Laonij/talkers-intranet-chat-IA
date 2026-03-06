@@ -44,7 +44,7 @@ function openSidebarMobile(v) {
 function renderUser() {
   const sub = el('userSub');
   if (sub && state.me) {
-    sub.textContent = `${state.me.name} • ${state.me.email} • ${state.me.role}`;
+    sub.textContent = `${state.me?.name || 'Admin'} • ${state.me?.email || ''} • ${state.me?.role || ''}`;
   }
   const adminBtn = el('adminBtn');
   if (adminBtn) {

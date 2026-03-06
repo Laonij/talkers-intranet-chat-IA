@@ -216,6 +216,7 @@ async function sendMessage() {
   const convId = await ensureConversation();
 
   textarea.value = '';
+  autoResizeComposer();
   addBubble({ role: 'user', content, created_at: new Date().toISOString() });
   scrollChatToBottom();
 
@@ -242,7 +243,16 @@ async function sendMessage() {
   }
 }
 
+
+function autoResizeComposer() {
+  const textarea = el('msg');
+  if (!textarea) return;
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
+}
+
 function closeAttachMenu() {
+
   const menu = el('attachMenu');
   if (menu) menu.style.display = 'none';
 }
@@ -339,12 +349,14 @@ async function init() {
   });
 
   el('btnSend')?.addEventListener('click', sendMessage);
+  el('msg')?.addEventListener('input', autoResizeComposer);
   el('msg')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   });
+  autoResizeComposer();
 
   await refreshConversations();
   if (state.conversations.length) {

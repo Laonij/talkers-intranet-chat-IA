@@ -214,14 +214,14 @@ app.post("/api/logout", requireAuth(JWT_SECRET), async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => res.json({ user: req.user }));
 
-
-app.get('/logout', async (req, res) => {
+app.get('/logout', (req, res) => {
   res.clearCookie('session');
-  return res.redirect('/login.html');
+  res.redirect('/login.html');
 });
 
+
+app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => res.json({ user: req.user }));
 
 // --- Conversations ---
 app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {

@@ -68,6 +68,20 @@ async function ensureAdmin() {
 }
 
 // --- OpenAI helper ---
+
+async function getConversationRecentFileIds(conversationId, userId, limit = 5) {
+  const rows = await all(
+    `SELECT f.id
+       FROM files f
+       JOIN conversations c ON c.id = f.conversation_id
+      WHERE f.conversation_id=? AND c.user_id=?
+      ORDER BY f.id DESC
+      LIMIT ?`,
+    [conversationId, userId, limit]
+  );
+  return rows.map(r => r.id);
+}
+
 async function openaiReply(userText, contextText) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";

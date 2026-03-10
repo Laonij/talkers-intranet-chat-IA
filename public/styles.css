@@ -531,3 +531,37 @@ body.sidebar-collapsed .logo-sm { width: 40px; height: 40px; }
   min-height: 56px;
   max-height: 160px;
 }
+
+.msg .bubble{
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.conv-title{
+  font-size: 12px;
+}
+
+.conv-meta{
+  font-size: 11px;
+}
+
+.time{
+  display:none !important;
+}
+
+.file-card{
+  padding: 10px;
+}
+
+.file-card a{
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.file-thumb{
+  max-width: 120px;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: 10px;
+}

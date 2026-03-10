@@ -1,23 +1,8 @@
-/* Talkers IA - client */
-
 const el = (id) => document.getElementById(id);
 
-const state = {
-  me: null,
-  conversations: [],
-  currentConvId: null,
-  sidebarOpenMobile: false,
-};
-
-function escapeHtml(s) {
-  return (s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[c]));
-}
+let me = null;
+let conversations = [];
+let currentConvId = null;
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -30,53 +15,94 @@ async function api(path, opts = {}) {
 
   const txt = await res.text();
   let data = null;
-  try {
-    data = txt ? JSON.parse(txt) : null;
-  } catch {
-    data = txt;
-  }
+  try { data = txt ? JSON.parse(txt) : null; } catch { data = txt; }
 
   if (!res.ok) {
-    const msg = (data && data.error) ? data.error : `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.data = data;
-    throw err;
+    const msg = data?.error || `HTTP ${res.status}`;
+    throw new Error(msg);
   }
 
   return data;
 }
 
-function openSidebarMobile(v) {
-  state.sidebarOpenMobile = v;
-  document.body.classList.toggle("sidebar-open", v);
-  const bd = el("sidebarBackdrop");
-  if (bd) bd.style.display = v ? "block" : "none";
+function formatDate(iso) {
+  try {
+    return new Date(iso).toLocaleDateString("pt-BR");
+  } catch {
+    return "";
+  }
 }
 
 function renderUser() {
   const sub = el("userSub");
-  if (sub && state.me) {
-    sub.textContent = `${state.me?.name || "Admin"} • ${state.me?.email || ""} • ${state.me?.role || ""}`;
-  }
+  if (!sub || !me) return;
+
+  sub.textContent = `${me.name || "Usuário"} • ${me.email || ""} • ${me.role || ""}`;
 
   const adminBtn = el("adminBtn");
   if (adminBtn) {
-    adminBtn.style.display = state.me?.role === "admin" ? "inline-flex" : "none";
+    adminBtn.style.display = me.role === "admin" ? "" : "none";
   }
 }
 
-function formatDate(d) {
-  if (!d) return "";
-  const s = String(d).slice(0, 10);
-  const [y, m, dd] = s.split("-");
-  if (!y || !m || !dd) return s;
-  return `${dd}/${m}/${y}`;
+function clearChat() {
+  const chat = el("chat");
+  if (chat) chat.innerHTML = "";
 }
 
-async function refreshConversations() {
-  state.conversations = (await api("/api/conversations")).conversations || [];
-  renderConversations();
+function scrollChat() {
+  const chat = el("chat");
+  if (chat) chat.scrollTop = chat.scrollHeight;
+}
+
+function addMessage(role, content, meta = null, createdAt = null) {
+  const chat = el("chat");
+  if (!chat) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + (role === "user" ? "user" : "assistant");
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+
+  if (meta && meta.type === "file" && meta.file_id) {
+    const isImg = (meta.mimetype || "").startsWith("image/");
+    const url = `/api/files/${meta.file_id}/download`;
+
+    const card = document.createElement("div");
+    card.className = "file-card";
+
+    if (isImg) {
+      const img = document.createElement("img");
+      img.className = "file-thumb";
+      img.src = url;
+      img.alt = meta.filename || "imagem";
+      card.appendChild(img);
+    } else {
+      const ic = document.createElement("div");
+      ic.className = "file-ic";
+      ic.textContent = "📎";
+      card.appendChild(ic);
+    }
+
+    const txt = document.createElement("div");
+    txt.innerHTML = `
+      <div><a href="${url}" target="_blank" rel="noopener">${meta.filename || "arquivo"}</a></div>
+      <div style="font-size:12px;opacity:.7;">${meta.mimetype || ""}</div>
+    `;
+    card.appendChild(txt);
+    bubble.appendChild(card);
+  } else {
+    bubble.textContent = content || "";
+  }
+
+  const time = document.createElement("div");
+  time.className = "time";
+  time.textContent = createdAt ? new Date(createdAt).toLocaleString("pt-BR") : "";
+
+  wrap.appendChild(bubble);
+  wrap.appendChild(time);
+  chat.appendChild(wrap);
 }
 
 function renderConversations() {
@@ -85,9 +111,9 @@ function renderConversations() {
 
   list.innerHTML = "";
 
-  for (const c of state.conversations) {
+  for (const c of conversations) {
     const item = document.createElement("div");
-    item.className = "conv" + (c.id === state.currentConvId ? " active" : "");
+    item.className = "conv" + (c.id === currentConvId ? " active" : "");
 
     const left = document.createElement("div");
     left.style.flex = "1";
@@ -100,211 +126,118 @@ function renderConversations() {
     meta.className = "conv-meta";
     meta.textContent = formatDate(c.updated_at || c.created_at);
 
-    left.appendChild(title);
-    left.appendChild(meta);
-
     const del = document.createElement("button");
     del.className = "conv-del";
+    del.type = "button";
     del.title = "Apagar conversa";
     del.innerHTML = "🗑️";
-    del.addEventListener("click", async (e) => {
+
+    del.onclick = async (e) => {
       e.stopPropagation();
       if (!confirm("Apagar esta conversa? Isso não pode ser desfeito.")) return;
 
       try {
         await api(`/api/conversations/${c.id}`, { method: "DELETE" });
-        if (state.currentConvId === c.id) state.currentConvId = null;
-        await refreshConversations();
+        if (currentConvId === c.id) currentConvId = null;
+        await loadConversations();
 
-        if (state.conversations.length) {
-          await openConversation(state.conversations[0].id);
+        if (conversations.length) {
+          await openConversation(conversations[0].id);
         } else {
           clearChat();
+          const titleBox = el("convTitle");
+          if (titleBox) titleBox.textContent = "Nova conversa";
         }
       } catch (err) {
-        alert("Não foi possível apagar a conversa. " + err.message);
+        alert("Erro ao apagar conversa: " + err.message);
       }
-    });
+    };
 
+    left.appendChild(title);
+    left.appendChild(meta);
     item.appendChild(left);
     item.appendChild(del);
 
-    item.addEventListener("click", async () => {
+    item.onclick = async () => {
       await openConversation(c.id);
-      openSidebarMobile(false);
-    });
+    };
 
     list.appendChild(item);
   }
 }
 
-function clearChat() {
-  const chat = el("chat");
-  if (chat) chat.innerHTML = "";
-}
-
-function scrollChatToBottom() {
-  const chat = el("chat");
-  if (!chat) return;
-  chat.scrollTop = chat.scrollHeight;
-}
-
-function addBubble({ role, content, created_at, meta }) {
-  const chat = el("chat");
-  if (!chat) return;
-
-  const wrap = document.createElement("div");
-  wrap.className = "msg " + (role === "user" ? "user" : "assistant");
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-
-  if (meta && meta.type === "file" && meta.file_id) {
-    const isImg = (meta.mimetype || "").startsWith("image/");
-    const dlUrl = `/api/files/${meta.file_id}/download`;
-
-    const card = document.createElement("div");
-    card.className = "file-card";
-
-    if (isImg) {
-      const img = document.createElement("img");
-      img.className = "file-thumb";
-      img.src = dlUrl;
-      img.alt = meta.filename || "imagem";
-      card.appendChild(img);
-    } else {
-      const ic = document.createElement("div");
-      ic.className = "file-ic";
-      ic.textContent = "📎";
-      card.appendChild(ic);
-    }
-
-    const txt = document.createElement("div");
-    txt.innerHTML = `
-      <div><a href="${dlUrl}" target="_blank" rel="noopener">${escapeHtml(meta.filename || "arquivo")}</a></div>
-      <div style="font-size:12px;opacity:.7;">${escapeHtml(meta.mimetype || "")}</div>
-    `;
-    card.appendChild(txt);
-    bubble.appendChild(card);
-  } else {
-    bubble.innerHTML = escapeHtml(content || "").replace(/\n/g, "<br/>");
-  }
-
-  const time = document.createElement("div");
-  time.className = "time";
-  time.textContent = created_at ? new Date(created_at).toLocaleString() : "";
-
-  wrap.appendChild(bubble);
-  wrap.appendChild(time);
-  chat.appendChild(wrap);
-}
-
-async function openConversation(id) {
-  state.currentConvId = id;
+async function loadConversations() {
+  const data = await api("/api/conversations");
+  conversations = data.conversations || [];
   renderConversations();
-  clearChat();
-
-  const title = el("convTitle");
-  const c = state.conversations.find((x) => x.id === id);
-  if (title) title.textContent = c?.title || "Conversa";
-
-  const data = await api(`/api/conversations/${id}/messages`);
-  const msgs = data?.messages || [];
-
-  for (const m of msgs) {
-    addBubble({
-      role: m.role,
-      content: m.content,
-      created_at: m.created_at,
-      meta: m.meta || null,
-    });
-  }
-
-  scrollChatToBottom();
 }
 
 async function ensureConversation() {
-  if (state.currentConvId) return state.currentConvId;
+  if (currentConvId) return currentConvId;
 
-  const created = await api("/api/conversations", {
+  const data = await api("/api/conversations", {
     method: "POST",
     body: JSON.stringify({ title: "Nova conversa" }),
   });
 
-  await refreshConversations();
-  await openConversation(created.conversation_id);
-  return created.conversation_id;
+  await loadConversations();
+  currentConvId = data.conversation_id;
+  return currentConvId;
+}
+
+async function openConversation(id) {
+  currentConvId = id;
+  renderConversations();
+  clearChat();
+
+  const titleBox = el("convTitle");
+  const conv = conversations.find((x) => x.id === id);
+  if (titleBox) titleBox.textContent = conv?.title || "Conversa";
+
+  const data = await api(`/api/conversations/${id}/messages`);
+  const msgs = data.messages || [];
+
+  for (const m of msgs) {
+    addMessage(m.role, m.content, m.meta || null, m.created_at);
+  }
+
+  scrollChat();
 }
 
 async function sendMessage() {
-  const textarea = el("msg");
-  const mode = el("modeSelect")?.value || "geral";
-  const content = (textarea?.value || "").trim();
-
-  if (!content) return;
+  const msgEl = el("msg");
+  const text = (msgEl?.value || "").trim();
+  if (!text) return;
 
   const convId = await ensureConversation();
 
-  textarea.value = "";
-  autoResizeComposer();
+  msgEl.value = "";
 
-  addBubble({
-    role: "user",
-    content,
-    created_at: new Date().toISOString(),
-  });
-  scrollChatToBottom();
-
-  const chat = el("chat");
-  const typing = document.createElement("div");
-  typing.className = "msg assistant";
-  typing.innerHTML = `<div class="bubble">...</div><div class="time"></div>`;
-  chat.appendChild(typing);
-  scrollChatToBottom();
+  addMessage("user", text, null, new Date().toISOString());
+  scrollChat();
 
   try {
-    const resp = await api(`/api/conversations/${convId}/send`, {
+    const data = await api(`/api/conversations/${convId}/send`, {
       method: "POST",
-      body: JSON.stringify({ message: content, mode }),
+      body: JSON.stringify({ message: text }),
     });
 
-    typing.remove();
-
-    addBubble({
-      role: "assistant",
-      content: resp.reply || "OK",
-      created_at: new Date().toISOString(),
-    });
-
-    await refreshConversations();
-    scrollChatToBottom();
+    addMessage("assistant", data.reply || "OK", null, new Date().toISOString());
+    await loadConversations();
+    scrollChat();
   } catch (err) {
-    typing.remove();
-
-    addBubble({
-      role: "assistant",
-      content: "Erro: " + err.message,
-      created_at: new Date().toISOString(),
-    });
-
-    scrollChatToBottom();
+    addMessage("assistant", "Erro: " + err.message, null, new Date().toISOString());
+    scrollChat();
   }
 }
 
-function autoResizeComposer() {
-  const textarea = el("msg");
-  if (!textarea) return;
-  textarea.style.height = "auto";
-  textarea.style.height = Math.min(textarea.scrollHeight, 160) + "px";
-}
-
-async function uploadFiles(fileList) {
-  const files = Array.from(fileList || []);
-  if (!files.length) return;
+async function uploadFiles(files) {
+  const list = Array.from(files || []);
+  if (!list.length) return;
 
   const convId = await ensureConversation();
 
-  for (const file of files) {
+  for (const file of list) {
     const fd = new FormData();
     fd.append("file", file);
 
@@ -314,64 +247,56 @@ async function uploadFiles(fileList) {
         body: fd,
       });
     } catch (err) {
-      addBubble({
-        role: "assistant",
-        content: `Erro ao enviar arquivo "${file.name}": ${err.message}`,
-        created_at: new Date().toISOString(),
-      });
+      alert(`Erro ao enviar arquivo "${file.name}": ${err.message}`);
     }
   }
 
   await openConversation(convId);
-  await refreshConversations();
+  await loadConversations();
 }
 
 function setupAttachments() {
   const btnAttach = el("btnAttach");
   const input = el("attachInput");
 
-  btnAttach?.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    input?.click();
-  });
+  if (btnAttach && input) {
+    btnAttach.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      input.click();
+    };
 
-  input?.addEventListener("change", async () => {
-    await uploadFiles(input.files);
-    input.value = "";
-  });
+    input.onchange = async () => {
+      await uploadFiles(input.files);
+      input.value = "";
+    };
+  }
 
-  const textarea = el("msg");
-  textarea?.addEventListener("paste", async (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
+  const msgEl = el("msg");
+  if (msgEl) {
+    msgEl.addEventListener("paste", async (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
 
-    const imgs = [];
-    for (const it of items) {
-      if (it.kind === "file") {
-        const f = it.getAsFile();
-        if (f && (f.type || "").startsWith("image/")) imgs.push(f);
+      const imgs = [];
+      for (const it of items) {
+        if (it.kind === "file") {
+          const f = it.getAsFile();
+          if (f && (f.type || "").startsWith("image/")) imgs.push(f);
+        }
       }
-    }
 
-    if (!imgs.length) return;
+      if (!imgs.length) return;
+      e.preventDefault();
 
-    e.preventDefault();
-
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const renamed = imgs.map(
-      (f, i) => new File([f], `print-${stamp}${i ? "-" + i : ""}.png`, {
-        type: f.type || "image/png",
-      })
-    );
-
-    await uploadFiles(renamed);
-  });
+      await uploadFiles(imgs);
+    });
+  }
 }
 
 async function init() {
   try {
-    state.me = (await api("/api/me")).user;
+    me = (await api("/api/me")).user;
   } catch {
     location.href = "/login.html";
     return;
@@ -379,43 +304,42 @@ async function init() {
 
   renderUser();
 
-  el("btnToggleSidebar")?.addEventListener("click", () => {
-    openSidebarMobile(!state.sidebarOpenMobile);
-  });
+  const btnSend = el("btnSend");
+  if (btnSend) btnSend.onclick = sendMessage;
 
-  el("sidebarBackdrop")?.addEventListener("click", () => openSidebarMobile(false));
+  const msgEl = el("msg");
+  if (msgEl) {
+    msgEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  }
 
-  el("btnNewChat")?.addEventListener("click", async () => {
-    state.currentConvId = null;
-    await ensureConversation();
-    openSidebarMobile(false);
-  });
+  const btnNew = el("btnNewChat");
+  if (btnNew) {
+    btnNew.onclick = async () => {
+      currentConvId = null;
+      const id = await ensureConversation();
+      await openConversation(id);
+    };
+  }
 
-  el("btnLogout")?.addEventListener("click", async () => {
-    await api("/api/logout", { method: "POST" });
-    location.href = "/login.html";
-  });
-
-  el("btnSend")?.addEventListener("click", sendMessage);
-  el("msg")?.addEventListener("input", autoResizeComposer);
-  el("msg")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  });
-
-  autoResizeComposer();
-
-  await refreshConversations();
-
-  if (state.conversations.length) {
-    await openConversation(state.conversations[0].id);
-  } else {
-    await ensureConversation();
+  const btnLogout = el("btnLogout");
+  if (btnLogout) {
+    btnLogout.onclick = async () => {
+      await api("/api/logout", { method: "POST" });
+      location.href = "/login.html";
+    };
   }
 
   setupAttachments();
+
+  await loadConversations();
+  if (conversations.length) {
+    await openConversation(conversations[0].id);
+  }
 }
 
 window.addEventListener("DOMContentLoaded", init);

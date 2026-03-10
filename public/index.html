@@ -54,12 +54,23 @@
 
         <div class="composer">
           <div class="composer-left">
-            <button class="icon-btn" id="btnAttach" type="button" title="Adicionar fotos e arquivos" aria-label="Adicionar fotos e arquivos">📎</button>
-            <div class="attach-menu" id="attachMenu" style="display:none;">
-              <button class="menu-item" id="menuUpload" type="button">Adicionar fotos e arquivos</button>
-            </div>
-            <input type="file" id="attachInput" style="display:none" multiple />
+            <button
+              class="icon-btn"
+              id="btnAttach"
+              type="button"
+              title="Adicionar fotos e arquivos"
+              aria-label="Adicionar fotos e arquivos"
+            >📎</button>
+
+            <input
+              type="file"
+              id="attachInput"
+              style="display:none"
+              multiple
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,image/*"
+            />
           </div>
+
           <textarea id="msg" placeholder="Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)"></textarea>
           <button class="btn primary" id="btnSend">Enviar</button>
         </div>
@@ -67,6 +78,6 @@
     </main>
   </div>
 
-<script src="/client.js"></script>
+  <script src="/client.js"></script>
 </body>
 </html>

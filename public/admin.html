@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Admin • Talkers IA</title>
+  <title>Admin - Talkers IA</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -93,12 +93,14 @@ async function loadUsers(){
   const { users } = await api('/api/admin/users');
   const body = document.getElementById('usersBody');
   body.innerHTML = '';
+
   for (const u of users){
     const tr = document.createElement('tr');
 
     const tdId = document.createElement('td'); tdId.textContent = u.id;
     const tdName = document.createElement('td'); tdName.textContent = u.name;
     const tdEmail = document.createElement('td'); tdEmail.textContent = u.email;
+
     const tdRole = document.createElement('td');
     const badge = document.createElement('span');
     badge.className = 'badge ' + (u.role === 'admin' ? 'admin' : '');
@@ -124,12 +126,6 @@ async function loadUsers(){
       }
     };
 
-    // Safety: don't show delete for main admin
-    if (String(u.email).toLowerCase() === 'admin@talkers.com') {
-      btnDel.disabled = true;
-      btnDel.title = 'Não é possível remover o admin principal';
-    }
-
     wrap.appendChild(btnDel);
     tdActions.appendChild(wrap);
 
@@ -154,7 +150,12 @@ document.getElementById('btnCreate').onclick = async () => {
         role: document.getElementById('role').value
       })
     });
+
+    document.getElementById('name').value = '';
+    document.getElementById('email').value = '';
     document.getElementById('password').value = '';
+    document.getElementById('role').value = 'user';
+
     setMsg('Usuário criado.');
     await loadUsers();
   }catch(e){

@@ -33,20 +33,9 @@
       </div>
     </aside>
 
-    <div class="backdrop" id="sidebarBackdrop"></div>
-
     <main class="main">
       <div class="topbar">
-        <button class="toggle" id="btnToggleSidebar" aria-label="Menu">☰</button>
-        <div class="title" id="convTitle">—</div>
-
-        <div class="mode" id="modeWrap" style="display:none;">
-          <label>Modo:</label>
-          <select id="modeSelect">
-            <option value="geral">Geral</option>
-            <option value="empresa">Empresa</option>
-          </select>
-        </div>
+        <div class="title" id="convTitle">Nova conversa</div>
       </div>
 
       <div class="panel">
@@ -54,21 +43,8 @@
 
         <div class="composer">
           <div class="composer-left">
-            <button
-              class="icon-btn"
-              id="btnAttach"
-              type="button"
-              title="Adicionar fotos e arquivos"
-              aria-label="Adicionar fotos e arquivos"
-            >📎</button>
-
-            <input
-              type="file"
-              id="attachInput"
-              style="display:none"
-              multiple
-              accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,image/*"
-            />
+            <button class="icon-btn" id="btnAttach" type="button" title="Adicionar fotos e arquivos" aria-label="Adicionar fotos e arquivos">📎</button>
+            <input type="file" id="attachInput" style="display:none" multiple />
           </div>
 
           <textarea id="msg" placeholder="Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)"></textarea>

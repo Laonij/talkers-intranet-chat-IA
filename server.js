@@ -37,10 +37,71 @@ async function ensureAdmin() {
       [ADMIN_EMAIL, ADMIN_NAME, hash]
     );
 
-    console.log("✅ Admin criado:", ADMIN_EMAIL);
     await logEvent(r.lastID, "admin_bootstrap_created", { email: ADMIN_EMAIL });
   } catch (e) {
-    console.log("⚠️ Falha ao criar admin:", e?.message || e);
+    console.log("Falha ao criar admin:", e?.message || e);
+  }
+}
+
+function nowBrazil() {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "full",
+    timeStyle: "medium",
+  }).format(new Date());
+}
+
+async function openaiReply(userText, contextText) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  if (!apiKey) return "Configure OPENAI_API_KEY no Render.";
+
+  const prompt = `
+Você é a TALKERS IA, assistente corporativa da empresa Talkers.
+Responda sempre em português do Brasil.
+
+Data e hora atual no Brasil:
+${nowBrazil()}
+
+Regras:
+- Se o usuário perguntar a data de hoje, use a data atual informada acima.
+- Se houver documento enviado, considere o documento como existente mesmo quando a extração de texto estiver vazia.
+- Se o texto do documento não puder ser lido automaticamente, explique isso claramente e diga que o arquivo foi recebido.
+- Nunca diga que o usuário não enviou arquivo se existir contexto de arquivo enviado.
+- Seja objetiva e útil.
+
+CONTEXTO:
+${contextText || "Sem contexto extra."}
+
+PERGUNTA:
+${userText}
+`;
+
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model, input: prompt }),
+  });
+
+  if (!resp.ok) {
+    const t = await resp.text();
+    console.log("OpenAI error:", resp.status, t);
+    return "Erro ao consultar a OpenAI.";
+  }
+
+  const data = await resp.json();
+  if (data.output_text) return data.output_text;
+
+  try {
+    const out = (data.output || [])
+      .map((o) => (o.content || []).map((c) => c.text || "").join(""))
+      .join("\n");
+    return out || "Sem resposta da OpenAI.";
+  } catch {
+    return "Erro ao processar resposta da OpenAI.";
   }
 }
 
@@ -73,112 +134,6 @@ function titleFromMessage(text) {
   return t || "Nova conversa";
 }
 
-// ---------- OPENAI ----------
-async function openaiReply(userText, contextText) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-  if (!apiKey) return "Configure OPENAI_API_KEY no Render.";
-
-  const input = contextText
-    ? `Você é a TALKERS IA, assistente corporativa da empresa Talkers.\nResponda sempre em português do Brasil.\nUse o contexto abaixo se ele for relevante.\n\n### CONTEXTO\n${contextText}\n\n### PERGUNTA\n${userText}`
-    : `Você é a TALKERS IA, assistente corporativa da empresa Talkers.\nResponda sempre em português do Brasil.\n\nPergunta: ${userText}`;
-
-  const resp = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input,
-    }),
-  });
-
-  if (!resp.ok) {
-    const t = await resp.text();
-    console.log("⚠️ OpenAI error:", resp.status, t);
-    return "Erro ao consultar a OpenAI.";
-  }
-
-  const data = await resp.json();
-  if (data.output_text) return data.output_text;
-
-  try {
-    const out = (data.output || [])
-      .map((o) => (o.content || []).map((c) => c.text || "").join(""))
-      .join("\n");
-    return out || "Sem resposta da OpenAI.";
-  } catch {
-    return "Erro ao processar resposta da OpenAI.";
-  }
-}
-
-// ---------- HELPERS ----------
-async function getConversationFilesContext(conversationId) {
-  try {
-    const files = await all(
-      `SELECT original_name, stored_name
-       FROM files
-       WHERE conversation_id=?
-       ORDER BY id DESC
-       LIMIT 3`,
-      [conversationId]
-    );
-
-    let context = "";
-
-    for (const f of files) {
-      const filePath = path.join(uploadsDir, f.stored_name);
-      if (!fs.existsSync(filePath)) continue;
-
-      const text = await extractText(filePath);
-      if (text && text.trim()) {
-        context += `\n\n[Documento: ${f.original_name}]\n${text.slice(0, 5000)}`;
-      }
-    }
-
-    return context;
-  } catch (err) {
-    console.log("Erro lendo anexos:", err);
-    return "";
-  }
-}
-
-async function searchInternal(query, limit = 8) {
-  const q = String(query || "").trim();
-  if (!q) return [];
-
-  const terms = q
-    .replace(/[^\p{L}\p{N}\s_-]+/gu, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 10);
-
-  if (!terms.length) return [];
-
-  const ftsQuery = terms.map((t) => `"${t}"`).join(" AND ");
-
-  try {
-    const rows = await all(
-      `SELECT d.id, d.rel_path, snippet(documents_fts, 0, '', '', ' … ', 12) AS snippet
-       FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid
-       WHERE documents_fts MATCH ?
-       ORDER BY bm25(documents_fts)
-       LIMIT ?`,
-      [ftsQuery, limit]
-    );
-
-    return rows.map((r) => ({
-      ref: String(r.id),
-      title: r.rel_path,
-      snippet: r.snippet || "",
-    }));
-  } catch {
-    return [];
-  }
-}
-
 function tryDecodeSession(req) {
   const token = req.cookies?.session;
   if (!token) return null;
@@ -189,10 +144,8 @@ function tryDecodeSession(req) {
   }
 }
 
-// ---------- HEALTH ----------
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// ---------- AUTH ----------
 app.post("/api/login", async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
@@ -229,7 +182,6 @@ app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => {
   res.json({ user: req.user });
 });
 
-// ---------- CONVERSATIONS ----------
 app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
   const rows = await all(
     "SELECT id, title, mode, created_at, updated_at FROM conversations WHERE user_id=? ORDER BY datetime(updated_at) DESC",
@@ -294,31 +246,27 @@ app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, 
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
 
-  const messagesRaw = await all(
-    "SELECT id, role, content, meta_json, created_at FROM messages WHERE conversation_id=? ORDER BY datetime(created_at) ASC",
+  const rows = await all(
+    "SELECT id, role, content, meta_json, created_at FROM messages WHERE conversation_id=? ORDER BY datetime(created_at) ASC, id ASC",
     [id]
   );
 
   const safeJson = (s) => {
-    try {
-      return JSON.parse(s);
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(s); } catch { return null; }
   };
 
-  const messages = messagesRaw.map((m) => ({
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    created_at: m.created_at,
-    meta: m.meta_json ? safeJson(m.meta_json) : null,
-  }));
-
-  res.json({ conversation: conv, messages });
+  res.json({
+    conversation: conv,
+    messages: rows.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      created_at: m.created_at,
+      meta: m.meta_json ? safeJson(m.meta_json) : null,
+    })),
+  });
 });
 
-// ---------- FILES ----------
 app.post("/api/conversations/:id/files", requireAuth(JWT_SECRET), upload.single("file"), async (req, res) => {
   const id = Number(req.params.id);
   const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
@@ -336,25 +284,21 @@ app.post("/api/conversations/:id/files", requireAuth(JWT_SECRET), upload.single(
     type: "file",
     file_id: r.lastID,
     filename: f.originalname,
-    mimetype: f.mimetype || null,
-    size: f.size || null,
+    mimetype: f.mimetype || "",
+    size: f.size || 0,
   };
 
   await run(
-    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, ?, ?, ?)",
-    [id, "user", "", JSON.stringify(meta)]
+    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'user', '', ?)",
+    [id, JSON.stringify(meta)]
   );
 
-  await run(
-    "UPDATE conversations SET updated_at=datetime('now') WHERE id=?",
-    [id]
-  );
+  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
 
   res.json({ ok: true, file_id: r.lastID });
 });
 
 app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), async (req, res) => {
-  req.url = `/api/conversations/${req.params.id}/files`;
   const id = Number(req.params.id);
   const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
@@ -371,19 +315,16 @@ app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single
     type: "file",
     file_id: r.lastID,
     filename: f.originalname,
-    mimetype: f.mimetype || null,
-    size: f.size || null,
+    mimetype: f.mimetype || "",
+    size: f.size || 0,
   };
 
   await run(
-    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, ?, ?, ?)",
-    [id, "user", "", JSON.stringify(meta)]
+    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'user', '', ?)",
+    [id, JSON.stringify(meta)]
   );
 
-  await run(
-    "UPDATE conversations SET updated_at=datetime('now') WHERE id=?",
-    [id]
-  );
+  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
 
   res.json({ ok: true, file_id: r.lastID });
 });
@@ -394,7 +335,7 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
   const file = await get(
     `SELECT f.*, c.user_id AS owner_user_id
      FROM files f
-     LEFT JOIN conversations c ON c.id=f.conversation_id
+     LEFT JOIN conversations c ON c.id = f.conversation_id
      WHERE f.id=?`,
     [id]
   );
@@ -410,11 +351,44 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
   res.download(full, file.original_name);
 });
 
-// ---------- CHAT ----------
+async function getConversationFilesContext(conversationId) {
+  try {
+    const files = await all(
+      `SELECT original_name, stored_name, mime_type
+       FROM files
+       WHERE conversation_id=?
+       ORDER BY id DESC
+       LIMIT 3`,
+      [conversationId]
+    );
+
+    let context = "";
+
+    for (const f of files) {
+      const filePath = path.join(uploadsDir, f.stored_name);
+      let extracted = "";
+
+      if (fs.existsSync(filePath)) {
+        extracted = await extractText(filePath);
+      }
+
+      if (extracted && extracted.trim()) {
+        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nTexto extraído:\n${extracted.slice(0, 7000)}\n`;
+      } else {
+        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nO arquivo foi recebido e está anexado à conversa, mas não foi possível extrair texto automaticamente. Isso pode acontecer quando o PDF é imagem/escaneado ou quando o arquivo não contém texto legível por parser.\n`;
+      }
+    }
+
+    return context;
+  } catch (err) {
+    console.log("Erro lendo arquivos da conversa:", err);
+    return "";
+  }
+}
+
 app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res) => {
   const id = Number(req.params.id);
   const text = String(req.body?.message || "").trim();
-
   if (!text) return res.status(400).json({ error: "empty_message" });
 
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
@@ -433,46 +407,34 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   try {
     webContext = await searchWeb(text);
   } catch (e) {
-    console.log("⚠️ erro web search:", e?.message || e);
+    console.log("Erro busca web:", e?.message || e);
   }
 
   const fileContext = await getConversationFilesContext(id);
 
   const context = `
-DOCUMENTOS ENVIADOS:
-${fileContext || "nenhum"}
+Data atual no Brasil:
+${nowBrazil()}
 
-INTERNET:
-${webContext || "nenhum"}
+Documentos da conversa:
+${fileContext || "Nenhum documento anexado."}
+
+Contexto da internet:
+${webContext || "Sem resultados externos relevantes."}
 `;
 
-  let finalQuestion = text;
-
-  if (fileContext) {
-    finalQuestion = `
-Analise os documentos enviados e responda a pergunta do usuário.
-
-Pergunta do usuário:
-${text}
-`;
-  }
-
-  const reply = await openaiReply(finalQuestion, context);
+  const reply = await openaiReply(text, context);
 
   await run(
     "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'assistant', ?)",
     [id, reply]
   );
 
-  await run(
-    "UPDATE conversations SET updated_at=datetime('now') WHERE id=?",
-    [id]
-  );
+  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
 
   res.json({ reply });
 });
 
-// ---------- ADMIN ----------
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const users = await all("SELECT id, name, email, role, created_at FROM users ORDER BY id DESC", []);
   res.json({ users });
@@ -484,7 +446,9 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   const password = String(req.body?.password || "");
   const role = req.body?.role === "admin" ? "admin" : "user";
 
-  if (!name || !email || !password) return res.status(400).json({ error: "missing_fields" });
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: "missing_fields" });
+  }
 
   const existing = await get("SELECT id FROM users WHERE email=?", [email]);
   if (existing) return res.status(409).json({ error: "email_already_exists" });
@@ -507,6 +471,7 @@ app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin")
 
   const user = await get("SELECT id, email FROM users WHERE id=?", [id]);
   if (!user) return res.status(404).json({ error: "not_found" });
+
   if (String(user.email).toLowerCase() === ADMIN_EMAIL) {
     return res.status(400).json({ error: "cannot_delete_main_admin" });
   }
@@ -520,7 +485,6 @@ app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin")
   res.json({ ok: true });
 });
 
-// ---------- KB / DRIVE ----------
 app.post("/api/admin/kb/upload", requireAuth(JWT_SECRET), requireRole("admin"), upload.single("file"), async (req, res) => {
   const f = req.file;
   if (!f) return res.status(400).send("missing_file");
@@ -552,14 +516,11 @@ app.post("/api/admin/reindex", requireAuth(JWT_SECRET), requireRole("admin"), as
   }
 });
 
-// ---------- PAGES ----------
 const publicDir = path.join(__dirname, "public");
 
 app.get("/", (req, res) => res.redirect("/index.html"));
 
-app.get("/login.html", (req, res) => {
-  res.sendFile(path.join(publicDir, "login.html"));
-});
+app.get("/login.html", (req, res) => res.sendFile(path.join(publicDir, "login.html")));
 
 app.get("/index.html", (req, res) => {
   const user = tryDecodeSession(req);
@@ -576,10 +537,9 @@ app.get("/admin.html", (req, res) => {
 
 app.use(express.static(publicDir));
 
-// ---------- START ----------
 ensureAdmin().finally(() => {
   app.listen(PORT, () => {
-    console.log(`✅ Talkers IA rodando em ${BASE_URL}`);
-    console.log(`➡️ Login: ${BASE_URL}/login.html`);
+    console.log(`Talkers IA rodando em ${BASE_URL}`);
+    console.log(`Login: ${BASE_URL}/login.html`);
   });
 });

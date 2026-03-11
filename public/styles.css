@@ -546,4 +546,111 @@ label{
   .composer .btn.primary{
     grid-column:1 / -1;
   }
+  /* ===== AJUSTE DE TAMANHO DE FONTE ===== */
+
+.brand-title{
+  font-size: 15px !important;
+}
+
+.brand-sub{
+  font-size: 11px !important;
+}
+
+.section-title{
+  font-size: 11px !important;
+  letter-spacing: .10em !important;
+}
+
+.conv{
+  padding: 10px 10px !important;
+  border-radius: 16px !important;
+}
+
+.conv-title{
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+}
+
+.conv-meta{
+  font-size: 10px !important;
+  margin-top: 3px !important;
+}
+
+.conv-del{
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+}
+
+.btn{
+  font-size: 13px !important;
+  padding: 12px 16px !important;
+}
+
+.sidebar .btn{
+  border-radius: 16px !important;
+}
+
+.title{
+  font-size: 15px !important;
+}
+
+.chat{
+  padding: 14px !important;
+}
+
+.msg{
+  margin-bottom: 10px !important;
+}
+
+.bubble{
+  font-size: 13px !important;
+  line-height: 1.38 !important;
+  padding: 12px 14px !important;
+  border-radius: 18px !important;
+}
+
+.file-card{
+  padding: 8px !important;
+  gap: 10px !important;
+  border-radius: 14px !important;
+  min-width: 220px !important;
+  max-width: 380px !important;
+}
+
+.file-card a{
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+.file-thumb{
+  max-width: 96px !important;
+  max-height: 96px !important;
+}
+
+.file-ic{
+  width: 32px !important;
+  height: 32px !important;
+  font-size: 16px !important;
+}
+
+textarea#msg{
+  font-size: 13px !important;
+}
+
+.icon-btn{
+  width: 44px !important;
+  height: 44px !important;
+}
+
+.table th,
+.table td{
+  font-size: 13px !important;
+}
+
+.time{
+  display: none !important;
+}
 }

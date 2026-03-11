@@ -68,7 +68,7 @@ Regras:
 - Se houver documento enviado, considere o documento como existente mesmo quando a extração de texto estiver vazia.
 - Se o texto do documento não puder ser lido automaticamente, explique isso claramente e diga que o arquivo foi recebido.
 - Nunca diga que o usuário não enviou arquivo se existir contexto de arquivo enviado.
-- Seja objetiva e útil.
+- Seja objetiva, útil e natural.
 
 CONTEXTO:
 ${contextText || "Sem contexto extra."}
@@ -369,7 +369,7 @@ async function getConversationFilesContext(conversationId) {
       let extracted = "";
 
       if (fs.existsSync(filePath)) {
-        extracted = await extractText(filePath);
+        extracted = await extractText(filePath, f.original_name, f.mime_type);
       }
 
       if (extracted && extracted.trim()) {

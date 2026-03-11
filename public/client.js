@@ -61,6 +61,19 @@ function scrollChat() {
   if (chat) chat.scrollTop = chat.scrollHeight;
 }
 
+async function copyText(text, button) {
+  try {
+    await navigator.clipboard.writeText(text || "");
+    const old = button.textContent;
+    button.textContent = "Copiado";
+    setTimeout(() => {
+      button.textContent = old;
+    }, 1200);
+  } catch {
+    alert("Não foi possível copiar o texto.");
+  }
+}
+
 function addMessage(role, content, meta = null) {
   const chat = el("chat");
   if (!chat) return;
@@ -99,7 +112,23 @@ function addMessage(role, content, meta = null) {
     card.appendChild(txt);
     bubble.appendChild(card);
   } else {
-    bubble.textContent = content || "";
+    const textNode = document.createElement("div");
+    textNode.textContent = content || "";
+    bubble.appendChild(textNode);
+
+    if (role === "assistant" && content) {
+      const actions = document.createElement("div");
+      actions.className = "msg-actions";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "copy-btn";
+      copyBtn.type = "button";
+      copyBtn.textContent = "Copiar";
+      copyBtn.onclick = () => copyText(content, copyBtn);
+
+      actions.appendChild(copyBtn);
+      bubble.appendChild(actions);
+    }
   }
 
   wrap.appendChild(bubble);
@@ -224,16 +253,24 @@ async function sendMessage() {
   addMessage("user", text);
   scrollChat();
 
+  const typing = document.createElement("div");
+  typing.className = "msg assistant";
+  typing.innerHTML = `<div class="bubble">Pensando...</div>`;
+  el("chat").appendChild(typing);
+  scrollChat();
+
   try {
     const data = await api(`/api/conversations/${convId}/send`, {
       method: "POST",
       body: JSON.stringify({ message: text }),
     });
 
+    typing.remove();
     addMessage("assistant", data.reply || "OK");
     await loadConversations();
     scrollChat();
   } catch (err) {
+    typing.remove();
     addMessage("assistant", "Erro: " + err.message);
     scrollChat();
   }

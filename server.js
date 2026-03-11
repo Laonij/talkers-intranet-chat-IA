@@ -51,31 +51,191 @@ function nowBrazil() {
   }).format(new Date());
 }
 
-async function openaiReply(userText, contextText) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-  if (!apiKey) return "Configure OPENAI_API_KEY no Render.";
+function tryDecodeSession(req) {
+  const token = req.cookies?.session;
+  if (!token) return null;
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
 
-  const prompt = `
+function isHttps(req) {
+  const xfProto = String(req.headers["x-forwarded-proto"] || "");
+  return req.secure || xfProto.includes("https");
+}
+
+function setSessionCookie(req, res, token) {
+  res.cookie("session", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isHttps(req),
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+}
+
+function titleFromMessage(text) {
+  const t = (text || "").trim().split("\n")[0].slice(0, 60);
+  return t || "Nova conversa";
+}
+
+function extFromName(name = "") {
+  return path.extname(String(name).toLowerCase());
+}
+
+function mimeLooksLikeImage(mime = "") {
+  return String(mime || "").toLowerCase().startsWith("image/");
+}
+
+function fileToDataUrl(filePath, mimeType = "application/octet-stream") {
+  const buf = fs.readFileSync(filePath);
+  const b64 = buf.toString("base64");
+  return `data:${mimeType};base64,${b64}`;
+}
+
+async function getConversationHistory(conversationId, limit = 10) {
+  const rows = await all(
+    `SELECT role, content
+       FROM messages
+      WHERE conversation_id=?
+      ORDER BY id DESC
+      LIMIT ?`,
+    [conversationId, limit]
+  );
+
+  return rows.reverse().map((m) => ({
+    role: m.role === "assistant" ? "assistant" : "user",
+    content: String(m.content || "").trim(),
+  }));
+}
+
+async function getConversationFilesContext(conversationId) {
+  try {
+    const files = await all(
+      `SELECT id, original_name, stored_name, mime_type
+         FROM files
+        WHERE conversation_id=?
+        ORDER BY id DESC
+        LIMIT 4`,
+      [conversationId]
+    );
+
+    let context = "";
+
+    for (const f of files) {
+      const filePath = path.join(uploadsDir, f.stored_name);
+      let extracted = "";
+
+      if (fs.existsSync(filePath)) {
+        extracted = await extractText(filePath, f.original_name, f.mime_type);
+      }
+
+      if (extracted && extracted.trim()) {
+        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nTexto extraído:\n${extracted.slice(0, 9000)}\n`;
+      } else if (mimeLooksLikeImage(f.mime_type)) {
+        context += `\n\n[Imagem enviada: ${f.original_name} | ${f.mime_type}]\nA imagem foi anexada à conversa e pode ser analisada visualmente.\n`;
+      } else {
+        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nO arquivo foi recebido e está anexado à conversa, mas não foi possível extrair texto automaticamente. Isso pode acontecer quando o PDF é imagem/escaneado ou quando o arquivo não contém texto legível por parser. Nesse caso, o próximo passo é adicionar OCR.\n`;
+      }
+    }
+
+    return context;
+  } catch (err) {
+    console.log("Erro lendo arquivos da conversa:", err);
+    return "";
+  }
+}
+
+async function getRecentVisionInputs(conversationId, limit = 3) {
+  try {
+    const files = await all(
+      `SELECT original_name, stored_name, mime_type
+         FROM files
+        WHERE conversation_id=?
+        ORDER BY id DESC
+        LIMIT ?`,
+      [conversationId, limit]
+    );
+
+    const out = [];
+
+    for (const f of files) {
+      if (!mimeLooksLikeImage(f.mime_type)) continue;
+
+      const filePath = path.join(uploadsDir, f.stored_name);
+      if (!fs.existsSync(filePath)) continue;
+
+      out.push({
+        type: "input_image",
+        image_url: fileToDataUrl(filePath, f.mime_type || "image/png"),
+      });
+    }
+
+    return out;
+  } catch (err) {
+    console.log("Erro ao preparar imagens para visão:", err);
+    return [];
+  }
+}
+
+async function buildOpenAIInput({ conversationId, userText, contextText }) {
+  const history = await getConversationHistory(conversationId, 10);
+  const visionInputs = await getRecentVisionInputs(conversationId, 3);
+
+  const historyText = history
+    .map((m) => `${m.role === "assistant" ? "IA" : "Usuário"}: ${m.content}`)
+    .filter(Boolean)
+    .join("\n");
+
+  const systemText = `
 Você é a TALKERS IA, assistente corporativa da empresa Talkers.
 Responda sempre em português do Brasil.
+Seja educada, profissional, natural e objetiva.
 
 Data e hora atual no Brasil:
 ${nowBrazil()}
 
 Regras:
-- Se o usuário perguntar a data de hoje, use a data atual informada acima.
-- Se houver documento enviado, considere o documento como existente mesmo quando a extração de texto estiver vazia.
-- Se o texto do documento não puder ser lido automaticamente, explique isso claramente e diga que o arquivo foi recebido.
-- Nunca diga que o usuário não enviou arquivo se existir contexto de arquivo enviado.
-- Seja objetiva, útil e natural.
+- Considere o histórico recente da conversa antes de responder.
+- Entenda referências curtas como "seria isso", "esse", "aquele", "melhore", "resume", "faz daquele jeito".
+- Se o usuário tiver enviado arquivo, nunca diga que ele não enviou.
+- Se houver imagem enviada diretamente, analise visualmente a imagem.
+- Se houver documento com texto extraído, use esse conteúdo para responder.
+- Se o documento existir mas o texto não puder ser extraído, explique isso com clareza.
+- Se o usuário perguntar a data de hoje, use a data atual acima.
+- Se você não tiver base suficiente, peça complemento com educação, mas evite pedir de novo algo que já foi enviado.
 
-CONTEXTO:
-${contextText || "Sem contexto extra."}
+Histórico recente:
+${historyText || "Sem histórico anterior."}
 
-PERGUNTA:
-${userText}
-`;
+Contexto adicional:
+${contextText || "Sem contexto adicional."}
+`.trim();
+
+  const input = [
+    {
+      role: "system",
+      content: [{ type: "input_text", text: systemText }],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "input_text", text: userText },
+        ...visionInputs,
+      ],
+    },
+  ];
+
+  return input;
+}
+
+async function openaiReply({ conversationId, userText, contextText }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  if (!apiKey) return "Configure OPENAI_API_KEY no Render.";
+
+  const input = await buildOpenAIInput({ conversationId, userText, contextText });
 
   const resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -83,7 +243,10 @@ ${userText}
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model, input: prompt }),
+    body: JSON.stringify({
+      model,
+      input,
+    }),
   });
 
   if (!resp.ok) {
@@ -114,35 +277,6 @@ const upload = multer({
   dest: uploadsDir,
   limits: { fileSize: 25 * 1024 * 1024 },
 });
-
-function isHttps(req) {
-  const xfProto = String(req.headers["x-forwarded-proto"] || "");
-  return req.secure || xfProto.includes("https");
-}
-
-function setSessionCookie(req, res, token) {
-  res.cookie("session", token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: isHttps(req),
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
-}
-
-function titleFromMessage(text) {
-  const t = (text || "").trim().split("\n")[0].slice(0, 60);
-  return t || "Nova conversa";
-}
-
-function tryDecodeSession(req) {
-  const token = req.cookies?.session;
-  if (!token) return null;
-  try {
-    return jwt.verify(token, JWT_SECRET);
-  } catch {
-    return null;
-  }
-}
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
@@ -334,9 +468,9 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
 
   const file = await get(
     `SELECT f.*, c.user_id AS owner_user_id
-     FROM files f
-     LEFT JOIN conversations c ON c.id = f.conversation_id
-     WHERE f.id=?`,
+       FROM files f
+       LEFT JOIN conversations c ON c.id = f.conversation_id
+      WHERE f.id=?`,
     [id]
   );
 
@@ -350,41 +484,6 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
 
   res.download(full, file.original_name);
 });
-
-async function getConversationFilesContext(conversationId) {
-  try {
-    const files = await all(
-      `SELECT original_name, stored_name, mime_type
-       FROM files
-       WHERE conversation_id=?
-       ORDER BY id DESC
-       LIMIT 3`,
-      [conversationId]
-    );
-
-    let context = "";
-
-    for (const f of files) {
-      const filePath = path.join(uploadsDir, f.stored_name);
-      let extracted = "";
-
-      if (fs.existsSync(filePath)) {
-        extracted = await extractText(filePath, f.original_name, f.mime_type);
-      }
-
-      if (extracted && extracted.trim()) {
-        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nTexto extraído:\n${extracted.slice(0, 7000)}\n`;
-      } else {
-        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nO arquivo foi recebido e está anexado à conversa, mas não foi possível extrair texto automaticamente. Isso pode acontecer quando o PDF é imagem/escaneado ou quando o arquivo não contém texto legível por parser.\n`;
-      }
-    }
-
-    return context;
-  } catch (err) {
-    console.log("Erro lendo arquivos da conversa:", err);
-    return "";
-  }
-}
 
 app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res) => {
   const id = Number(req.params.id);
@@ -416,14 +515,18 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
 Data atual no Brasil:
 ${nowBrazil()}
 
-Documentos da conversa:
-${fileContext || "Nenhum documento anexado."}
+Documentos e imagens da conversa:
+${fileContext || "Nenhum anexo recente."}
 
 Contexto da internet:
 ${webContext || "Sem resultados externos relevantes."}
 `;
 
-  const reply = await openaiReply(text, context);
+  const reply = await openaiReply({
+    conversationId: id,
+    userText: text,
+    contextText: context,
+  });
 
   await run(
     "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'assistant', ?)",

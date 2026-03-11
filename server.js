@@ -13,6 +13,8 @@ const { migrate, get, all, run, uploadsDir, kbDir, logEvent } = require("./db");
 const { signSession, requireAuth, requireRole } = require("./auth");
 const { extractText } = require("./lib/extract");
 const { searchWeb } = require("./lib/webSearch");
+const { ocrImage } = require("./lib/ocr");
+const { generateArtifact } = require("./lib/generate");
 
 const PORT = Number(process.env.PORT || 10000);
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -80,10 +82,6 @@ function titleFromMessage(text) {
   return t || "Nova conversa";
 }
 
-function extFromName(name = "") {
-  return path.extname(String(name).toLowerCase());
-}
-
 function mimeLooksLikeImage(mime = "") {
   return String(mime || "").toLowerCase().startsWith("image/");
 }
@@ -94,7 +92,7 @@ function fileToDataUrl(filePath, mimeType = "application/octet-stream") {
   return `data:${mimeType};base64,${b64}`;
 }
 
-async function getConversationHistory(conversationId, limit = 10) {
+async function getConversationHistory(conversationId, limit = 12) {
   const rows = await all(
     `SELECT role, content
        FROM messages
@@ -134,9 +132,14 @@ async function getConversationFilesContext(conversationId) {
       if (extracted && extracted.trim()) {
         context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nTexto extraído:\n${extracted.slice(0, 9000)}\n`;
       } else if (mimeLooksLikeImage(f.mime_type)) {
-        context += `\n\n[Imagem enviada: ${f.original_name} | ${f.mime_type}]\nA imagem foi anexada à conversa e pode ser analisada visualmente.\n`;
+        const ocr = fs.existsSync(filePath) ? await ocrImage(filePath) : "";
+        if (ocr && ocr.trim()) {
+          context += `\n\n[Imagem enviada: ${f.original_name} | ${f.mime_type}]\nTexto OCR detectado:\n${ocr.slice(0, 6000)}\n`;
+        } else {
+          context += `\n\n[Imagem enviada: ${f.original_name} | ${f.mime_type}]\nA imagem foi anexada à conversa e pode ser analisada visualmente.\n`;
+        }
       } else {
-        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nO arquivo foi recebido e está anexado à conversa, mas não foi possível extrair texto automaticamente. Isso pode acontecer quando o PDF é imagem/escaneado ou quando o arquivo não contém texto legível por parser. Nesse caso, o próximo passo é adicionar OCR.\n`;
+        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nO arquivo foi recebido e está anexado à conversa, mas não foi possível extrair texto automaticamente. Isso pode acontecer quando o PDF é imagem/escaneado ou quando o arquivo não contém texto legível por parser. Nesse caso, o próximo passo é adicionar OCR mais amplo ao pipeline documental.\n`;
       }
     }
 
@@ -180,7 +183,7 @@ async function getRecentVisionInputs(conversationId, limit = 3) {
 }
 
 async function buildOpenAIInput({ conversationId, userText, contextText }) {
-  const history = await getConversationHistory(conversationId, 10);
+  const history = await getConversationHistory(conversationId, 12);
   const visionInputs = await getRecentVisionInputs(conversationId, 3);
 
   const historyText = history
@@ -213,7 +216,7 @@ Contexto adicional:
 ${contextText || "Sem contexto adicional."}
 `.trim();
 
-  const input = [
+  return [
     {
       role: "system",
       content: [{ type: "input_text", text: systemText }],
@@ -226,8 +229,6 @@ ${contextText || "Sem contexto adicional."}
       ],
     },
   ];
-
-  return input;
 }
 
 async function openaiReply({ conversationId, userText, contextText }) {
@@ -246,6 +247,9 @@ async function openaiReply({ conversationId, userText, contextText }) {
     body: JSON.stringify({
       model,
       input,
+      tools: [
+        { type: "web_search_preview" }
+      ]
     }),
   });
 
@@ -428,7 +432,6 @@ app.post("/api/conversations/:id/files", requireAuth(JWT_SECRET), upload.single(
   );
 
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-
   res.json({ ok: true, file_id: r.lastID });
 });
 
@@ -459,7 +462,6 @@ app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single
   );
 
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-
   res.json({ ok: true, file_id: r.lastID });
 });
 
@@ -501,6 +503,38 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)",
     [id, text]
   );
+
+  const apiKey = process.env.OPENAI_API_KEY || "";
+  const gen = apiKey ? await generateArtifact({ apiKey, prompt: text, outDir: uploadsDir }).catch((e) => {
+    console.log("Erro geração artefato:", e?.message || e);
+    return null;
+  }) : null;
+
+  if (gen) {
+    const fakeStoredName = path.basename(gen.fullPath);
+
+    const fr = await run(
+      "INSERT INTO files (conversation_id, uploaded_by, original_name, stored_name, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
+      [id, req.user.sub, gen.filename, fakeStoredName, gen.mimeType, fs.statSync(gen.fullPath).size]
+    );
+
+    const meta = {
+      type: "file",
+      file_id: fr.lastID,
+      filename: gen.filename,
+      mimetype: gen.mimeType,
+      size: fs.statSync(gen.fullPath).size,
+    };
+
+    await run(
+      "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
+      [id, gen.reply, JSON.stringify(meta)]
+    );
+
+    await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
+
+    return res.json({ reply: gen.reply });
+  }
 
   let webContext = "";
   try {
@@ -588,41 +622,9 @@ app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin")
   res.json({ ok: true });
 });
 
-app.post("/api/admin/kb/upload", requireAuth(JWT_SECRET), requireRole("admin"), upload.single("file"), async (req, res) => {
-  const f = req.file;
-  if (!f) return res.status(400).send("missing_file");
-
-  const dest = path.join(kbDir, f.originalname);
-  fs.renameSync(path.join(uploadsDir, f.filename), dest);
-
-  await logEvent(req.user.sub, "admin_kb_upload", { name: f.originalname, size: f.size });
-  res.json({ ok: true });
-});
-
-app.post("/api/admin/sync-drive", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  try {
-    const p = spawn(process.execPath, ["scripts/sync_drive.js"], { stdio: "inherit" });
-    p.on("close", () => {});
-    res.json({ ok: true });
-  } catch {
-    res.status(500).json({ error: "failed_to_spawn_sync" });
-  }
-});
-
-app.post("/api/admin/reindex", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  try {
-    const p = spawn(process.execPath, ["scripts/index_drive.js"], { stdio: "inherit" });
-    p.on("close", () => {});
-    res.json({ ok: true });
-  } catch {
-    res.status(500).json({ error: "failed_to_spawn_indexer" });
-  }
-});
-
 const publicDir = path.join(__dirname, "public");
 
 app.get("/", (req, res) => res.redirect("/index.html"));
-
 app.get("/login.html", (req, res) => res.sendFile(path.join(publicDir, "login.html")));
 
 app.get("/index.html", (req, res) => {

@@ -653,4 +653,23 @@ textarea#msg{
 .time{
   display: none !important;
 }
+  .msg-actions{
+  margin-top:10px;
+  display:flex;
+  justify-content:flex-end;
+}
+
+.copy-btn{
+  border:1px solid var(--border);
+  background:#fff;
+  color:var(--text);
+  border-radius:10px;
+  padding:6px 10px;
+  font-size:11px;
+  cursor:pointer;
+}
+
+.copy-btn:hover{
+  background:#f8fafc;
+}
 }

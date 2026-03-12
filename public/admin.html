@@ -74,7 +74,10 @@
           </div>
 
           <div>
-            <div style="font-weight:800; margin-bottom:10px;">Arquivos da base interna</div>
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+              <div style="font-weight:800;">Arquivos da base interna</div>
+              <div id="ragListCount" class="small muted">Carregando documentos...</div>
+            </div>
             <table class="table">
               <thead>
                 <tr>
@@ -90,8 +93,12 @@
 
         <div style="display:flex; flex-direction:column; gap:18px;">
           <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
-            <div style="font-weight:800; margin-bottom:10px;">Status do RAG</div>
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; margin-bottom:10px;">
+              <div style="font-weight:800;">Status do RAG</div>
+              <span id="ragDocCountBadge" class="badge">0 documentos</span>
+            </div>
             <div class="small muted" id="ragStatus">Carregando...</div>
+            <div id="ragUploadState" class="small" style="margin-top:12px; padding:10px 12px; border:1px solid var(--border); border-radius:14px; background:#fff; color:#475467;">Pronto para novos envios.</div>
           </div>
 
           <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
@@ -143,6 +150,7 @@ function setMsg(text, isError = false) {
 }
 
 let pendingRagFiles = [];
+let ragUploadInProgress = false;
 
 function formatBytes(bytes = 0) {
   const value = Number(bytes || 0);
@@ -160,8 +168,34 @@ function formatBytes(bytes = 0) {
   return `${size.toFixed(precision)} ${units[unitIndex]}`;
 }
 
+function sanitizeDisplayName(name = 'arquivo') {
+  return String(name || 'arquivo').replace(/[\\/:*?"<>|]+/g, '_');
+}
+
 function getFileDisplayName(file) {
   return file.webkitRelativePath || file.name || 'arquivo';
+}
+
+function setRagDocumentCount(total = 0) {
+  const safeTotal = Number(total || 0);
+  const label = safeTotal === 1 ? '1 documento' : `${safeTotal} documentos`;
+  document.getElementById('ragDocCountBadge').textContent = label;
+  document.getElementById('ragListCount').textContent = `${label} na base`;
+}
+
+function setRagUploadState(text, tone = 'neutral') {
+  const el = document.getElementById('ragUploadState');
+  const palette = {
+    neutral: { background: '#fff', border: 'var(--border)', color: '#475467' },
+    loading: { background: '#ecfeff', border: '#a5f3fc', color: '#155e75' },
+    success: { background: '#ecfdf3', border: '#abefc6', color: '#067647' },
+    error: { background: '#fef3f2', border: '#fecdca', color: '#b42318' },
+  };
+  const style = palette[tone] || palette.neutral;
+  el.textContent = text;
+  el.style.background = style.background;
+  el.style.borderColor = style.border;
+  el.style.color = style.color;
 }
 
 function renderRagSelection() {
@@ -169,11 +203,18 @@ function renderRagSelection() {
   const list = document.getElementById('ragSelectionList');
   const uploadBtn = document.getElementById('btnUploadRag');
 
-  if (!pendingRagFiles.length) {
-    summary.textContent = 'Nenhum arquivo selecionado.';
-    list.innerHTML = '';
+  if (ragUploadInProgress) {
     uploadBtn.disabled = true;
-    uploadBtn.textContent = 'Enviar arquivos';
+    uploadBtn.textContent = 'Enviando...';
+  }
+
+  if (!pendingRagFiles.length) {
+    summary.textContent = ragUploadInProgress ? 'Upload em andamento...' : 'Nenhum arquivo selecionado.';
+    list.innerHTML = '';
+    if (!ragUploadInProgress) {
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Enviar arquivos';
+    }
     return;
   }
 
@@ -199,10 +240,12 @@ function renderRagSelection() {
     list.appendChild(more);
   }
 
-  uploadBtn.disabled = false;
-  uploadBtn.textContent = pendingRagFiles.length === 1
-    ? 'Enviar arquivo'
-    : `Enviar ${pendingRagFiles.length} arquivos`;
+  if (!ragUploadInProgress) {
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = pendingRagFiles.length === 1
+      ? 'Enviar arquivo'
+      : `Enviar ${pendingRagFiles.length} arquivos`;
+  }
 }
 
 function setPendingRagFiles(files) {
@@ -255,9 +298,21 @@ async function loadRagStatus() {
 }
 
 async function loadRagFiles() {
-  const { files } = await api('/api/admin/rag/files');
+  const { files, total } = await api('/api/admin/rag/files');
   const body = document.getElementById('ragFilesBody');
   body.innerHTML = '';
+  setRagDocumentCount(total);
+
+  if (!files.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 3;
+    td.className = 'small muted';
+    td.textContent = 'Nenhum documento carregado na base ainda.';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
 
   for (const file of files) {
     const tr = document.createElement('tr');
@@ -285,11 +340,13 @@ document.getElementById('btnPickRagFolder').onclick = () => {
 document.getElementById('ragFiles').addEventListener('change', (event) => {
   setPendingRagFiles(event.target.files);
   document.getElementById('ragFolder').value = '';
+  setRagUploadState('Arquivos selecionados. Pronto para enviar.');
 });
 
 document.getElementById('ragFolder').addEventListener('change', (event) => {
   setPendingRagFiles(event.target.files);
   document.getElementById('ragFiles').value = '';
+  setRagUploadState('Pasta carregada na fila. Pronto para enviar.');
 });
 
 document.getElementById('btnCreate').onclick = async () => {
@@ -322,8 +379,8 @@ document.getElementById('btnCreate').onclick = async () => {
 };
 
 document.getElementById('btnUploadRag').onclick = async () => {
-  if (!pendingRagFiles.length) {
-    setMsg('Selecione um ou mais arquivos para enviar.', true);
+  if (!pendingRagFiles.length || ragUploadInProgress) {
+    if (!pendingRagFiles.length) setMsg('Selecione um ou mais arquivos para enviar.', true);
     return;
   }
 
@@ -332,33 +389,55 @@ document.getElementById('btnUploadRag').onclick = async () => {
     fd.append('files', file, getFileDisplayName(file));
   });
 
+  ragUploadInProgress = true;
+  renderRagSelection();
+  setRagUploadState(`Carregando ${pendingRagFiles.length} arquivo(s) para a base...`, 'loading');
+
   try {
     const result = await api('/api/admin/rag/upload', {
       method: 'POST',
       body: fd,
     });
 
-    pendingRagFiles = [];
-    document.getElementById('ragFiles').value = '';
-    document.getElementById('ragFolder').value = '';
-    renderRagSelection();
-
     const uploadedCount = Number(result?.uploaded_count || result?.files?.length || 0);
     const failedCount = Number(result?.failed_count || result?.errors?.length || 0);
+    const errorNames = (result?.errors || []).slice(0, 3).map((item) => item.filename).filter(Boolean);
+    const failedNameSet = new Set((result?.errors || []).map((item) => sanitizeDisplayName(item.filename)));
+
+    if (failedCount > 0) {
+      pendingRagFiles = pendingRagFiles.filter((file) => failedNameSet.has(sanitizeDisplayName(getFileDisplayName(file))));
+    } else {
+      pendingRagFiles = [];
+    }
+
+    document.getElementById('ragFiles').value = '';
+    document.getElementById('ragFolder').value = '';
+
     const baseMessage = uploadedCount === 1
       ? '1 arquivo enviado para a base com sucesso.'
       : `${uploadedCount} arquivos enviados para a base com sucesso.`;
-    const errorNames = (result?.errors || []).slice(0, 3).map((item) => item.filename).filter(Boolean);
     const errorDetail = failedCount ? ` ${failedCount} arquivo(s) falharam${errorNames.length ? `: ${errorNames.join(', ')}` : ''}.` : '';
     setMsg(`${baseMessage}${errorDetail}`, failedCount > 0);
+    setRagUploadState(
+      failedCount > 0
+        ? `${uploadedCount} arquivo(s) carregado(s). ${failedCount} ainda precisa(m) de nova tentativa.`
+        : `${uploadedCount} arquivo(s) carregado(s) e indexado(s) com sucesso.`,
+      failedCount > 0 ? 'error' : 'success'
+    );
+
     await loadRagStatus();
     await loadRagFiles();
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
+    setRagUploadState('Falha ao carregar os arquivos. Revise a selecao e tente novamente.', 'error');
+  } finally {
+    ragUploadInProgress = false;
+    renderRagSelection();
   }
 };
 
 renderRagSelection();
+setRagUploadState('Pronto para novos envios.');
 
 Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));

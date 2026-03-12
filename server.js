@@ -1021,14 +1021,17 @@ app.get("/api/admin/rag/status", requireAuth(JWT_SECRET), requireRole("admin"), 
 });
 
 app.get("/api/admin/rag/files", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const files = await all(
-    `SELECT id, original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by, created_at
-       FROM knowledge_sources
-      ORDER BY datetime(created_at) DESC, id DESC
-      LIMIT 50`
-  );
+  const [files, totalRow] = await Promise.all([
+    all(
+      `SELECT id, original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by, created_at
+         FROM knowledge_sources
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT 50`
+    ),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources"),
+  ]);
 
-  res.json({ files });
+  res.json({ files, total: Number(totalRow?.total || 0) });
 });
 
 function getAdminRagUploads(req) {
@@ -1176,6 +1179,7 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
 
 
 

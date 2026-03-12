@@ -390,6 +390,18 @@ async function buildKnowledgeBundle(query) {
   const rows = await searchKnowledgeBase(query, 4);
   return buildKnowledgeBundleFromRows(rows);
 }
+
+function queryLooksExternalOrCurrent(query = "") {
+  const value = String(query || "").trim().toLowerCase();
+  if (!value) return false;
+
+  return /(hoje|agora|atual|atualizado|ultim|recente|noticia|noticias|mercado|cotacao|preco|precos|clima|governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado)/i.test(value);
+}
+
+function shouldFetchWebContext(query, knowledgeBundle) {
+  const hasInternalContext = Boolean(String(knowledgeBundle?.text || "").trim());
+  return !hasInternalContext || queryLooksExternalOrCurrent(query);
+}
 async function getConversationFilesContext(conversationId) {
   try {
     const files = await all(
@@ -531,7 +543,7 @@ async function getRecentDocumentInputs(conversationId, limit = 2) {
 }
 
 function buildOpenAITools() {
-  const tools = [{ type: "web_search_preview" }];
+  const tools = [];
 
   if (OPENAI_VECTOR_STORE_ID) {
     tools.push({
@@ -540,9 +552,9 @@ function buildOpenAITools() {
     });
   }
 
+  tools.push({ type: "web_search_preview" });
   return tools;
 }
-
 async function buildOpenAIInput({ conversationId, userText, contextText }) {
   const history = await getConversationHistory(conversationId, 12);
   const memory = await getConversationMemory(conversationId);
@@ -575,6 +587,9 @@ ${nowBrazil()}
 Regras:
 - Considere o historico recente da conversa antes de responder.
 - Se houver memoria acumulada da conversa, use isso para manter continuidade.
+- Para perguntas sobre processos, materiais, regras e informacoes da Talkers, priorize sempre a base interna da empresa e os arquivos da conversa.
+- Use a internet apenas para complementar, atualizar ou comparar informacoes quando isso realmente ajudar a resposta.
+- Se houver conflito entre a base interna e fontes externas em temas da empresa, informe o conflito e priorize a base interna.
 - Se houver arquivos enviados, use o texto extraido e, quando disponivel, os arquivos brutos incluidos nesta chamada.
 - Se o usuario pedir geracao de arquivo, entregue o arquivo e explique em uma frase o que foi gerado.
 - Se nao houver base suficiente, diga isso claramente e peca complemento.
@@ -907,18 +922,27 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     return res.json({ reply: artifact.reply, meta: saved.meta });
   }
 
-  let webContext = "";
-  try {
-    webContext = await searchWeb(text);
-  } catch (err) {
-    console.log("Erro busca web:", err?.message || err);
-  }
-
   const fileContext = await getConversationFilesContext(id);
   const knowledgeBundle = await buildKnowledgeBundle(text);
+  const shouldUseWebComplement = shouldFetchWebContext(text, knowledgeBundle);
+
+  let webContext = "";
+  if (shouldUseWebComplement) {
+    try {
+      webContext = await searchWeb(text);
+    } catch (err) {
+      console.log("Erro busca web:", err?.message || err);
+    }
+  }
+
   const contextText = `
 Data atual no Brasil:
 ${nowBrazil()}
+
+Prioridade de fontes:
+1. Base interna da empresa.
+2. Arquivos e anexos da conversa.
+3. Internet apenas como complemento quando necessario.
 
 Memoria interna da empresa:
 ${knowledgeBundle.text || "Sem resultados relevantes da base interna."}
@@ -926,10 +950,11 @@ ${knowledgeBundle.text || "Sem resultados relevantes da base interna."}
 Documentos e imagens da conversa:
 ${fileContext || "Nenhum anexo recente."}
 
-Contexto da internet:
-${webContext || "Sem resultados externos relevantes."}
+Contexto externo complementar:
+${shouldUseWebComplement
+  ? (webContext || "Nenhum resultado externo complementar encontrado.")
+  : "Nao foi necessario incluir contexto externo fixo nesta pergunta. Use busca web apenas se faltar contexto interno ou se o usuario pedir atualizacao externa."}
 `.trim();
-
   const assistant = await openaiReply({
     conversationId: id,
     userText: text,
@@ -1151,6 +1176,11 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
+
 
 
 

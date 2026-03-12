@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="pt-br">
 <head>
   <meta charset="utf-8" />
@@ -96,10 +96,18 @@
 
           <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
             <div style="font-weight:800; margin-bottom:10px;">Enviar para a base da empresa</div>
-            <div class="small muted" style="margin-bottom:12px;">O arquivo vai para o armazenamento local do projeto e, se configurado, tambem para a Vector Store da OpenAI.</div>
-            <input id="ragFile" type="file" />
-            <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px;">
-              <button class="btn primary" id="btnUploadRag">Enviar arquivo</button>
+            <div class="small muted" style="margin-bottom:12px;">Os arquivos vao para o armazenamento local do projeto e, se configurado, tambem para a Vector Store da OpenAI.</div>
+            <input id="ragFiles" type="file" multiple hidden />
+            <input id="ragFolder" type="file" webkitdirectory directory multiple hidden />
+            <div style="display:flex; flex-wrap:wrap; gap:10px;">
+              <button class="btn" type="button" id="btnPickRagFiles">Selecionar arquivos</button>
+              <button class="btn" type="button" id="btnPickRagFolder">Importar pasta</button>
+            </div>
+            <div id="ragSelectionSummary" class="small muted" style="margin-top:12px;">Nenhum arquivo selecionado.</div>
+            <div id="ragSelectionList" class="small" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
+            <div class="small muted" style="margin-top:10px;">No Chrome e no Edge, a opcao "Importar pasta" envia todos os arquivos da pasta escolhida.</div>
+            <div style="margin-top:14px; display:flex; justify-content:flex-end; gap:10px;">
+              <button class="btn primary" id="btnUploadRag" disabled>Enviar arquivos</button>
             </div>
           </div>
         </div>
@@ -132,6 +140,74 @@ function setMsg(text, isError = false) {
   const el = document.getElementById('msg');
   el.className = isError ? 'error' : 'muted small';
   el.textContent = text || '';
+}
+
+let pendingRagFiles = [];
+
+function formatBytes(bytes = 0) {
+  const value = Number(bytes || 0);
+  if (!value) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = value;
+  let unitIndex = 0;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  const precision = size >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function getFileDisplayName(file) {
+  return file.webkitRelativePath || file.name || 'arquivo';
+}
+
+function renderRagSelection() {
+  const summary = document.getElementById('ragSelectionSummary');
+  const list = document.getElementById('ragSelectionList');
+  const uploadBtn = document.getElementById('btnUploadRag');
+
+  if (!pendingRagFiles.length) {
+    summary.textContent = 'Nenhum arquivo selecionado.';
+    list.innerHTML = '';
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Enviar arquivos';
+    return;
+  }
+
+  const totalSize = pendingRagFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
+  const label = pendingRagFiles.length === 1 ? 'arquivo selecionado' : 'arquivos selecionados';
+  summary.textContent = `${pendingRagFiles.length} ${label} (${formatBytes(totalSize)}).`;
+
+  list.innerHTML = '';
+  pendingRagFiles.slice(0, 8).forEach((file) => {
+    const item = document.createElement('div');
+    item.style.padding = '8px 10px';
+    item.style.border = '1px solid var(--border)';
+    item.style.borderRadius = '12px';
+    item.style.background = '#fff';
+    item.textContent = `${getFileDisplayName(file)} (${formatBytes(file.size)})`;
+    list.appendChild(item);
+  });
+
+  if (pendingRagFiles.length > 8) {
+    const more = document.createElement('div');
+    more.className = 'small muted';
+    more.textContent = `+ ${pendingRagFiles.length - 8} arquivo(s) na fila`;
+    list.appendChild(more);
+  }
+
+  uploadBtn.disabled = false;
+  uploadBtn.textContent = pendingRagFiles.length === 1
+    ? 'Enviar arquivo'
+    : `Enviar ${pendingRagFiles.length} arquivos`;
+}
+
+function setPendingRagFiles(files) {
+  pendingRagFiles = Array.from(files || []);
+  renderRagSelection();
 }
 
 async function loadUsers() {
@@ -198,6 +274,24 @@ async function loadRagFiles() {
   }
 }
 
+document.getElementById('btnPickRagFiles').onclick = () => {
+  document.getElementById('ragFiles').click();
+};
+
+document.getElementById('btnPickRagFolder').onclick = () => {
+  document.getElementById('ragFolder').click();
+};
+
+document.getElementById('ragFiles').addEventListener('change', (event) => {
+  setPendingRagFiles(event.target.files);
+  document.getElementById('ragFolder').value = '';
+});
+
+document.getElementById('ragFolder').addEventListener('change', (event) => {
+  setPendingRagFiles(event.target.files);
+  document.getElementById('ragFiles').value = '';
+});
+
 document.getElementById('btnCreate').onclick = async () => {
   const name = document.getElementById('name').value.trim();
   const email = document.getElementById('email').value.trim();
@@ -228,29 +322,43 @@ document.getElementById('btnCreate').onclick = async () => {
 };
 
 document.getElementById('btnUploadRag').onclick = async () => {
-  const input = document.getElementById('ragFile');
-  const file = input.files?.[0];
-  if (!file) {
-    setMsg('Selecione um arquivo para enviar.', true);
+  if (!pendingRagFiles.length) {
+    setMsg('Selecione um ou mais arquivos para enviar.', true);
     return;
   }
 
   const fd = new FormData();
-  fd.append('file', file);
+  pendingRagFiles.forEach((file) => {
+    fd.append('files', file, getFileDisplayName(file));
+  });
 
   try {
-    await api('/api/admin/rag/upload', {
+    const result = await api('/api/admin/rag/upload', {
       method: 'POST',
       body: fd,
     });
-    input.value = '';
-    setMsg('Arquivo enviado para a base com sucesso.');
+
+    pendingRagFiles = [];
+    document.getElementById('ragFiles').value = '';
+    document.getElementById('ragFolder').value = '';
+    renderRagSelection();
+
+    const uploadedCount = Number(result?.uploaded_count || result?.files?.length || 0);
+    const failedCount = Number(result?.failed_count || result?.errors?.length || 0);
+    const baseMessage = uploadedCount === 1
+      ? '1 arquivo enviado para a base com sucesso.'
+      : `${uploadedCount} arquivos enviados para a base com sucesso.`;
+    const errorNames = (result?.errors || []).slice(0, 3).map((item) => item.filename).filter(Boolean);
+    const errorDetail = failedCount ? ` ${failedCount} arquivo(s) falharam${errorNames.length ? `: ${errorNames.join(', ')}` : ''}.` : '';
+    setMsg(`${baseMessage}${errorDetail}`, failedCount > 0);
     await loadRagStatus();
     await loadRagFiles();
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
   }
 };
+
+renderRagSelection();
 
 Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));

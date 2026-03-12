@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
@@ -719,6 +719,10 @@ const upload = multer({
   dest: uploadsDir,
   limits: { fileSize: 25 * 1024 * 1024 },
 });
+const ragUpload = upload.fields([
+  { name: "files", maxCount: 200 },
+  { name: "file", maxCount: 1 },
+]);
 
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID), db_client: DB_CLIENT });
@@ -1001,69 +1005,117 @@ app.get("/api/admin/rag/files", requireAuth(JWT_SECRET), requireRole("admin"), a
 
   res.json({ files });
 });
-app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"), upload.single("file"), async (req, res) => {
-  const uploaded = req.file;
-  if (!uploaded) return res.status(400).json({ error: "missing_file" });
 
+function getAdminRagUploads(req) {
+  const uploads = [];
+
+  if (req.file) uploads.push(req.file);
+
+  if (req.files && typeof req.files === "object") {
+    for (const group of Object.values(req.files)) {
+      if (Array.isArray(group)) uploads.push(...group);
+    }
+  }
+
+  return uploads.filter(Boolean);
+}
+
+async function ingestKnowledgeUpload(uploaded, userId) {
   const tempPath = uploaded.path || path.join(uploadsDir, uploaded.filename);
   const safeOriginalName = sanitizeFilename(uploaded.originalname || `arquivo-${Date.now()}`);
   const storedName = `${Date.now()}-${uploaded.filename}-${safeOriginalName}`;
   const finalPath = path.join(knowledgeDir, storedName);
 
-  try {
-    fs.renameSync(tempPath, finalPath);
+  fs.renameSync(tempPath, finalPath);
 
-    const relPath = path.relative(kbDir, finalPath).replace(/\\/g, "/");
-    const indexed = await upsertIndexedDocument({
-      sourcePath: finalPath,
-      relPath,
-      originalName: safeOriginalName,
-      mimeType: uploaded.mimetype || "",
-    });
+  const relPath = path.relative(kbDir, finalPath).replace(/\\/g, "/");
+  const indexed = await upsertIndexedDocument({
+    sourcePath: finalPath,
+    relPath,
+    originalName: safeOriginalName,
+    mimeType: uploaded.mimetype || "",
+  });
 
-    let openaiFile = null;
-    let vectorStoreFile = null;
+  let openaiFile = null;
+  let vectorStoreFile = null;
 
-    if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
-      openaiFile = await uploadFileToOpenAI(finalPath, safeOriginalName, process.env.OPENAI_API_KEY);
-      vectorStoreFile = await attachFileToVectorStore(
-        openaiFile.id,
-        OPENAI_VECTOR_STORE_ID,
-        process.env.OPENAI_API_KEY
-      );
-    }
-
-    const record = await run(
-      "INSERT INTO knowledge_sources (original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by) VALUES (?, ?, ?, ?, ?)",
-      [
-        safeOriginalName,
-        storedName,
-        openaiFile?.id || null,
-        vectorStoreFile?.id || null,
-        req.user.sub,
-      ]
+  if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
+    openaiFile = await uploadFileToOpenAI(finalPath, safeOriginalName, process.env.OPENAI_API_KEY);
+    vectorStoreFile = await attachFileToVectorStore(
+      openaiFile.id,
+      OPENAI_VECTOR_STORE_ID,
+      process.env.OPENAI_API_KEY
     );
-
-    await logEvent(req.user.sub, "admin_rag_upload", {
-      knowledge_source_id: record.lastID,
-      filename: safeOriginalName,
-      openai_file_id: openaiFile?.id || null,
-      vector_store_file_id: vectorStoreFile?.id || null,
-    });
-
-    res.json({
-      ok: true,
-      knowledge_source_id: record.lastID,
-      local_indexed: Boolean(indexed),
-      openai_file_id: openaiFile?.id || null,
-      vector_store_file_id: vectorStoreFile?.id || null,
-    });
-  } catch (err) {
-    console.log("Erro no upload RAG:", err?.message || err);
-    return res.status(500).json({ error: err?.message || "rag_upload_failed" });
   }
-});
 
+  const record = await run(
+    "INSERT INTO knowledge_sources (original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by) VALUES (?, ?, ?, ?, ?)",
+    [
+      safeOriginalName,
+      storedName,
+      openaiFile?.id || null,
+      vectorStoreFile?.id || null,
+      userId,
+    ]
+  );
+
+  await logEvent(userId, "admin_rag_upload", {
+    knowledge_source_id: record.lastID,
+    filename: safeOriginalName,
+    openai_file_id: openaiFile?.id || null,
+    vector_store_file_id: vectorStoreFile?.id || null,
+  });
+
+  return {
+    knowledge_source_id: record.lastID,
+    original_name: safeOriginalName,
+    stored_name: storedName,
+    local_indexed: Boolean(indexed),
+    openai_file_id: openaiFile?.id || null,
+    vector_store_file_id: vectorStoreFile?.id || null,
+  };
+}
+
+app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"), ragUpload, async (req, res) => {
+  const uploads = getAdminRagUploads(req);
+  if (!uploads.length) return res.status(400).json({ error: "missing_file" });
+
+  const files = [];
+  const errors = [];
+
+  for (const uploaded of uploads) {
+    try {
+      const result = await ingestKnowledgeUpload(uploaded, req.user.sub);
+      files.push(result);
+    } catch (err) {
+      console.log("Erro no upload RAG:", err?.message || err);
+      errors.push({
+        filename: sanitizeFilename(uploaded?.originalname || uploaded?.filename || "arquivo"),
+        error: err?.message || "rag_upload_failed",
+      });
+    }
+  }
+
+  if (!files.length) {
+    return res.status(500).json({
+      error: errors[0]?.error || "rag_upload_failed",
+      errors,
+    });
+  }
+
+  const first = files[0];
+  return res.status(errors.length ? 207 : 200).json({
+    ok: errors.length === 0,
+    uploaded_count: files.length,
+    failed_count: errors.length,
+    files,
+    errors,
+    knowledge_source_id: first.knowledge_source_id,
+    local_indexed: first.local_indexed,
+    openai_file_id: first.openai_file_id,
+    vector_store_file_id: first.vector_store_file_id,
+  });
+});
 const publicDir = path.join(__dirname, "public");
 
 app.get("/", (req, res) => res.redirect("/index.html"));
@@ -1099,6 +1151,10 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
 
 
 

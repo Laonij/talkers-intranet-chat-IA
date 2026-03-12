@@ -7,63 +7,117 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="app-shell">
+  <div class="backdrop" id="backdrop"></div>
+
   <div class="app">
     <aside class="sidebar">
-      <div class="brand">
-        <img class="logo-sm" src="/logo.png" alt="Logo" />
-        <div class="brand-meta">
-          <div class="brand-title">Talkers IA</div>
-          <div class="brand-sub" id="userSub">-</div>
+      <div class="sidebar-header">
+        <div class="brand">
+          <img class="logo-sm" src="/logo.png" alt="Logo" />
+          <div class="brand-meta">
+            <div class="brand-title">Talkers IA</div>
+            <div class="brand-sub" id="userSub">Seu espaco inteligente</div>
+          </div>
         </div>
-      </div>
 
-      <button class="btn primary" id="btnNewChat"><span>+ Nova conversa</span></button>
+        <button class="btn new-chat-btn" id="btnNewChat" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+          <span>Nova conversa</span>
+        </button>
+      </div>
 
       <div class="section conversations-section">
         <div class="section-title">Conversas</div>
         <div class="conversations" id="convList"></div>
       </div>
 
-      <div class="section">
-        <div class="section-title">Conta</div>
-        <div class="row">
-          <a class="btn" href="/admin.html" id="adminBtn" style="display:none;"><span>Admin</span></a>
-          <button class="btn danger" id="btnLogout"><span>Sair</span></button>
+      <div class="sidebar-footer">
+        <div class="account-card">
+          <div class="account-avatar" id="accountInitial">T</div>
+          <div class="account-copy">
+            <div class="account-name" id="accountName">Talkers</div>
+            <div class="account-meta" id="accountMeta">Conta conectada</div>
+          </div>
+        </div>
+
+        <div class="sidebar-footer-actions">
+          <a class="btn sidebar-btn" href="/admin.html" id="adminBtn" style="display:none;">Admin</a>
+          <button class="btn sidebar-btn logout-btn" id="btnLogout" type="button">Sair</button>
         </div>
       </div>
     </aside>
 
     <main class="main">
       <div class="topbar">
-        <div class="title" id="convTitle">Nova conversa</div>
-      </div>
+        <div class="topbar-left">
+          <button class="icon-btn topbar-toggle" id="btnSidebar" type="button" aria-label="Abrir menu" title="Abrir menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16" />
+              <path d="M4 12h16" />
+              <path d="M4 17h16" />
+            </svg>
+          </button>
 
-      <div class="quick-prompts" id="quickPrompts"></div>
-
-      <div class="panel">
-        <div class="chat" id="chat"></div>
-
-        <div class="composer">
-          <div class="composer-left">
-            <button class="icon-btn" id="btnAttach" type="button" title="Adicionar fotos e arquivos" aria-label="Adicionar fotos e arquivos">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M8 12.5 14.3 6.2a3 3 0 1 1 4.2 4.2l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.7-8.7" />
-              </svg>
-            </button>
-            <button class="icon-btn" id="btnRecord" type="button" title="Gravar audio" aria-label="Gravar audio">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" />
-                <path d="M19 11a7 7 0 0 1-14 0" />
-                <path d="M12 18v3" />
-              </svg>
-            </button>
-            <input type="file" id="attachInput" style="display:none" multiple />
+          <div>
+            <div class="topbar-kicker">Assistente da escola</div>
+            <div class="title" id="convTitle">Nova conversa</div>
           </div>
+        </div>
 
-          <textarea id="msg" placeholder="Escreva sua mensagem... (Enter envia, Shift+Enter quebra linha)"></textarea>
-          <button class="btn primary" id="btnSend">Enviar</button>
+        <div class="topbar-actions">
+          <div class="topbar-pill">GPT style workspace</div>
         </div>
       </div>
+
+      <section class="panel">
+        <div class="chat-shell">
+          <div class="empty-state" id="emptyState">
+            <div class="empty-badge">Talkers IA</div>
+            <h1 class="empty-title">Como posso ajudar hoje?</h1>
+            <p class="empty-subtitle">Crie documentos, planilhas, imagens e audios, consulte a base da empresa e conduza atendimentos com uma experiencia mais parecida com o ChatGPT.</p>
+            <div class="quick-prompts" id="quickPrompts"></div>
+          </div>
+
+          <div class="chat" id="chat"></div>
+        </div>
+
+        <div class="composer-wrap">
+          <div class="composer">
+            <div class="composer-actions">
+              <button class="icon-btn composer-icon" id="btnAttach" type="button" title="Adicionar fotos e arquivos" aria-label="Adicionar fotos e arquivos">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 12.5 14.3 6.2a3 3 0 1 1 4.2 4.2l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.7-8.7" />
+                </svg>
+              </button>
+
+              <button class="icon-btn composer-icon" id="btnRecord" type="button" title="Gravar audio" aria-label="Gravar audio">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" />
+                  <path d="M19 11a7 7 0 0 1-14 0" />
+                  <path d="M12 18v3" />
+                </svg>
+              </button>
+
+              <input type="file" id="attachInput" style="display:none" multiple />
+            </div>
+
+            <div class="composer-field">
+              <textarea id="msg" placeholder="Envie uma mensagem para a Talkers IA"></textarea>
+              <div class="composer-hint">Enter envia, Shift+Enter quebra linha</div>
+            </div>
+
+            <button class="send-btn" id="btnSend" type="button" aria-label="Enviar mensagem" title="Enviar mensagem">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 12h10" />
+                <path d="m13 6 6 6-6 6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 

@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const { migrate, get, run } = require("../db");
 
@@ -9,7 +9,7 @@ const DEFAULT_ADMIN_NAME = "Admin";
 const DEFAULT_ADMIN_PASSWORD = "Admin#1234";
 
 (async () => {
-  migrate();
+  await migrate();
 
   const email = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).trim().toLowerCase();
   const password = String(process.env.ADMIN_PASSWORD || (IS_PRODUCTION ? "" : DEFAULT_ADMIN_PASSWORD));

@@ -1,11 +1,42 @@
 ﻿const el = (id) => document.getElementById(id);
 
 const QUICK_PROMPTS = [
-  { emoji: "📄", label: "Gerar documento", prompt: "Gere um documento profissional sobre este tema:" },
-  { emoji: "📊", label: "Criar planilha", prompt: "Crie uma planilha organizada com os principais campos para:" },
-  { emoji: "🎧", label: "Transcrever audio", prompt: "Analise e transcreva o audio enviado, depois faca um resumo objetivo." },
-  { emoji: "🖼️", label: "Gerar imagem", prompt: "Gere uma imagem realista e profissional de:" },
-  { emoji: "🎓", label: "Comunicado escolar", prompt: "Crie um comunicado escolar claro e acolhedor sobre:" },
+  {
+    icon: "📄",
+    label: "Gerar documento",
+    hint: "Crie comunicados, contratos e textos organizados.",
+    prompt: "Gere um documento profissional sobre este tema:",
+  },
+  {
+    icon: "📊",
+    label: "Criar planilha",
+    hint: "Monte tabelas com colunas prontas para uso.",
+    prompt: "Crie uma planilha organizada com os principais campos para:",
+  },
+  {
+    icon: "🎧",
+    label: "Transcrever audio",
+    hint: "Analise audio enviado ou gravado no navegador.",
+    prompt: "Analise e transcreva o audio enviado, depois faca um resumo objetivo.",
+  },
+  {
+    icon: "🖼️",
+    label: "Gerar imagem",
+    hint: "Produza imagens para escola, marketing e materiais.",
+    prompt: "Gere uma imagem realista e profissional de:",
+  },
+  {
+    icon: "🎓",
+    label: "Comunicado escolar",
+    hint: "Crie avisos claros e acolhedores para alunos e familias.",
+    prompt: "Crie um comunicado escolar claro e acolhedor sobre:",
+  },
+  {
+    icon: "🧠",
+    label: "Consultar base interna",
+    hint: "Pesquise documentos e conhecimento da empresa.",
+    prompt: "Consulte a base interna e me responda sobre:",
+  },
 ];
 
 let me = null;
@@ -57,16 +88,20 @@ function normalizeText(value) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function getUserInitial(name = "") {
+  return String(name || "T").trim().charAt(0).toUpperCase() || "T";
+}
+
 function getConversationEmoji(title) {
   const text = normalizeText(title);
   if (!text) return "💬";
-  if (/(planilha|tabela|excel|relatorio|relatorio|dados)/.test(text)) return "📊";
-  if (/(pdf|doc|docx|documento|contrato|texto|comunicado)/.test(text)) return "📄";
+  if (/(planilha|tabela|excel|dados|cadastro)/.test(text)) return "📊";
+  if (/(pdf|doc|docx|documento|contrato|comunicado|texto)/.test(text)) return "📄";
   if (/(imagem|foto|banner|arte|logo)/.test(text)) return "🖼️";
   if (/(audio|voz|locucao|narracao|transcri|gravacao)/.test(text)) return "🎧";
-  if (/(codigo|site|api|script|planilha automatica)/.test(text)) return "💻";
-  if (/(aluno|escola|matricula|turma|pedagogico)/.test(text)) return "🎓";
+  if (/(aluno|escola|turma|matricula|pedagogico)/.test(text)) return "🎓";
   if (/(financeiro|orcamento|boleto|pagamento)/.test(text)) return "💰";
+  if (/(site|codigo|api|script|sistema)/.test(text)) return "💻";
   return "💬";
 }
 
@@ -79,7 +114,9 @@ function getFileEmoji(meta) {
   if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "📊";
   if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "📄";
   if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "📽️";
-  if (mime.includes("json") || mime.includes("javascript") || /\.(js|ts|py|java|php|html|css)$/.test(name)) return "💻";
+  if (mime.includes("json") || mime.includes("javascript") || /\.(js|ts|py|java|php|html|css)$/.test(name)) {
+    return "💻";
+  }
   return "📎";
 }
 
@@ -92,7 +129,6 @@ function getFileKindLabel(meta) {
   if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "Planilha";
   if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "Documento";
   if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "Apresentacao";
-  if (mime.includes("zip")) return "Compactado";
   return "Arquivo";
 }
 
@@ -113,10 +149,21 @@ function updateConversationTitle() {
 }
 
 function renderUser() {
-  const sub = el("userSub");
-  if (!sub || !me) return;
+  if (!me) return;
 
-  sub.textContent = `${me.name || "Usuario"} - ${me.email || ""} - ${me.role || ""}`;
+  const sub = el("userSub");
+  if (sub) {
+    sub.textContent = me.role === "admin" ? "Workspace administrativo" : "Workspace da escola";
+  }
+
+  const accountName = el("accountName");
+  if (accountName) accountName.textContent = me.name || "Usuario";
+
+  const accountMeta = el("accountMeta");
+  if (accountMeta) accountMeta.textContent = `${me.email || ""} - ${me.role || "user"}`;
+
+  const accountInitial = el("accountInitial");
+  if (accountInitial) accountInitial.textContent = getUserInitial(me.name);
 
   const adminBtn = el("adminBtn");
   if (adminBtn) {
@@ -127,12 +174,19 @@ function renderUser() {
 function clearChat() {
   const chat = el("chat");
   if (chat) chat.innerHTML = "";
-  updateQuickPromptsVisibility();
+  updateEmptyState();
 }
 
 function scrollChat() {
   const chat = el("chat");
   if (chat) chat.scrollTop = chat.scrollHeight;
+}
+
+function autoResizeTextarea() {
+  const msgEl = el("msg");
+  if (!msgEl) return;
+  msgEl.style.height = "0px";
+  msgEl.style.height = `${Math.min(msgEl.scrollHeight, 220)}px`;
 }
 
 async function copyText(text, button) {
@@ -312,11 +366,18 @@ function renderMarkdown(markdown) {
 
 function describeSource(source) {
   const pieces = [];
-  if (source?.type === "file_search") pieces.push("Base interna");
+  if (source?.type === "file_search" || source?.type === "knowledge_base") pieces.push("Base interna");
   if (source?.type === "web") pieces.push("Web");
   if (source?.url) pieces.push(source.url.replace(/^https?:\/\//, ""));
   if (source?.file_id) pieces.push(source.file_id);
   return pieces.join(" - ");
+}
+
+function createMessageAvatar(role) {
+  const avatar = document.createElement("div");
+  avatar.className = `message-avatar ${role}`;
+  avatar.textContent = role === "assistant" ? "AI" : getUserInitial(me?.name);
+  return avatar;
 }
 
 function appendTextContent(bubble, role, content) {
@@ -405,7 +466,6 @@ function appendFileCard(bubble, meta) {
   openLink.target = "_blank";
   openLink.rel = "noopener";
   openLink.textContent = isAudio ? "Ouvir / baixar" : isImg ? "Abrir imagem" : "Abrir arquivo";
-
   actions.appendChild(openLink);
 
   top.appendChild(typePill);
@@ -478,11 +538,14 @@ function appendSources(bubble, meta) {
   bubble.appendChild(wrap);
 }
 
-function updateQuickPromptsVisibility() {
-  const wrap = el("quickPrompts");
+function updateEmptyState() {
+  const emptyState = el("emptyState");
   const chat = el("chat");
-  if (!wrap || !chat) return;
-  wrap.style.display = chat.children.length ? "none" : "flex";
+  if (!emptyState || !chat) return;
+
+  const hasMessages = chat.children.length > 0;
+  emptyState.style.display = hasMessages ? "none" : "flex";
+  chat.classList.toggle("has-messages", hasMessages);
 }
 
 function addMessage(role, content, meta = null) {
@@ -490,7 +553,7 @@ function addMessage(role, content, meta = null) {
   if (!chat) return;
 
   const wrap = document.createElement("div");
-  wrap.className = "msg " + (role === "user" ? "user" : "assistant");
+  wrap.className = `msg ${role === "user" ? "user" : "assistant"}`;
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
@@ -499,9 +562,18 @@ function addMessage(role, content, meta = null) {
   appendFileCard(bubble, meta);
   appendSources(bubble, meta);
 
-  wrap.appendChild(bubble);
+  const avatar = createMessageAvatar(role === "user" ? "user" : "assistant");
+
+  if (role === "user") {
+    wrap.appendChild(bubble);
+    wrap.appendChild(avatar);
+  } else {
+    wrap.appendChild(avatar);
+    wrap.appendChild(bubble);
+  }
+
   chat.appendChild(wrap);
-  updateQuickPromptsVisibility();
+  updateEmptyState();
 }
 
 function renderConversations() {
@@ -518,8 +590,8 @@ function renderConversations() {
     emoji.className = "conv-emoji";
     emoji.textContent = getConversationEmoji(c.title);
 
-    const left = document.createElement("div");
-    left.className = "conv-body";
+    const body = document.createElement("div");
+    body.className = "conv-body";
 
     const title = document.createElement("div");
     title.className = "conv-title";
@@ -533,20 +605,16 @@ function renderConversations() {
     del.className = "conv-del";
     del.type = "button";
     del.title = "Apagar conversa";
-    del.textContent = "X";
+    del.setAttribute("aria-label", "Apagar conversa");
+    del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9v8" /><path d="M15 9v8" /><path d="M4 7h16" /><path d="M10 4h4" /><path d="M6 7l1 12h10l1-12" /></svg>';
 
     del.onclick = async (e) => {
       e.stopPropagation();
-
       if (!confirm("Apagar esta conversa? Isso nao pode ser desfeito.")) return;
 
       try {
         await api(`/api/conversations/${c.id}`, { method: "DELETE" });
-
-        if (currentConvId === c.id) {
-          currentConvId = null;
-        }
-
+        if (currentConvId === c.id) currentConvId = null;
         await loadConversations();
 
         if (conversations.length) {
@@ -560,15 +628,16 @@ function renderConversations() {
       }
     };
 
-    left.appendChild(title);
-    left.appendChild(meta);
+    body.appendChild(title);
+    body.appendChild(meta);
 
     item.appendChild(emoji);
-    item.appendChild(left);
+    item.appendChild(body);
     item.appendChild(del);
 
     item.onclick = async () => {
       await openConversation(c.id);
+      closeSidebar();
     };
 
     list.appendChild(item);
@@ -617,27 +686,30 @@ async function openConversation(id) {
   }
 
   scrollChat();
-  updateQuickPromptsVisibility();
+  updateEmptyState();
 }
 
 async function sendMessage() {
   const msgEl = el("msg");
   const text = (msgEl?.value || "").trim();
-
   if (!text) return;
 
   const convId = await ensureConversation();
-
   msgEl.value = "";
+  autoResizeTextarea();
 
   addMessage("user", text);
   scrollChat();
 
+  const chat = el("chat");
   const typing = document.createElement("div");
   typing.className = "msg assistant";
-  typing.innerHTML = '<div class="bubble"><div class="msg-text">Pensando...</div></div>';
-  el("chat").appendChild(typing);
-  updateQuickPromptsVisibility();
+  typing.innerHTML = `
+    <div class="message-avatar assistant">AI</div>
+    <div class="bubble typing-bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>
+  `;
+  chat.appendChild(typing);
+  updateEmptyState();
   scrollChat();
 
   try {
@@ -687,20 +759,26 @@ function setupQuickPrompts() {
   if (!wrap || !msgEl) return;
 
   wrap.innerHTML = "";
+
   for (const item of QUICK_PROMPTS) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "prompt-chip";
-    button.innerHTML = `<span class="prompt-emoji">${item.emoji}</span><span>${item.label}</span>`;
+    button.className = "prompt-card";
+    button.innerHTML = `
+      <div class="prompt-icon">${item.icon}</div>
+      <div class="prompt-copy">
+        <div class="prompt-title">${item.label}</div>
+        <div class="prompt-hint">${item.hint}</div>
+      </div>
+    `;
     button.onclick = () => {
       msgEl.value = item.prompt;
       msgEl.focus();
+      autoResizeTextarea();
       msgEl.setSelectionRange(msgEl.value.length, msgEl.value.length);
     };
     wrap.appendChild(button);
   }
-
-  updateQuickPromptsVisibility();
 }
 
 function setRecordState(isRecording) {
@@ -755,7 +833,6 @@ async function setupRecorder() {
         setRecordState(false);
         const blob = new Blob(recordingChunks, { type: mediaRecorder.mimeType || "audio/webm" });
         stopRecordingStream();
-
         if (!blob.size) return;
 
         const ext = (blob.type || "").includes("ogg") ? ".ogg" : ".webm";
@@ -807,11 +884,37 @@ function setupAttachments() {
       }
 
       if (!images.length) return;
-
       e.preventDefault();
       await uploadFiles(images);
     });
   }
+}
+
+function openSidebar() {
+  document.body.classList.add("sidebar-open");
+}
+
+function closeSidebar() {
+  document.body.classList.remove("sidebar-open");
+}
+
+function setupSidebarToggle() {
+  const btnSidebar = el("btnSidebar");
+  const backdrop = el("backdrop");
+
+  if (btnSidebar) {
+    btnSidebar.onclick = () => openSidebar();
+  }
+
+  if (backdrop) {
+    backdrop.onclick = () => closeSidebar();
+  }
+
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 960) {
+      closeSidebar();
+    }
+  });
 }
 
 async function init() {
@@ -824,6 +927,7 @@ async function init() {
 
   renderUser();
   setupQuickPrompts();
+  setupSidebarToggle();
 
   const btnSend = el("btnSend");
   if (btnSend) {
@@ -832,12 +936,14 @@ async function init() {
 
   const msgEl = el("msg");
   if (msgEl) {
+    msgEl.addEventListener("input", autoResizeTextarea);
     msgEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         sendMessage();
       }
     });
+    autoResizeTextarea();
   }
 
   const btnNew = el("btnNewChat");
@@ -846,6 +952,7 @@ async function init() {
       currentConvId = null;
       const id = await ensureConversation();
       await openConversation(id);
+      closeSidebar();
     };
   }
 
@@ -871,5 +978,3 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
-
-

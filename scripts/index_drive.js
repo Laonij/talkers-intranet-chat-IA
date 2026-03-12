@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const { migrate, get, all, run } = require("../db");
@@ -28,7 +28,7 @@ function round(x) {
 }
 
 async function main() {
-  migrate();
+  await migrate();
 
   const absIndex = path.isAbsolute(INDEX_FOLDER)
     ? INDEX_FOLDER

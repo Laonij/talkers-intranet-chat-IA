@@ -13,6 +13,8 @@
     envVars:
       - key: NODE_VERSION
         value: 20
+      - key: DB_CLIENT
+        value: postgres
       - key: DATA_DIR
         value: /var/data
       - key: INDEX_FOLDER

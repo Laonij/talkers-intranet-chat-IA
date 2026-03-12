@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "talkers-intranet-chat",
   "version": "0.7.0",
   "private": true,
@@ -9,7 +9,8 @@
     "seed": "node scripts/seed.js",
     "index": "node scripts/index_drive.js",
     "watch": "node scripts/watch_drive.js",
-    "sync": "node scripts/sync_drive.js"
+    "sync": "node scripts/sync_drive.js",
+    "migrate:postgres": "node scripts/migrate_postgres.js"
   },
   "dependencies": {
     "axios": "^1.7.7",
@@ -26,6 +27,7 @@
     "multer": "^1.4.5-lts.1",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
+    "pg": "^8.13.1",
     "sqlite3": "^5.1.7",
     "tesseract.js": "^5.1.0",
     "xlsx": "^0.18.5"

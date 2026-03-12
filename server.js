@@ -8,7 +8,7 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 const jwt = require("jsonwebtoken");
 
-const { DATA_DIR, migrate, get, all, run, uploadsDir, kbDir, logEvent } = require("./db");
+const { DATA_DIR, DB_CLIENT, migrate, get, all, run, uploadsDir, kbDir, logEvent, searchDocuments } = require("./db");
 const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact } = require("./lib/generate");
@@ -43,15 +43,18 @@ const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || (IS_PRODUCTION ? "" 
 const knowledgeDir = path.join(kbDir, "manual");
 
 validateConfig();
-migrate();
 fs.mkdirSync(uploadsDir, { recursive: true });
 fs.mkdirSync(kbDir, { recursive: true });
 fs.mkdirSync(knowledgeDir, { recursive: true });
 logEnvironmentWarnings();
 
 function logEnvironmentWarnings() {
-  if (IS_PRODUCTION && process.env.DATABASE_URL) {
-    console.log(`Aviso: DATABASE_URL esta configurado no ambiente, mas esta versao usa SQLite em ${DATA_DIR}.`);
+  if (IS_PRODUCTION && DB_CLIENT === "sqlite" && process.env.DATABASE_URL) {
+    console.log(`Aviso: DATABASE_URL esta configurado, mas DB_CLIENT esta em SQLite usando ${DATA_DIR}.`);
+  }
+
+  if (IS_PRODUCTION && DB_CLIENT === "postgres") {
+    console.log("Banco configurado: Postgres.");
   }
 
   if (IS_PRODUCTION && !String(process.env.DATA_DIR || "").trim()) {
@@ -327,47 +330,12 @@ async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeTy
   return { relPath, extractedText: safeText };
 }
 
-function buildFtsQuery(query) {
-  const tokens = String(query || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s]+/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 2)
-    .slice(0, 8);
-
-  if (!tokens.length) return null;
-  return tokens.map((token) => `${token}*`).join(" ");
-}
-
 async function searchKnowledgeBase(query, limit = 4) {
-  const ftsQuery = buildFtsQuery(query);
-  if (!ftsQuery) return [];
-
   try {
-    const rows = await all(
-      `SELECT d.rel_path, d.extracted_text, bm25(documents_fts) AS score
-         FROM documents_fts
-         JOIN documents d ON d.id = documents_fts.rowid
-        WHERE documents_fts MATCH ?
-        ORDER BY score
-        LIMIT ?`,
-      [ftsQuery, limit]
-    );
-
-    return rows || [];
+    return await searchDocuments(query, limit);
   } catch (err) {
-    const like = `%${String(query || "").trim()}%`;
-    return all(
-      `SELECT rel_path, extracted_text
-         FROM documents
-        WHERE rel_path LIKE ? OR extracted_text LIKE ?
-        ORDER BY updated_at DESC
-        LIMIT ?`,
-      [like, like, limit]
-    );
+    console.log("Erro na busca interna:", err?.message || err);
+    return [];
   }
 }
 
@@ -753,7 +721,7 @@ const upload = multer({
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID) });
+  res.json({ ok: true, vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID), db_client: DB_CLIENT });
 });
 
 app.post("/api/login", async (req, res) => {
@@ -1116,12 +1084,23 @@ app.get("/admin.html", (req, res) => {
 
 app.use(express.static(publicDir));
 
-ensureAdmin().finally(() => {
+async function startServer() {
+  await migrate();
+  await ensureAdmin();
+
   app.listen(PORT, () => {
     console.log(`Talkers IA rodando em ${BASE_URL}`);
     console.log(`Login: ${BASE_URL}/login.html`);
+    console.log(`Banco ativo: ${DB_CLIENT}`);
   });
+}
+
+startServer().catch((err) => {
+  console.error("Falha ao iniciar o servidor:", err);
+  process.exit(1);
 });
+
+
 
 
 

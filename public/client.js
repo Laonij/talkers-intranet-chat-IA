@@ -39,11 +39,19 @@ function formatDate(iso) {
   }
 }
 
+function updateConversationTitle() {
+  const titleBox = el("convTitle");
+  if (!titleBox) return;
+
+  const conv = conversations.find((item) => item.id === currentConvId);
+  titleBox.textContent = conv?.title || "Nova conversa";
+}
+
 function renderUser() {
   const sub = el("userSub");
   if (!sub || !me) return;
 
-  sub.textContent = `${me.name || "Usuário"} • ${me.email || ""} • ${me.role || ""}`;
+  sub.textContent = `${me.name || "Usuario"} - ${me.email || ""} - ${me.role || ""}`;
 
   const adminBtn = el("adminBtn");
   if (adminBtn) {
@@ -70,8 +78,72 @@ async function copyText(text, button) {
       button.textContent = old;
     }, 1200);
   } catch {
-    alert("Não foi possível copiar o texto.");
+    alert("Nao foi possivel copiar o texto.");
   }
+}
+
+function appendTextContent(bubble, role, content) {
+  const text = String(content || "");
+  if (!text) return;
+
+  const textNode = document.createElement("div");
+  textNode.textContent = text;
+  bubble.appendChild(textNode);
+
+  if (role === "assistant") {
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copiar";
+    copyBtn.onclick = () => copyText(text, copyBtn);
+
+    actions.appendChild(copyBtn);
+    bubble.appendChild(actions);
+  }
+}
+
+function appendFileCard(bubble, meta) {
+  if (!meta || meta.type !== "file" || !meta.file_id) return;
+
+  const isImg = (meta.mimetype || "").startsWith("image/");
+  const url = `/api/files/${meta.file_id}/download`;
+
+  const card = document.createElement("div");
+  card.className = "file-card";
+
+  if (isImg) {
+    const img = document.createElement("img");
+    img.className = "file-thumb";
+    img.src = url;
+    img.alt = meta.filename || "imagem";
+    card.appendChild(img);
+  } else {
+    const ic = document.createElement("div");
+    ic.className = "file-ic";
+    ic.textContent = "ARQ";
+    card.appendChild(ic);
+  }
+
+  const textWrap = document.createElement("div");
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = meta.filename || "arquivo";
+
+  const mime = document.createElement("div");
+  mime.style.fontSize = "11px";
+  mime.style.opacity = ".68";
+  mime.textContent = meta.mimetype || "";
+
+  textWrap.appendChild(link);
+  textWrap.appendChild(mime);
+  card.appendChild(textWrap);
+  bubble.appendChild(card);
 }
 
 function addMessage(role, content, meta = null) {
@@ -84,52 +156,8 @@ function addMessage(role, content, meta = null) {
   const bubble = document.createElement("div");
   bubble.className = "bubble";
 
-  if (meta && meta.type === "file" && meta.file_id) {
-    const isImg = (meta.mimetype || "").startsWith("image/");
-    const url = `/api/files/${meta.file_id}/download`;
-
-    const card = document.createElement("div");
-    card.className = "file-card";
-
-    if (isImg) {
-      const img = document.createElement("img");
-      img.className = "file-thumb";
-      img.src = url;
-      img.alt = meta.filename || "imagem";
-      card.appendChild(img);
-    } else {
-      const ic = document.createElement("div");
-      ic.className = "file-ic";
-      ic.textContent = "📎";
-      card.appendChild(ic);
-    }
-
-    const txt = document.createElement("div");
-    txt.innerHTML = `
-      <div><a href="${url}" target="_blank" rel="noopener">${meta.filename || "arquivo"}</a></div>
-      <div style="font-size:11px;opacity:.68;">${meta.mimetype || ""}</div>
-    `;
-    card.appendChild(txt);
-    bubble.appendChild(card);
-  } else {
-    const textNode = document.createElement("div");
-    textNode.textContent = content || "";
-    bubble.appendChild(textNode);
-
-    if (role === "assistant" && content) {
-      const actions = document.createElement("div");
-      actions.className = "msg-actions";
-
-      const copyBtn = document.createElement("button");
-      copyBtn.className = "copy-btn";
-      copyBtn.type = "button";
-      copyBtn.textContent = "Copiar";
-      copyBtn.onclick = () => copyText(content, copyBtn);
-
-      actions.appendChild(copyBtn);
-      bubble.appendChild(actions);
-    }
-  }
+  appendTextContent(bubble, role, content);
+  appendFileCard(bubble, meta);
 
   wrap.appendChild(bubble);
   chat.appendChild(wrap);
@@ -160,12 +188,12 @@ function renderConversations() {
     del.className = "conv-del";
     del.type = "button";
     del.title = "Apagar conversa";
-    del.innerHTML = "🗑️";
+    del.textContent = "X";
 
     del.onclick = async (e) => {
       e.stopPropagation();
 
-      if (!confirm("Apagar esta conversa? Isso não pode ser desfeito.")) return;
+      if (!confirm("Apagar esta conversa? Isso nao pode ser desfeito.")) return;
 
       try {
         await api(`/api/conversations/${c.id}`, { method: "DELETE" });
@@ -180,8 +208,7 @@ function renderConversations() {
           await openConversation(conversations[0].id);
         } else {
           clearChat();
-          const titleBox = el("convTitle");
-          if (titleBox) titleBox.textContent = "Nova conversa";
+          updateConversationTitle();
         }
       } catch (err) {
         alert("Erro ao apagar conversa: " + err.message);
@@ -206,6 +233,7 @@ async function loadConversations() {
   const data = await api("/api/conversations");
   conversations = data.conversations || [];
   renderConversations();
+  updateConversationTitle();
 }
 
 async function ensureConversation() {
@@ -216,25 +244,30 @@ async function ensureConversation() {
     body: JSON.stringify({ title: "Nova conversa" }),
   });
 
-  await loadConversations();
   currentConvId = data.conversation_id;
+  await loadConversations();
   return currentConvId;
 }
 
 async function openConversation(id) {
   currentConvId = id;
   renderConversations();
+  updateConversationTitle();
   clearChat();
-
-  const titleBox = el("convTitle");
-  const conv = conversations.find((x) => x.id === id);
-  if (titleBox) titleBox.textContent = conv?.title || "Conversa";
 
   const data = await api(`/api/conversations/${id}/messages`);
   const msgs = data.messages || [];
 
-  for (const m of msgs) {
-    addMessage(m.role, m.content, m.meta || null);
+  if (data.conversation) {
+    conversations = conversations.map((conversation) =>
+      conversation.id === id ? { ...conversation, ...data.conversation } : conversation
+    );
+    renderConversations();
+    updateConversationTitle();
+  }
+
+  for (const message of msgs) {
+    addMessage(message.role, message.content, message.meta || null);
   }
 
   scrollChat();
@@ -255,7 +288,7 @@ async function sendMessage() {
 
   const typing = document.createElement("div");
   typing.className = "msg assistant";
-  typing.innerHTML = `<div class="bubble">Pensando...</div>`;
+  typing.innerHTML = '<div class="bubble">Pensando...</div>';
   el("chat").appendChild(typing);
   scrollChat();
 
@@ -266,7 +299,7 @@ async function sendMessage() {
     });
 
     typing.remove();
-    addMessage("assistant", data.reply || "OK");
+    addMessage("assistant", data.reply || "OK", data.meta || null);
     await loadConversations();
     scrollChat();
   } catch (err) {
@@ -323,20 +356,19 @@ function setupAttachments() {
       const items = e.clipboardData?.items;
       if (!items) return;
 
-      const imgs = [];
-      for (const it of items) {
-        if (it.kind === "file") {
-          const f = it.getAsFile();
-          if (f && (f.type || "").startsWith("image/")) {
-            imgs.push(f);
-          }
+      const images = [];
+      for (const item of items) {
+        if (item.kind !== "file") continue;
+        const file = item.getAsFile();
+        if (file && (file.type || "").startsWith("image/")) {
+          images.push(file);
         }
       }
 
-      if (!imgs.length) return;
+      if (!images.length) return;
 
       e.preventDefault();
-      await uploadFiles(imgs);
+      await uploadFiles(images);
     });
   }
 }

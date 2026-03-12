@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
@@ -6,42 +6,112 @@ const fs = require("fs");
 const cookieParser = require("cookie-parser");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
-const { spawn } = require("child_process");
 const jwt = require("jsonwebtoken");
 
-const { migrate, get, all, run, uploadsDir, kbDir, logEvent } = require("./db");
+const { DATA_DIR, migrate, get, all, run, uploadsDir, kbDir, logEvent } = require("./db");
 const { signSession, requireAuth, requireRole } = require("./auth");
-const { extractText } = require("./lib/extract");
-const { searchWeb } = require("./lib/webSearch");
-const { ocrImage } = require("./lib/ocr");
+const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact } = require("./lib/generate");
+const { ocrImage } = require("./lib/ocr");
+const {
+  attachFileToVectorStore,
+  buildOpenAIInputFilePart,
+  isSupportedOpenAIInputFile,
+  uploadFileToOpenAI,
+} = require("./lib/rag");
+const { searchWeb } = require("./lib/webSearch");
 
 const PORT = Number(process.env.PORT || 10000);
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
-const JWT_SECRET = process.env.JWT_SECRET || "troque-por-um-segredo-grande";
+const NODE_ENV = String(process.env.NODE_ENV || "development").trim().toLowerCase();
+const IS_PRODUCTION = NODE_ENV === "production";
+const DEFAULT_JWT_SECRET = "troque-por-um-segredo-grande";
+const DEFAULT_ADMIN_EMAIL = "admin@talkers.com";
+const DEFAULT_ADMIN_NAME = "Admin";
+const DEFAULT_ADMIN_PASSWORD = "Talkers#2026!";
+const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
+const MAX_CONVERSATION_MEMORY = 6000;
+const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
 
-const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || "admin@talkers.com").trim().toLowerCase();
-const ADMIN_NAME = String(process.env.ADMIN_NAME || "Admin").trim() || "Admin";
-const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "Talkers#2026!");
+const JWT_SECRET =
+  String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
+const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).trim().toLowerCase();
+const ADMIN_NAME = String(process.env.ADMIN_NAME || DEFAULT_ADMIN_NAME).trim() || DEFAULT_ADMIN_NAME;
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || (IS_PRODUCTION ? "" : DEFAULT_ADMIN_PASSWORD));
 
+const knowledgeDir = path.join(kbDir, "manual");
+
+validateConfig();
 migrate();
 fs.mkdirSync(uploadsDir, { recursive: true });
 fs.mkdirSync(kbDir, { recursive: true });
+fs.mkdirSync(knowledgeDir, { recursive: true });
+logEnvironmentWarnings();
+
+function logEnvironmentWarnings() {
+  if (IS_PRODUCTION && process.env.DATABASE_URL) {
+    console.log(`Aviso: DATABASE_URL esta configurado no ambiente, mas esta versao usa SQLite em ${DATA_DIR}.`);
+  }
+
+  if (IS_PRODUCTION && !String(process.env.DATA_DIR || "").trim()) {
+    console.log(`Aviso: DATA_DIR nao foi definido no ambiente. O servidor vai usar ${DATA_DIR}.`);
+  }
+}
+
+function validateConfig() {
+  if (!JWT_SECRET) {
+    throw new Error("Configure JWT_SECRET antes de iniciar o servidor.");
+  }
+
+  if (IS_PRODUCTION && JWT_SECRET === DEFAULT_JWT_SECRET) {
+    throw new Error("JWT_SECRET padrao nao pode ser usado em producao.");
+  }
+}
+
+function getAdminBootstrapBlocker() {
+  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+    return "Credenciais do admin inicial nao foram configuradas.";
+  }
+
+  if (!IS_PRODUCTION) return null;
+
+  const hasExplicitBootstrapConfig = Boolean(
+    String(process.env.ADMIN_EMAIL || "").trim() ||
+    String(process.env.ADMIN_NAME || "").trim() ||
+    String(process.env.ADMIN_PASSWORD || "").trim()
+  );
+
+  if (!hasExplicitBootstrapConfig) {
+    return "Bootstrap automatico de admin desativado em producao sem credenciais explicitas.";
+  }
+
+  if (ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD) {
+    return "Defina ADMIN_PASSWORD forte para criar o admin inicial em producao.";
+  }
+
+  return null;
+}
 
 async function ensureAdmin() {
   try {
-    const existing = await get("SELECT id, email FROM users WHERE email=?", [ADMIN_EMAIL]);
+    const blocker = getAdminBootstrapBlocker();
+    if (blocker) {
+      console.log(blocker);
+      return;
+    }
+
+    const existing = await get("SELECT id FROM users WHERE email=?", [ADMIN_EMAIL]);
     if (existing) return;
 
     const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-    const r = await run(
+    const created = await run(
       "INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, 'admin')",
       [ADMIN_EMAIL, ADMIN_NAME, hash]
     );
 
-    await logEvent(r.lastID, "admin_bootstrap_created", { email: ADMIN_EMAIL });
-  } catch (e) {
-    console.log("Falha ao criar admin:", e?.message || e);
+    await logEvent(created.lastID, "admin_bootstrap_created", { email: ADMIN_EMAIL });
+  } catch (err) {
+    console.log("Falha ao criar admin:", err?.message || err);
   }
 }
 
@@ -56,6 +126,7 @@ function nowBrazil() {
 function tryDecodeSession(req) {
   const token = req.cookies?.session;
   if (!token) return null;
+
   try {
     return jwt.verify(token, JWT_SECRET);
   } catch {
@@ -77,22 +148,109 @@ function setSessionCookie(req, res, token) {
   });
 }
 
+function clearSessionCookie(req, res) {
+  res.clearCookie("session", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isHttps(req),
+  });
+}
+
 function titleFromMessage(text) {
-  const t = (text || "").trim().split("\n")[0].slice(0, 60);
-  return t || "Nova conversa";
+  const title = String(text || "").trim().split("\n")[0].slice(0, 60);
+  return title || "Nova conversa";
+}
+
+function sanitizeFilename(filename = "arquivo") {
+  return String(filename || "arquivo").replace(/[\\/:*?"<>|]+/g, "_");
 }
 
 function mimeLooksLikeImage(mime = "") {
   return String(mime || "").toLowerCase().startsWith("image/");
 }
 
-function fileToDataUrl(filePath, mimeType = "application/octet-stream") {
-  const buf = fs.readFileSync(filePath);
-  const b64 = buf.toString("base64");
-  return `data:${mimeType};base64,${b64}`;
+function safeJsonParse(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
-async function getConversationHistory(conversationId, limit = 12) {
+function compactMemory(text, maxChars = MAX_CONVERSATION_MEMORY) {
+  const value = String(text || "").trim();
+  if (value.length <= maxChars) return value;
+  return value.slice(value.length - maxChars);
+}
+
+async function deleteStoredFiles(storedNames = [], baseDir = uploadsDir) {
+  const uniqueNames = [...new Set((storedNames || []).filter(Boolean))];
+
+  for (const storedName of uniqueNames) {
+    try {
+      const fullPath = path.join(baseDir, storedName);
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    } catch (err) {
+      console.log("Erro ao remover arquivo do disco:", storedName, err?.message || err);
+    }
+  }
+}
+
+async function createFileMessage({
+  conversationId,
+  uploadedBy,
+  originalName,
+  storedName,
+  mimeType,
+  sizeBytes,
+  role,
+  content,
+}) {
+  const fileResult = await run(
+    "INSERT INTO files (conversation_id, uploaded_by, original_name, stored_name, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
+    [conversationId, uploadedBy, originalName, storedName, mimeType || null, sizeBytes || null]
+  );
+
+  const meta = {
+    type: "file",
+    file_id: fileResult.lastID,
+    filename: originalName,
+    mimetype: mimeType || "",
+    size: sizeBytes || 0,
+  };
+
+  await run(
+    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, ?, ?, ?)",
+    [conversationId, role, content || "", JSON.stringify(meta)]
+  );
+
+  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [conversationId]);
+  return { fileId: fileResult.lastID, meta };
+}
+
+async function handleConversationUpload(req, res) {
+  const id = Number(req.params.id);
+  const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
+  if (!conv) return res.status(404).json({ error: "not_found" });
+
+  const uploaded = req.file;
+  if (!uploaded) return res.status(400).json({ error: "missing_file" });
+
+  const saved = await createFileMessage({
+    conversationId: id,
+    uploadedBy: req.user.sub,
+    originalName: uploaded.originalname,
+    storedName: uploaded.filename,
+    mimeType: uploaded.mimetype || "",
+    sizeBytes: uploaded.size || 0,
+    role: "user",
+    content: "",
+  });
+
+  return res.json({ ok: true, file_id: saved.fileId });
+}
+
+async function getConversationHistory(conversationId, limit = 14) {
   const rows = await all(
     `SELECT role, content
        FROM messages
@@ -102,16 +260,128 @@ async function getConversationHistory(conversationId, limit = 12) {
     [conversationId, limit]
   );
 
-  return rows.reverse().map((m) => ({
-    role: m.role === "assistant" ? "assistant" : "user",
-    content: String(m.content || "").trim(),
+  return rows.reverse().map((row) => ({
+    role: row.role === "assistant" ? "assistant" : "user",
+    content: String(row.content || "").trim(),
   }));
 }
 
+async function getConversationMemory(conversationId) {
+  const row = await get(
+    "SELECT summary_text FROM conversation_memories WHERE conversation_id=?",
+    [conversationId]
+  );
+  return String(row?.summary_text || "").trim();
+}
+
+async function updateConversationMemory(conversationId, userText, assistantText) {
+  const previous = await getConversationMemory(conversationId);
+  const entry = [
+    `Usuario: ${String(userText || "").trim()}`,
+    `IA: ${String(assistantText || "").trim()}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const summaryText = compactMemory([previous, entry].filter(Boolean).join("\n\n"));
+  const existing = await get(
+    "SELECT conversation_id FROM conversation_memories WHERE conversation_id=?",
+    [conversationId]
+  );
+
+  if (existing) {
+    await run(
+      "UPDATE conversation_memories SET summary_text=?, updated_at=datetime('now') WHERE conversation_id=?",
+      [summaryText, conversationId]
+    );
+  } else {
+    await run(
+      "INSERT INTO conversation_memories (conversation_id, summary_text) VALUES (?, ?)",
+      [conversationId, summaryText]
+    );
+  }
+}
+
+async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeType }) {
+  if (!fs.existsSync(sourcePath)) return null;
+
+  const stat = fs.statSync(sourcePath);
+  const ext = detectExt(sourcePath, originalName, mimeType) || path.extname(sourcePath).toLowerCase() || ".bin";
+  const extracted = (await extractText(sourcePath, originalName, mimeType)).trim();
+  const safeText = extracted || `(sem texto extraido) ${relPath}`;
+  const existing = await get("SELECT id FROM documents WHERE source_path=?", [sourcePath]);
+
+  if (existing) {
+    await run(
+      "UPDATE documents SET rel_path=?, ext=?, size_bytes=?, modified_ms=?, extracted_text=?, updated_at=datetime('now') WHERE id=?",
+      [relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, existing.id]
+    );
+  } else {
+    await run(
+      "INSERT INTO documents (source_path, rel_path, ext, size_bytes, modified_ms, extracted_text) VALUES (?, ?, ?, ?, ?, ?)",
+      [sourcePath, relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText]
+    );
+  }
+
+  return { relPath, extractedText: safeText };
+}
+
+function buildFtsQuery(query) {
+  const tokens = String(query || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+    .slice(0, 8);
+
+  if (!tokens.length) return null;
+  return tokens.map((token) => `${token}*`).join(" ");
+}
+
+async function searchKnowledgeBase(query, limit = 4) {
+  const ftsQuery = buildFtsQuery(query);
+  if (!ftsQuery) return [];
+
+  try {
+    const rows = await all(
+      `SELECT d.rel_path, d.extracted_text, bm25(documents_fts) AS score
+         FROM documents_fts
+         JOIN documents d ON d.id = documents_fts.rowid
+        WHERE documents_fts MATCH ?
+        ORDER BY score
+        LIMIT ?`,
+      [ftsQuery, limit]
+    );
+
+    return rows || [];
+  } catch (err) {
+    const like = `%${String(query || "").trim()}%`;
+    return all(
+      `SELECT rel_path, extracted_text
+         FROM documents
+        WHERE rel_path LIKE ? OR extracted_text LIKE ?
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+      [like, like, limit]
+    );
+  }
+}
+
+async function buildKnowledgeContext(query) {
+  const rows = await searchKnowledgeBase(query, 4);
+  if (!rows.length) return "";
+
+  return rows
+    .map((row) => `[Base interna: ${row.rel_path}]\n${String(row.extracted_text || "").slice(0, 1400)}`)
+    .join("\n\n");
+}
 async function getConversationFilesContext(conversationId) {
   try {
     const files = await all(
-      `SELECT id, original_name, stored_name, mime_type
+      `SELECT original_name, stored_name, mime_type
          FROM files
         WHERE conversation_id=?
         ORDER BY id DESC
@@ -119,33 +389,42 @@ async function getConversationFilesContext(conversationId) {
       [conversationId]
     );
 
-    let context = "";
+    const blocks = [];
 
-    for (const f of files) {
-      const filePath = path.join(uploadsDir, f.stored_name);
-      let extracted = "";
+    for (const file of files) {
+      const filePath = path.join(uploadsDir, file.stored_name);
+      if (!fs.existsSync(filePath)) continue;
 
-      if (fs.existsSync(filePath)) {
-        extracted = await extractText(filePath, f.original_name, f.mime_type);
-      }
-
+      const extracted = await extractText(filePath, file.original_name, file.mime_type);
       if (extracted && extracted.trim()) {
-        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nTexto extraído:\n${extracted.slice(0, 9000)}\n`;
-      } else if (mimeLooksLikeImage(f.mime_type)) {
-        const ocr = fs.existsSync(filePath) ? await ocrImage(filePath) : "";
-        if (ocr && ocr.trim()) {
-          context += `\n\n[Imagem enviada: ${f.original_name} | ${f.mime_type}]\nTexto OCR detectado:\n${ocr.slice(0, 6000)}\n`;
-        } else {
-          context += `\n\n[Imagem enviada: ${f.original_name} | ${f.mime_type}]\nA imagem foi anexada à conversa e pode ser analisada visualmente.\n`;
-        }
-      } else {
-        context += `\n\n[Documento enviado: ${f.original_name} | ${f.mime_type || "arquivo"}]\nO arquivo foi recebido e está anexado à conversa, mas não foi possível extrair texto automaticamente. Isso pode acontecer quando o PDF é imagem/escaneado ou quando o arquivo não contém texto legível por parser. Nesse caso, o próximo passo é adicionar OCR mais amplo ao pipeline documental.\n`;
+        blocks.push(
+          `[Documento enviado: ${file.original_name} | ${file.mime_type || "arquivo"}]\nTexto extraido:\n${extracted.slice(0, 9000)}`
+        );
+        continue;
       }
+
+      if (mimeLooksLikeImage(file.mime_type)) {
+        const ocr = await ocrImage(filePath);
+        if (ocr && ocr.trim()) {
+          blocks.push(
+            `[Imagem enviada: ${file.original_name} | ${file.mime_type}]\nTexto OCR detectado:\n${ocr.slice(0, 6000)}`
+          );
+        } else {
+          blocks.push(
+            `[Imagem enviada: ${file.original_name} | ${file.mime_type}]\nA imagem foi anexada a conversa e pode ser analisada visualmente.`
+          );
+        }
+        continue;
+      }
+
+      blocks.push(
+        `[Documento enviado: ${file.original_name} | ${file.mime_type || "arquivo"}]\nO arquivo foi recebido, mas nao houve texto extraido localmente. Se o modelo suportar, ele tambem recebera o arquivo bruto para leitura.`
+      );
     }
 
-    return context;
+    return blocks.join("\n\n");
   } catch (err) {
-    console.log("Erro lendo arquivos da conversa:", err);
+    console.log("Erro lendo arquivos da conversa:", err?.message || err);
     return "";
   }
 }
@@ -162,55 +441,116 @@ async function getRecentVisionInputs(conversationId, limit = 3) {
     );
 
     const out = [];
+    for (const file of files) {
+      if (!mimeLooksLikeImage(file.mime_type)) continue;
 
-    for (const f of files) {
-      if (!mimeLooksLikeImage(f.mime_type)) continue;
-
-      const filePath = path.join(uploadsDir, f.stored_name);
+      const filePath = path.join(uploadsDir, file.stored_name);
       if (!fs.existsSync(filePath)) continue;
 
       out.push({
         type: "input_image",
-        image_url: fileToDataUrl(filePath, f.mime_type || "image/png"),
+        image_url: `data:${file.mime_type || "image/png"};base64,${fs.readFileSync(filePath).toString("base64")}`,
       });
     }
 
     return out;
   } catch (err) {
-    console.log("Erro ao preparar imagens para visão:", err);
+    console.log("Erro ao preparar imagens:", err?.message || err);
     return [];
   }
 }
 
+async function getRecentDocumentInputs(conversationId, limit = 2) {
+  try {
+    const rows = await all(
+      `SELECT original_name, stored_name, mime_type, size_bytes
+         FROM files
+        WHERE conversation_id=?
+        ORDER BY id DESC
+        LIMIT ?`,
+      [conversationId, limit * 4]
+    );
+
+    const out = [];
+    for (const row of rows) {
+      if (out.length >= limit) break;
+      if (mimeLooksLikeImage(row.mime_type)) continue;
+      if (!isSupportedOpenAIInputFile(row.original_name, row.mime_type)) continue;
+      if (Number(row.size_bytes || 0) > INLINE_OPENAI_FILE_LIMIT) continue;
+
+      const filePath = path.join(uploadsDir, row.stored_name);
+      if (!fs.existsSync(filePath)) continue;
+
+      out.push(
+        buildOpenAIInputFilePart(
+          filePath,
+          row.original_name,
+          row.mime_type || "application/octet-stream"
+        )
+      );
+    }
+
+    return out;
+  } catch (err) {
+    console.log("Erro ao preparar arquivos para a OpenAI:", err?.message || err);
+    return [];
+  }
+}
+
+function buildOpenAITools() {
+  const tools = [{ type: "web_search_preview" }];
+
+  if (OPENAI_VECTOR_STORE_ID) {
+    tools.push({
+      type: "file_search",
+      vector_store_ids: [OPENAI_VECTOR_STORE_ID],
+    });
+  }
+
+  return tools;
+}
+
 async function buildOpenAIInput({ conversationId, userText, contextText }) {
   const history = await getConversationHistory(conversationId, 12);
+  const memory = await getConversationMemory(conversationId);
   const visionInputs = await getRecentVisionInputs(conversationId, 3);
+  const documentInputs = await getRecentDocumentInputs(conversationId, 2);
+  const normalizedUserText = String(userText || "").trim();
+  const normalizedHistory = [...history];
+  const lastHistoryItem = normalizedHistory[normalizedHistory.length - 1];
 
-  const historyText = history
-    .map((m) => `${m.role === "assistant" ? "IA" : "Usuário"}: ${m.content}`)
+  if (
+    lastHistoryItem?.role === "user" &&
+    String(lastHistoryItem.content || "").trim() === normalizedUserText
+  ) {
+    normalizedHistory.pop();
+  }
+
+  const historyText = normalizedHistory
+    .map((item) => `${item.role === "assistant" ? "IA" : "Usuario"}: ${item.content}`)
     .filter(Boolean)
     .join("\n");
 
   const systemText = `
-Você é a TALKERS IA, assistente corporativa da empresa Talkers.
-Responda sempre em português do Brasil.
-Seja educada, profissional, natural e objetiva.
+Voce e a TALKERS IA, assistente corporativa da empresa Talkers.
+Responda sempre em portugues do Brasil.
+Seja objetiva, clara, educada e util.
 
 Data e hora atual no Brasil:
 ${nowBrazil()}
 
 Regras:
-- Considere o histórico recente da conversa antes de responder.
-- Entenda referências curtas como "seria isso", "esse", "aquele", "melhore", "resume", "faz daquele jeito".
-- Se o usuário tiver enviado arquivo, nunca diga que ele não enviou.
-- Se houver imagem enviada diretamente, analise visualmente a imagem.
-- Se houver documento com texto extraído, use esse conteúdo para responder.
-- Se o documento existir mas o texto não puder ser extraído, explique isso com clareza.
-- Se o usuário perguntar a data de hoje, use a data atual acima.
-- Se você não tiver base suficiente, peça complemento com educação, mas evite pedir de novo algo que já foi enviado.
+- Considere o historico recente da conversa antes de responder.
+- Se houver memoria acumulada da conversa, use isso para manter continuidade.
+- Se houver arquivos enviados, use o texto extraido e, quando disponivel, os arquivos brutos incluidos nesta chamada.
+- Se o usuario pedir geracao de arquivo, entregue o arquivo e explique em uma frase o que foi gerado.
+- Se nao houver base suficiente, diga isso claramente e peca complemento.
 
-Histórico recente:
-${historyText || "Sem histórico anterior."}
+Memoria persistente da conversa:
+${memory || "Sem memoria persistente ainda."}
+
+Historico recente:
+${historyText || "Sem historico anterior."}
 
 Contexto adicional:
 ${contextText || "Sem contexto adicional."}
@@ -226,18 +566,32 @@ ${contextText || "Sem contexto adicional."}
       content: [
         { type: "input_text", text: userText },
         ...visionInputs,
+        ...documentInputs,
       ],
     },
   ];
 }
 
+function extractResponseText(data) {
+  if (data.output_text) return data.output_text;
+
+  try {
+    return (data.output || [])
+      .flatMap((item) => item.content || [])
+      .map((part) => part.text || "")
+      .join("\n")
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
 async function openaiReply({ conversationId, userText, contextText }) {
   const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-  if (!apiKey) return "Configure OPENAI_API_KEY no Render.";
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  if (!apiKey) return "Configure OPENAI_API_KEY no servidor para usar a OpenAI.";
 
   const input = await buildOpenAIInput({ conversationId, userText, contextText });
-
   const resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -247,29 +601,18 @@ async function openaiReply({ conversationId, userText, contextText }) {
     body: JSON.stringify({
       model,
       input,
-      tools: [
-        { type: "web_search_preview" }
-      ]
+      tools: buildOpenAITools(),
     }),
   });
 
   if (!resp.ok) {
-    const t = await resp.text();
-    console.log("OpenAI error:", resp.status, t);
+    const body = await resp.text();
+    console.log("OpenAI error:", resp.status, body);
     return "Erro ao consultar a OpenAI.";
   }
 
   const data = await resp.json();
-  if (data.output_text) return data.output_text;
-
-  try {
-    const out = (data.output || [])
-      .map((o) => (o.content || []).map((c) => c.text || "").join(""))
-      .join("\n");
-    return out || "Sem resposta da OpenAI.";
-  } catch {
-    return "Erro ao processar resposta da OpenAI.";
-  }
+  return extractResponseText(data) || "Sem resposta da OpenAI.";
 }
 
 const app = express();
@@ -282,7 +625,9 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-app.get("/api/health", (req, res) => res.json({ ok: true }));
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID) });
+});
 
 app.post("/api/login", async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
@@ -306,13 +651,13 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.post("/api/logout", requireAuth(JWT_SECRET), async (req, res) => {
-  res.clearCookie("session");
+  clearSessionCookie(req, res);
   await logEvent(req.user.sub, "logout", {});
   res.json({ ok: true });
 });
 
 app.get("/logout", (req, res) => {
-  res.clearCookie("session");
+  clearSessionCookie(req, res);
   res.redirect("/login.html");
 });
 
@@ -333,12 +678,12 @@ app.post("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
   const requested = req.body?.mode === "empresa" ? "empresa" : "geral";
   const mode = req.user.role === "admin" ? requested : "geral";
 
-  const r = await run(
+  const created = await run(
     "INSERT INTO conversations (user_id, title, mode) VALUES (?, ?, ?)",
     [req.user.sub, title, mode]
   );
 
-  res.json({ conversation_id: r.lastID });
+  res.json({ conversation_id: created.lastID });
 });
 
 app.patch("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) => {
@@ -364,21 +709,16 @@ app.delete("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) =
   if (!conv) return res.status(404).json({ error: "not_found" });
 
   const files = await all("SELECT stored_name FROM files WHERE conversation_id=?", [id]);
-  for (const f of files) {
-    try {
-      const full = path.join(uploadsDir, f.stored_name);
-      if (fs.existsSync(full)) fs.unlinkSync(full);
-    } catch {}
-  }
+  await deleteStoredFiles(files.map((file) => file.stored_name));
 
   await run("DELETE FROM messages WHERE conversation_id=?", [id]);
   await run("DELETE FROM files WHERE conversation_id=?", [id]);
+  await run("DELETE FROM conversation_memories WHERE conversation_id=?", [id]);
   await run("DELETE FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
 
   await logEvent(req.user.sub, "delete_conversation", { conversation_id: id });
   res.json({ ok: true });
 });
-
 app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, res) => {
   const id = Number(req.params.id);
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
@@ -389,85 +729,23 @@ app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, 
     [id]
   );
 
-  const safeJson = (s) => {
-    try { return JSON.parse(s); } catch { return null; }
-  };
-
   res.json({
     conversation: conv,
-    messages: rows.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      created_at: m.created_at,
-      meta: m.meta_json ? safeJson(m.meta_json) : null,
+    messages: rows.map((row) => ({
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      created_at: row.created_at,
+      meta: row.meta_json ? safeJsonParse(row.meta_json) : null,
     })),
   });
 });
 
-app.post("/api/conversations/:id/files", requireAuth(JWT_SECRET), upload.single("file"), async (req, res) => {
-  const id = Number(req.params.id);
-  const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
-  if (!conv) return res.status(404).json({ error: "not_found" });
-
-  const f = req.file;
-  if (!f) return res.status(400).json({ error: "missing_file" });
-
-  const r = await run(
-    "INSERT INTO files (conversation_id, uploaded_by, original_name, stored_name, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
-    [id, req.user.sub, f.originalname, f.filename, f.mimetype || null, f.size || null]
-  );
-
-  const meta = {
-    type: "file",
-    file_id: r.lastID,
-    filename: f.originalname,
-    mimetype: f.mimetype || "",
-    size: f.size || 0,
-  };
-
-  await run(
-    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'user', '', ?)",
-    [id, JSON.stringify(meta)]
-  );
-
-  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-  res.json({ ok: true, file_id: r.lastID });
-});
-
-app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), async (req, res) => {
-  const id = Number(req.params.id);
-  const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
-  if (!conv) return res.status(404).json({ error: "not_found" });
-
-  const f = req.file;
-  if (!f) return res.status(400).json({ error: "missing_file" });
-
-  const r = await run(
-    "INSERT INTO files (conversation_id, uploaded_by, original_name, stored_name, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
-    [id, req.user.sub, f.originalname, f.filename, f.mimetype || null, f.size || null]
-  );
-
-  const meta = {
-    type: "file",
-    file_id: r.lastID,
-    filename: f.originalname,
-    mimetype: f.mimetype || "",
-    size: f.size || 0,
-  };
-
-  await run(
-    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'user', '', ?)",
-    [id, JSON.stringify(meta)]
-  );
-
-  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-  res.json({ ok: true, file_id: r.lastID });
-});
+app.post("/api/conversations/:id/files", requireAuth(JWT_SECRET), upload.single("file"), handleConversationUpload);
+app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), handleConversationUpload);
 
 app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => {
   const id = Number(req.params.id);
-
   const file = await get(
     `SELECT f.*, c.user_id AS owner_user_id
        FROM files f
@@ -504,76 +782,76 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     [id, text]
   );
 
-  const apiKey = process.env.OPENAI_API_KEY || "";
-  const gen = apiKey ? await generateArtifact({ apiKey, prompt: text, outDir: uploadsDir }).catch((e) => {
-    console.log("Erro geração artefato:", e?.message || e);
+  const artifact = await generateArtifact({
+    apiKey: process.env.OPENAI_API_KEY || "",
+    prompt: text,
+    outDir: uploadsDir,
+  }).catch((err) => {
+    console.log("Erro na geracao de artefato:", err?.message || err);
     return null;
-  }) : null;
+  });
 
-  if (gen) {
-    const fakeStoredName = path.basename(gen.fullPath);
+  if (artifact) {
+    const stat = fs.statSync(artifact.fullPath);
+    const saved = await createFileMessage({
+      conversationId: id,
+      uploadedBy: req.user.sub,
+      originalName: artifact.filename,
+      storedName: path.basename(artifact.fullPath),
+      mimeType: artifact.mimeType,
+      sizeBytes: stat.size,
+      role: "assistant",
+      content: artifact.reply,
+    });
 
-    const fr = await run(
-      "INSERT INTO files (conversation_id, uploaded_by, original_name, stored_name, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
-      [id, req.user.sub, gen.filename, fakeStoredName, gen.mimeType, fs.statSync(gen.fullPath).size]
-    );
-
-    const meta = {
-      type: "file",
-      file_id: fr.lastID,
-      filename: gen.filename,
-      mimetype: gen.mimeType,
-      size: fs.statSync(gen.fullPath).size,
-    };
-
-    await run(
-      "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
-      [id, gen.reply, JSON.stringify(meta)]
-    );
-
-    await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-
-    return res.json({ reply: gen.reply });
+    await updateConversationMemory(id, text, artifact.reply);
+    return res.json({ reply: artifact.reply, meta: saved.meta });
   }
 
   let webContext = "";
   try {
     webContext = await searchWeb(text);
-  } catch (e) {
-    console.log("Erro busca web:", e?.message || e);
+  } catch (err) {
+    console.log("Erro busca web:", err?.message || err);
   }
 
   const fileContext = await getConversationFilesContext(id);
-
-  const context = `
+  const knowledgeContext = await buildKnowledgeContext(text);
+  const contextText = `
 Data atual no Brasil:
 ${nowBrazil()}
+
+Memoria interna da empresa:
+${knowledgeContext || "Sem resultados relevantes da base interna."}
 
 Documentos e imagens da conversa:
 ${fileContext || "Nenhum anexo recente."}
 
 Contexto da internet:
 ${webContext || "Sem resultados externos relevantes."}
-`;
+`.trim();
 
   const reply = await openaiReply({
     conversationId: id,
     userText: text,
-    contextText: context,
+    contextText,
   });
 
   await run(
     "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'assistant', ?)",
     [id, reply]
   );
-
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
+  await updateConversationMemory(id, text, reply);
 
   res.json({ reply });
 });
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const users = await all("SELECT id, name, email, role, created_at FROM users ORDER BY id DESC", []);
+  const users = await all(
+    "SELECT id, name, email, role, created_at FROM users ORDER BY id DESC",
+    []
+  );
   res.json({ users });
 });
 
@@ -591,35 +869,123 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   if (existing) return res.status(409).json({ error: "email_already_exists" });
 
   const hash = await bcrypt.hash(password, 10);
-  const r = await run(
+  const created = await run(
     "INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)",
     [email, name, hash, role]
   );
 
-  await logEvent(req.user.sub, "admin_create_user", { user_id: r.lastID, email, role });
-  res.json({ ok: true, user_id: r.lastID });
+  await logEvent(req.user.sub, "admin_create_user", { user_id: created.lastID, email, role });
+  res.json({ ok: true, user_id: created.lastID });
 });
 
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const id = Number(req.params.id);
-
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "invalid_id" });
   if (id === req.user.sub) return res.status(400).json({ error: "cannot_delete_self" });
 
   const user = await get("SELECT id, email FROM users WHERE id=?", [id]);
   if (!user) return res.status(404).json({ error: "not_found" });
-
   if (String(user.email).toLowerCase() === ADMIN_EMAIL) {
     return res.status(400).json({ error: "cannot_delete_main_admin" });
   }
 
+  const files = await all(
+    "SELECT stored_name FROM files WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)",
+    [id]
+  );
+  await deleteStoredFiles(files.map((file) => file.stored_name));
+
   await run("DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
   await run("DELETE FROM files WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
+  await run("DELETE FROM conversation_memories WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
   await run("DELETE FROM conversations WHERE user_id=?", [id]);
   await run("DELETE FROM users WHERE id=?", [id]);
 
   await logEvent(req.user.sub, "admin_delete_user", { user_id: id, email: user.email });
   res.json({ ok: true });
+});
+
+app.get("/api/admin/rag/status", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  res.json({
+    ok: true,
+    vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
+    openai_api_configured: Boolean(process.env.OPENAI_API_KEY),
+    vector_store_id: OPENAI_VECTOR_STORE_ID || null,
+    local_dir: knowledgeDir,
+  });
+});
+
+app.get("/api/admin/rag/files", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const files = await all(
+    `SELECT id, original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by, created_at
+       FROM knowledge_sources
+      ORDER BY datetime(created_at) DESC, id DESC
+      LIMIT 50`
+  );
+
+  res.json({ files });
+});
+app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"), upload.single("file"), async (req, res) => {
+  const uploaded = req.file;
+  if (!uploaded) return res.status(400).json({ error: "missing_file" });
+
+  const tempPath = uploaded.path || path.join(uploadsDir, uploaded.filename);
+  const safeOriginalName = sanitizeFilename(uploaded.originalname || `arquivo-${Date.now()}`);
+  const storedName = `${Date.now()}-${uploaded.filename}-${safeOriginalName}`;
+  const finalPath = path.join(knowledgeDir, storedName);
+
+  try {
+    fs.renameSync(tempPath, finalPath);
+
+    const relPath = path.relative(kbDir, finalPath).replace(/\\/g, "/");
+    const indexed = await upsertIndexedDocument({
+      sourcePath: finalPath,
+      relPath,
+      originalName: safeOriginalName,
+      mimeType: uploaded.mimetype || "",
+    });
+
+    let openaiFile = null;
+    let vectorStoreFile = null;
+
+    if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
+      openaiFile = await uploadFileToOpenAI(finalPath, safeOriginalName, process.env.OPENAI_API_KEY);
+      vectorStoreFile = await attachFileToVectorStore(
+        openaiFile.id,
+        OPENAI_VECTOR_STORE_ID,
+        process.env.OPENAI_API_KEY
+      );
+    }
+
+    const record = await run(
+      "INSERT INTO knowledge_sources (original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by) VALUES (?, ?, ?, ?, ?)",
+      [
+        safeOriginalName,
+        storedName,
+        openaiFile?.id || null,
+        vectorStoreFile?.id || null,
+        req.user.sub,
+      ]
+    );
+
+    await logEvent(req.user.sub, "admin_rag_upload", {
+      knowledge_source_id: record.lastID,
+      filename: safeOriginalName,
+      openai_file_id: openaiFile?.id || null,
+      vector_store_file_id: vectorStoreFile?.id || null,
+    });
+
+    res.json({
+      ok: true,
+      knowledge_source_id: record.lastID,
+      local_indexed: Boolean(indexed),
+      openai_file_id: openaiFile?.id || null,
+      vector_store_file_id: vectorStoreFile?.id || null,
+    });
+  } catch (err) {
+    console.log("Erro no upload RAG:", err?.message || err);
+    return res.status(500).json({ error: err?.message || "rag_upload_failed" });
+  }
 });
 
 const publicDir = path.join(__dirname, "public");
@@ -648,3 +1014,4 @@ ensureAdmin().finally(() => {
     console.log(`Login: ${BASE_URL}/login.html`);
   });
 });
+

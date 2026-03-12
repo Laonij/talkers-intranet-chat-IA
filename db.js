@@ -1,10 +1,14 @@
-const fs = require("fs");
+﻿const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 
+const renderDiskCandidates = ["/var/data", "/data"];
+const detectedRenderDiskDir = renderDiskCandidates.find((candidate) => fs.existsSync(candidate));
+const defaultDataDir = detectedRenderDiskDir || path.join(__dirname, "data");
+
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.join(__dirname, "data");
+  : defaultDataDir;
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -92,13 +96,34 @@ function migrate() {
     `);
 
     db.run(`
+      CREATE TABLE IF NOT EXISTS conversation_memories (
+        conversation_id INTEGER PRIMARY KEY,
+        summary_text TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS knowledge_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        original_name TEXT NOT NULL,
+        stored_name TEXT NOT NULL,
+        openai_file_id TEXT,
+        vector_store_file_id TEXT,
+        uploaded_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    db.run(`
       CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
       USING fts5(extracted_text, rel_path, content='documents', content_rowid='id');
     `);
 
-    db.run(`CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);`);
+    db.run("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);");
+    db.run("CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);");
+    db.run("CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);");
+    db.run("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
 
     db.run(`
       CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
@@ -147,4 +172,15 @@ function run(sql, params = []) {
   });
 }
 
-module.exports = { db, migrate, logEvent, get, all, run, uploadsDir, kbDir, DATA_DIR };
+module.exports = {
+  DATA_DIR,
+  all,
+  db,
+  get,
+  kbDir,
+  logEvent,
+  migrate,
+  run,
+  uploadsDir,
+};
+

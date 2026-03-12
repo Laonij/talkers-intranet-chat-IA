@@ -8,20 +8,20 @@
 </head>
 <body>
   <div class="center" style="align-items:flex-start;">
-    <div class="card" style="width:min(980px, 100%);">
-      <div class="row" style="justify-content:space-between; gap:12px; align-items:center;">
+    <div class="card" style="width:min(1120px, 100%); display:flex; flex-direction:column; gap:22px;">
+      <div class="row" style="justify-content:space-between; gap:12px; align-items:center; display:flex;">
         <div style="display:flex; align-items:center; gap:12px;">
           <img class="logo-sm" src="/logo.png" alt="Logo" />
           <div>
             <div style="font-size:18px; font-weight:800;">Admin</div>
-            <div class="muted small">Criar e remover usuários</div>
+            <div class="muted small">Usuarios e base de conhecimento</div>
           </div>
         </div>
         <a class="btn" href="/index.html">Voltar</a>
       </div>
 
-      <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:16px;">
-        <div style="font-weight:800; margin-bottom:10px;">Criar usuário</div>
+      <div style="border-top:1px solid var(--border); padding-top:16px; display:flex; flex-direction:column; gap:16px;">
+        <div style="font-weight:800;">Criar usuario</div>
         <div class="row">
           <div>
             <label>Nome</label>
@@ -40,42 +40,82 @@
           <div>
             <label>Tipo</label>
             <select id="role">
-              <option value="user">Usuário</option>
+              <option value="user">Usuario</option>
               <option value="admin">Admin</option>
             </select>
           </div>
         </div>
-        <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px;">
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
           <button class="btn primary" id="btnCreate">Criar</button>
         </div>
-        <div id="msg" class="small" style="margin-top:10px;"></div>
       </div>
 
-      <div style="margin-top:18px;">
-        <div style="font-weight:800; margin-bottom:10px;">Usuários</div>
-        <table class="table" id="usersTable">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Nome</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th style="text-align:right;">Ações</th>
-            </tr>
-          </thead>
-          <tbody id="usersBody"></tbody>
-        </table>
+      <div style="display:grid; grid-template-columns:1.15fr .85fr; gap:18px; align-items:start;">
+        <div style="display:flex; flex-direction:column; gap:18px; min-width:0;">
+          <div>
+            <div style="font-weight:800; margin-bottom:10px;">Usuarios</div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nome</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th style="text-align:right;">Acoes</th>
+                </tr>
+              </thead>
+              <tbody id="usersBody"></tbody>
+            </table>
+          </div>
+
+          <div>
+            <div style="font-weight:800; margin-bottom:10px;">Arquivos da base interna</div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Arquivo</th>
+                  <th>Vector Store</th>
+                  <th>Criado em</th>
+                </tr>
+              </thead>
+              <tbody id="ragFilesBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:18px;">
+          <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
+            <div style="font-weight:800; margin-bottom:10px;">Status do RAG</div>
+            <div class="small muted" id="ragStatus">Carregando...</div>
+          </div>
+
+          <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
+            <div style="font-weight:800; margin-bottom:10px;">Enviar para a base da empresa</div>
+            <div class="small muted" style="margin-bottom:12px;">O arquivo vai para o armazenamento local do projeto e, se configurado, tambem para a Vector Store da OpenAI.</div>
+            <input id="ragFile" type="file" />
+            <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:10px;">
+              <button class="btn primary" id="btnUploadRag">Enviar arquivo</button>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <div id="msg" class="small"></div>
     </div>
   </div>
 
 <script>
 async function api(path, opts = {}) {
+  const headers = opts.body instanceof FormData
+    ? (opts.headers || {})
+    : { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     credentials: 'include',
-    ...opts
+    headers,
+    ...opts,
   });
+
   const txt = await res.text();
   let json = null;
   try { json = txt ? JSON.parse(txt) : null; } catch {}
@@ -83,51 +123,51 @@ async function api(path, opts = {}) {
   return json;
 }
 
-function setMsg(text, isError=false){
+function setMsg(text, isError = false) {
   const el = document.getElementById('msg');
   el.className = isError ? 'error' : 'muted small';
   el.textContent = text || '';
 }
 
-async function loadUsers(){
+async function loadUsers() {
   const { users } = await api('/api/admin/users');
   const body = document.getElementById('usersBody');
   body.innerHTML = '';
 
-  for (const u of users){
+  for (const user of users) {
     const tr = document.createElement('tr');
 
-    const tdId = document.createElement('td'); tdId.textContent = u.id;
-    const tdName = document.createElement('td'); tdName.textContent = u.name;
-    const tdEmail = document.createElement('td'); tdEmail.textContent = u.email;
+    const tdId = document.createElement('td');
+    tdId.textContent = user.id;
+
+    const tdName = document.createElement('td');
+    tdName.textContent = user.name;
+
+    const tdEmail = document.createElement('td');
+    tdEmail.textContent = user.email;
 
     const tdRole = document.createElement('td');
     const badge = document.createElement('span');
-    badge.className = 'badge ' + (u.role === 'admin' ? 'admin' : '');
-    badge.textContent = u.role;
+    badge.className = 'badge ' + (user.role === 'admin' ? 'admin' : '');
+    badge.textContent = user.role;
     tdRole.appendChild(badge);
 
     const tdActions = document.createElement('td');
     tdActions.style.textAlign = 'right';
-    const wrap = document.createElement('div');
-    wrap.className = 'actions';
-
     const btnDel = document.createElement('button');
     btnDel.className = 'btn danger';
     btnDel.textContent = 'Remover';
     btnDel.onclick = async () => {
-      if (!confirm(`Remover usuário ${u.email}?`)) return;
-      try{
-        await api('/api/admin/users/' + u.id, { method:'DELETE' });
-        setMsg('Usuário removido.');
+      if (!confirm(`Remover usuario ${user.email}?`)) return;
+      try {
+        await api('/api/admin/users/' + user.id, { method: 'DELETE' });
+        setMsg('Usuario removido.');
         await loadUsers();
-      }catch(e){
-        setMsg('Erro: ' + e.message, true);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
       }
     };
-
-    wrap.appendChild(btnDel);
-    tdActions.appendChild(wrap);
+    tdActions.appendChild(btnDel);
 
     tr.appendChild(tdId);
     tr.appendChild(tdName);
@@ -138,16 +178,48 @@ async function loadUsers(){
   }
 }
 
+async function loadRagStatus() {
+  const status = await api('/api/admin/rag/status');
+  const el = document.getElementById('ragStatus');
+  el.textContent = status.vector_store_configured
+    ? `Vector Store ativa (${status.vector_store_id}). Upload vai para o indice local e para a OpenAI.`
+    : 'Vector Store nao configurada. Upload vai alimentar somente o indice local.';
+}
+
+async function loadRagFiles() {
+  const { files } = await api('/api/admin/rag/files');
+  const body = document.getElementById('ragFilesBody');
+  body.innerHTML = '';
+
+  for (const file of files) {
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td');
+    tdName.textContent = file.original_name;
+
+    const tdStore = document.createElement('td');
+    tdStore.textContent = file.vector_store_file_id ? 'Sincronizado' : 'Somente local';
+
+    const tdDate = document.createElement('td');
+    tdDate.textContent = file.created_at || '';
+
+    tr.appendChild(tdName);
+    tr.appendChild(tdStore);
+    tr.appendChild(tdDate);
+    body.appendChild(tr);
+  }
+}
+
 document.getElementById('btnCreate').onclick = async () => {
   setMsg('');
-  try{
+  try {
     await api('/api/admin/users', {
       method: 'POST',
       body: JSON.stringify({
         name: document.getElementById('name').value,
         email: document.getElementById('email').value,
         password: document.getElementById('password').value,
-        role: document.getElementById('role').value
+        role: document.getElementById('role').value,
       })
     });
 
@@ -156,14 +228,42 @@ document.getElementById('btnCreate').onclick = async () => {
     document.getElementById('password').value = '';
     document.getElementById('role').value = 'user';
 
-    setMsg('Usuário criado.');
+    setMsg('Usuario criado.');
     await loadUsers();
-  }catch(e){
-    setMsg('Erro: ' + e.message, true);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
   }
 };
 
-loadUsers().catch(e => setMsg('Erro: ' + e.message, true));
+document.getElementById('btnUploadRag').onclick = async () => {
+  setMsg('');
+  const input = document.getElementById('ragFile');
+  const file = input.files?.[0];
+  if (!file) {
+    setMsg('Selecione um arquivo para enviar.', true);
+    return;
+  }
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try {
+    await api('/api/admin/rag/upload', {
+      method: 'POST',
+      body: form,
+    });
+
+    input.value = '';
+    setMsg('Arquivo enviado para a base interna.');
+    await loadRagStatus();
+    await loadRagFiles();
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
+  .catch((err) => setMsg('Erro: ' + err.message, true));
 </script>
 </body>
 </html>

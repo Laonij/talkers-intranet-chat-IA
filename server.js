@@ -505,6 +505,40 @@ async function getRecentVisionInputs(conversationId, limit = 3) {
   }
 }
 
+async function getRecentImageReferences(conversationId, limit = 4) {
+  try {
+    const files = await all(
+      `SELECT original_name, stored_name, mime_type, size_bytes
+         FROM files
+        WHERE conversation_id=?
+        ORDER BY id DESC
+        LIMIT ?`,
+      [conversationId, limit * 3]
+    );
+
+    const out = [];
+    for (const file of files) {
+      if (out.length >= limit) break;
+      if (!mimeLooksLikeImage(file.mime_type)) continue;
+
+      const fullPath = path.join(uploadsDir, file.stored_name);
+      if (!fs.existsSync(fullPath)) continue;
+
+      out.push({
+        fullPath,
+        originalName: file.original_name,
+        mimeType: file.mime_type || "image/png",
+        sizeBytes: Number(file.size_bytes || 0),
+      });
+    }
+
+    return out;
+  } catch (err) {
+    console.log("Erro ao preparar referencias de imagem:", err?.message || err);
+    return [];
+  }
+}
+
 async function getRecentDocumentInputs(conversationId, limit = 2) {
   try {
     const rows = await all(
@@ -591,6 +625,7 @@ Regras:
 - Use a internet apenas para complementar, atualizar ou comparar informacoes quando isso realmente ajudar a resposta.
 - Se houver conflito entre a base interna e fontes externas em temas da empresa, informe o conflito e priorize a base interna.
 - Se houver arquivos enviados, use o texto extraido e, quando disponivel, os arquivos brutos incluidos nesta chamada.
+- Se o usuario pedir para ajustar, corrigir ou editar uma imagem da conversa, gere uma nova versao editada quando houver imagem elegivel; se faltar imagem valida, peca um anexo PNG, JPG ou WEBP.
 - Se o usuario pedir geracao de arquivo, entregue o arquivo e explique em uma frase o que foi gerado.
 - Se nao houver base suficiente, diga isso claramente e peca complemento.
 
@@ -896,16 +931,28 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     [id, text]
   );
 
+  const recentImageReferences = await getRecentImageReferences(id, 4);
   const artifact = await generateArtifact({
     apiKey: process.env.OPENAI_API_KEY || "",
     prompt: text,
     outDir: uploadsDir,
+    referenceImages: recentImageReferences,
   }).catch((err) => {
     console.log("Erro na geracao de artefato:", err?.message || err);
     return null;
   });
 
   if (artifact) {
+    if (!artifact.fullPath) {
+      await run(
+        "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'assistant', ?)",
+        [id, artifact.reply]
+      );
+      await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
+      await updateConversationMemory(id, text, artifact.reply);
+      return res.json({ reply: artifact.reply });
+    }
+
     const stat = fs.statSync(artifact.fullPath);
     const saved = await createFileMessage({
       conversationId: id,
@@ -921,7 +968,6 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     await updateConversationMemory(id, text, artifact.reply);
     return res.json({ reply: artifact.reply, meta: saved.meta });
   }
-
   const fileContext = await getConversationFilesContext(id);
   const knowledgeBundle = await buildKnowledgeBundle(text);
   const shouldUseWebComplement = shouldFetchWebContext(text, knowledgeBundle);
@@ -1179,6 +1225,9 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
 
 
 

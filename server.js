@@ -13,6 +13,7 @@ const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact } = require("./lib/generate");
 const { ocrImage } = require("./lib/ocr");
+const { isAudioFile, transcribeAudio } = require("./lib/audio");
 const {
   attachFileToVectorStore,
   buildOpenAIInputFilePart,
@@ -437,6 +438,27 @@ async function getConversationFilesContext(conversationId) {
     for (const file of files) {
       const filePath = path.join(uploadsDir, file.stored_name);
       if (!fs.existsSync(filePath)) continue;
+
+      if (isAudioFile(file.original_name, file.mime_type)) {
+        try {
+          const transcript = await transcribeAudio(filePath, file.original_name, file.mime_type);
+          if (transcript && transcript.trim()) {
+            blocks.push(
+              `[Audio enviado: ${file.original_name} | ${file.mime_type || "audio"}]\nTranscricao detectada:\n${transcript.slice(0, 9000)}`
+            );
+          } else {
+            blocks.push(
+              `[Audio enviado: ${file.original_name} | ${file.mime_type || "audio"}]\nO audio foi anexado a conversa, mas nao foi possivel transcreve-lo localmente.`
+            );
+          }
+        } catch (err) {
+          console.log("Erro ao transcrever audio:", err?.message || err);
+          blocks.push(
+            `[Audio enviado: ${file.original_name} | ${file.mime_type || "audio"}]\nO audio foi anexado a conversa, mas houve falha ao tentar transcreve-lo.`
+          );
+        }
+        continue;
+      }
 
       const extracted = await extractText(filePath, file.original_name, file.mime_type);
       if (extracted && extracted.trim()) {
@@ -987,30 +1009,8 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
 });
 
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "invalid_id" });
-  if (id === req.user.sub) return res.status(400).json({ error: "cannot_delete_self" });
-
-  const user = await get("SELECT id, email FROM users WHERE id=?", [id]);
-  if (!user) return res.status(404).json({ error: "not_found" });
-  if (String(user.email).toLowerCase() === ADMIN_EMAIL) {
-    return res.status(400).json({ error: "cannot_delete_main_admin" });
-  }
-
-  const files = await all(
-    "SELECT stored_name FROM files WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)",
-    [id]
-  );
-  await deleteStoredFiles(files.map((file) => file.stored_name));
-
-  await run("DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
-  await run("DELETE FROM files WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
-  await run("DELETE FROM conversation_memories WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", [id]);
-  await run("DELETE FROM conversations WHERE user_id=?", [id]);
-  await run("DELETE FROM users WHERE id=?", [id]);
-
-  await logEvent(req.user.sub, "admin_delete_user", { user_id: id, email: user.email });
-  res.json({ ok: true });
+  await logEvent(req.user.sub, "admin_delete_user_blocked", { target_user_id: Number(req.params.id) || null });
+  res.status(403).json({ error: "user_deletion_disabled" });
 });
 
 app.get("/api/admin/rag/status", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -1122,5 +1122,7 @@ ensureAdmin().finally(() => {
     console.log(`Login: ${BASE_URL}/login.html`);
   });
 });
+
+
 
 

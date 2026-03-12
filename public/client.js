@@ -1,8 +1,19 @@
 ﻿const el = (id) => document.getElementById(id);
 
+const QUICK_PROMPTS = [
+  { emoji: "📄", label: "Gerar documento", prompt: "Gere um documento profissional sobre este tema:" },
+  { emoji: "📊", label: "Criar planilha", prompt: "Crie uma planilha organizada com os principais campos para:" },
+  { emoji: "🎧", label: "Transcrever audio", prompt: "Analise e transcreva o audio enviado, depois faca um resumo objetivo." },
+  { emoji: "🖼️", label: "Gerar imagem", prompt: "Gere uma imagem realista e profissional de:" },
+  { emoji: "🎓", label: "Comunicado escolar", prompt: "Crie um comunicado escolar claro e acolhedor sobre:" },
+];
+
 let me = null;
 let conversations = [];
 let currentConvId = null;
+let mediaRecorder = null;
+let recordingStream = null;
+let recordingChunks = [];
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -39,6 +50,60 @@ function formatDate(iso) {
   }
 }
 
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function getConversationEmoji(title) {
+  const text = normalizeText(title);
+  if (!text) return "💬";
+  if (/(planilha|tabela|excel|relatorio|relatorio|dados)/.test(text)) return "📊";
+  if (/(pdf|doc|docx|documento|contrato|texto|comunicado)/.test(text)) return "📄";
+  if (/(imagem|foto|banner|arte|logo)/.test(text)) return "🖼️";
+  if (/(audio|voz|locucao|narracao|transcri|gravacao)/.test(text)) return "🎧";
+  if (/(codigo|site|api|script|planilha automatica)/.test(text)) return "💻";
+  if (/(aluno|escola|matricula|turma|pedagogico)/.test(text)) return "🎓";
+  if (/(financeiro|orcamento|boleto|pagamento)/.test(text)) return "💰";
+  return "💬";
+}
+
+function getFileEmoji(meta) {
+  const mime = String(meta?.mimetype || "").toLowerCase();
+  const name = normalizeText(meta?.filename || "");
+  if (mime.startsWith("image/")) return "🖼️";
+  if (mime.startsWith("audio/")) return "🎧";
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return "📕";
+  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "📊";
+  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "📄";
+  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "📽️";
+  if (mime.includes("json") || mime.includes("javascript") || /\.(js|ts|py|java|php|html|css)$/.test(name)) return "💻";
+  return "📎";
+}
+
+function getFileKindLabel(meta) {
+  const mime = String(meta?.mimetype || "").toLowerCase();
+  const name = normalizeText(meta?.filename || "");
+  if (mime.startsWith("image/")) return "Imagem";
+  if (mime.startsWith("audio/")) return "Audio";
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return "PDF";
+  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "Planilha";
+  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "Documento";
+  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "Apresentacao";
+  if (mime.includes("zip")) return "Compactado";
+  return "Arquivo";
+}
+
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1).replace('.', ',')} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`;
+}
+
 function updateConversationTitle() {
   const titleBox = el("convTitle");
   if (!titleBox) return;
@@ -62,6 +127,7 @@ function renderUser() {
 function clearChat() {
   const chat = el("chat");
   if (chat) chat.innerHTML = "";
+  updateQuickPromptsVisibility();
 }
 
 function scrollChat() {
@@ -159,42 +225,27 @@ function renderMarkdown(markdown) {
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    const text = paragraph.join("\n").trim();
-    if (text) {
-      blocks.push(`<p>${renderInlineMarkdown(text).replace(/\n/g, "<br />")}</p>`);
-    }
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
     paragraph = [];
   };
 
   const flushList = () => {
     if (!listItems.length || !listType) return;
-    const tag = listType;
-    const items = listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("");
-    blocks.push(`<${tag}>${items}</${tag}>`);
-    listType = null;
+    const tag = listType === "ol" ? "ol" : "ul";
+    blocks.push(`<${tag}>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</${tag}>`);
     listItems = [];
+    listType = null;
   };
 
   const flushQuote = () => {
     if (!quoteLines.length) return;
-    const quoteHtml = quoteLines
-      .map((line) => `<p>${renderInlineMarkdown(line).replace(/\n/g, "<br />")}</p>`)
-      .join("");
-    blocks.push(`<blockquote>${quoteHtml}</blockquote>`);
+    blocks.push(`<blockquote>${quoteLines.map((line) => `<p>${renderInlineMarkdown(line)}</p>`).join("")}</blockquote>`);
     quoteLines = [];
   };
 
   for (const rawLine of value.split("\n")) {
-    const line = rawLine.replace(/\t/g, "    ");
+    const line = rawLine.trimEnd();
     const trimmed = line.trim();
-
-    if (/^%%TOKEN_\d+%%$/.test(trimmed)) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      blocks.push(trimmed);
-      continue;
-    }
 
     if (!trimmed) {
       flushParagraph();
@@ -203,59 +254,53 @@ function renderMarkdown(markdown) {
       continue;
     }
 
-    if (quoteLines.length && !/^>\s?/.test(trimmed)) {
-      flushQuote();
-    }
-
-    const hrMatch = trimmed.match(/^(-{3,}|\*{3,}|_{3,})$/);
-    if (hrMatch) {
+    if (/^#{1,6}\s/.test(trimmed)) {
       flushParagraph();
       flushList();
       flushQuote();
-      blocks.push("<hr />");
+      const level = trimmed.match(/^#+/)[0].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(trimmed.slice(level).trim())}</h${level}>`);
       continue;
     }
 
-    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
-    if (headingMatch) {
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       flushParagraph();
       flushList();
       flushQuote();
-      const level = headingMatch[1].length;
-      blocks.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      blocks.push("<hr>");
       continue;
     }
 
-    const quoteMatch = trimmed.match(/^>\s?(.*)$/);
-    if (quoteMatch) {
+    if (/^>\s?/.test(trimmed)) {
       flushParagraph();
       flushList();
-      quoteLines.push(quoteMatch[1]);
+      quoteLines.push(trimmed.replace(/^>\s?/, ""));
       continue;
     }
 
-    const ulMatch = trimmed.match(/^[-*+]\s+(.*)$/);
-    if (ulMatch) {
-      flushParagraph();
-      flushQuote();
-      if (listType && listType !== "ul") flushList();
-      listType = "ul";
-      listItems.push(ulMatch[1]);
-      continue;
-    }
-
-    const olMatch = trimmed.match(/^\d+\.\s+(.*)$/);
-    if (olMatch) {
+    const orderedMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+    if (orderedMatch) {
       flushParagraph();
       flushQuote();
       if (listType && listType !== "ol") flushList();
       listType = "ol";
-      listItems.push(olMatch[1]);
+      listItems.push(orderedMatch[2]);
       continue;
     }
 
-    if (listItems.length) flushList();
-    paragraph.push(line);
+    const unorderedMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      flushQuote();
+      if (listType && listType !== "ul") flushList();
+      listType = "ul";
+      listItems.push(unorderedMatch[1]);
+      continue;
+    }
+
+    flushList();
+    flushQuote();
+    paragraph.push(trimmed);
   }
 
   flushParagraph();
@@ -266,16 +311,12 @@ function renderMarkdown(markdown) {
 }
 
 function describeSource(source) {
-  switch (source?.type) {
-    case "knowledge_base":
-      return "Base interna";
-    case "file_search":
-      return "File Search";
-    case "web":
-      return "Web";
-    default:
-      return "Fonte";
-  }
+  const pieces = [];
+  if (source?.type === "file_search") pieces.push("Base interna");
+  if (source?.type === "web") pieces.push("Web");
+  if (source?.url) pieces.push(source.url.replace(/^https?:\/\//, ""));
+  if (source?.file_id) pieces.push(source.file_id);
+  return pieces.join(" - ");
 }
 
 function appendTextContent(bubble, role, content) {
@@ -311,41 +352,79 @@ function appendTextContent(bubble, role, content) {
 function appendFileCard(bubble, meta) {
   if (!meta || meta.type !== "file" || !meta.file_id) return;
 
-  const isImg = (meta.mimetype || "").startsWith("image/");
+  const mime = String(meta.mimetype || "").toLowerCase();
+  const isImg = mime.startsWith("image/");
+  const isAudio = mime.startsWith("audio/");
   const url = `/api/files/${meta.file_id}/download`;
 
   const card = document.createElement("div");
-  card.className = "file-card";
+  card.className = `file-card${isImg ? " is-image" : ""}${isAudio ? " is-audio" : ""}`;
+
+  const preview = document.createElement("div");
+  preview.className = "file-preview";
 
   if (isImg) {
     const img = document.createElement("img");
     img.className = "file-thumb";
     img.src = url;
     img.alt = meta.filename || "imagem";
-    card.appendChild(img);
+    preview.appendChild(img);
   } else {
-    const ic = document.createElement("div");
-    ic.className = "file-ic";
-    ic.textContent = "ARQ";
-    card.appendChild(ic);
+    const badge = document.createElement("div");
+    badge.className = "file-ic";
+    badge.textContent = getFileEmoji(meta);
+    preview.appendChild(badge);
   }
 
-  const textWrap = document.createElement("div");
+  const body = document.createElement("div");
+  body.className = "file-body";
 
-  const link = document.createElement("a");
-  link.href = url;
-  link.target = "_blank";
-  link.rel = "noopener";
-  link.textContent = meta.filename || "arquivo";
+  const top = document.createElement("div");
+  top.className = "file-top";
 
-  const mime = document.createElement("div");
-  mime.style.fontSize = "11px";
-  mime.style.opacity = ".68";
-  mime.textContent = meta.mimetype || "";
+  const typePill = document.createElement("div");
+  typePill.className = "file-pill";
+  typePill.textContent = getFileKindLabel(meta);
 
-  textWrap.appendChild(link);
-  textWrap.appendChild(mime);
-  card.appendChild(textWrap);
+  const fileName = document.createElement("a");
+  fileName.className = "file-name";
+  fileName.href = url;
+  fileName.target = "_blank";
+  fileName.rel = "noopener";
+  fileName.textContent = meta.filename || "arquivo";
+
+  const metaLine = document.createElement("div");
+  metaLine.className = "file-meta";
+  metaLine.textContent = [meta.mimetype || "", formatBytes(meta.size)].filter(Boolean).join(" - ");
+
+  const actions = document.createElement("div");
+  actions.className = "file-links";
+
+  const openLink = document.createElement("a");
+  openLink.href = url;
+  openLink.target = "_blank";
+  openLink.rel = "noopener";
+  openLink.textContent = isAudio ? "Ouvir / baixar" : isImg ? "Abrir imagem" : "Abrir arquivo";
+
+  actions.appendChild(openLink);
+
+  top.appendChild(typePill);
+  body.appendChild(top);
+  body.appendChild(fileName);
+  if (metaLine.textContent) body.appendChild(metaLine);
+
+  if (isAudio) {
+    const player = document.createElement("audio");
+    player.className = "file-audio";
+    player.controls = true;
+    player.preload = "none";
+    player.src = url;
+    body.appendChild(player);
+  }
+
+  body.appendChild(actions);
+  card.appendChild(preview);
+  card.appendChild(body);
   bubble.appendChild(card);
 }
 
@@ -399,6 +478,13 @@ function appendSources(bubble, meta) {
   bubble.appendChild(wrap);
 }
 
+function updateQuickPromptsVisibility() {
+  const wrap = el("quickPrompts");
+  const chat = el("chat");
+  if (!wrap || !chat) return;
+  wrap.style.display = chat.children.length ? "none" : "flex";
+}
+
 function addMessage(role, content, meta = null) {
   const chat = el("chat");
   if (!chat) return;
@@ -415,6 +501,7 @@ function addMessage(role, content, meta = null) {
 
   wrap.appendChild(bubble);
   chat.appendChild(wrap);
+  updateQuickPromptsVisibility();
 }
 
 function renderConversations() {
@@ -427,8 +514,12 @@ function renderConversations() {
     const item = document.createElement("div");
     item.className = "conv" + (c.id === currentConvId ? " active" : "");
 
+    const emoji = document.createElement("div");
+    emoji.className = "conv-emoji";
+    emoji.textContent = getConversationEmoji(c.title);
+
     const left = document.createElement("div");
-    left.style.flex = "1";
+    left.className = "conv-body";
 
     const title = document.createElement("div");
     title.className = "conv-title";
@@ -472,6 +563,7 @@ function renderConversations() {
     left.appendChild(title);
     left.appendChild(meta);
 
+    item.appendChild(emoji);
     item.appendChild(left);
     item.appendChild(del);
 
@@ -525,6 +617,7 @@ async function openConversation(id) {
   }
 
   scrollChat();
+  updateQuickPromptsVisibility();
 }
 
 async function sendMessage() {
@@ -544,6 +637,7 @@ async function sendMessage() {
   typing.className = "msg assistant";
   typing.innerHTML = '<div class="bubble"><div class="msg-text">Pensando...</div></div>';
   el("chat").appendChild(typing);
+  updateQuickPromptsVisibility();
   scrollChat();
 
   try {
@@ -585,6 +679,99 @@ async function uploadFiles(files) {
 
   await openConversation(convId);
   await loadConversations();
+}
+
+function setupQuickPrompts() {
+  const wrap = el("quickPrompts");
+  const msgEl = el("msg");
+  if (!wrap || !msgEl) return;
+
+  wrap.innerHTML = "";
+  for (const item of QUICK_PROMPTS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "prompt-chip";
+    button.innerHTML = `<span class="prompt-emoji">${item.emoji}</span><span>${item.label}</span>`;
+    button.onclick = () => {
+      msgEl.value = item.prompt;
+      msgEl.focus();
+      msgEl.setSelectionRange(msgEl.value.length, msgEl.value.length);
+    };
+    wrap.appendChild(button);
+  }
+
+  updateQuickPromptsVisibility();
+}
+
+function setRecordState(isRecording) {
+  const btn = el("btnRecord");
+  if (!btn) return;
+  btn.classList.toggle("recording", Boolean(isRecording));
+  btn.title = isRecording ? "Parar gravacao" : "Gravar audio";
+  btn.setAttribute("aria-label", btn.title);
+}
+
+function stopRecordingStream() {
+  if (!recordingStream) return;
+  for (const track of recordingStream.getTracks()) {
+    track.stop();
+  }
+  recordingStream = null;
+}
+
+async function setupRecorder() {
+  const btn = el("btnRecord");
+  if (!btn) return;
+
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    btn.style.display = "none";
+    return;
+  }
+
+  btn.onclick = async () => {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+      setRecordState(false);
+      return;
+    }
+
+    try {
+      recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingChunks = [];
+      const recorderMime = typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      mediaRecorder = recorderMime
+        ? new MediaRecorder(recordingStream, { mimeType: recorderMime })
+        : new MediaRecorder(recordingStream);
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        setRecordState(false);
+        const blob = new Blob(recordingChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        stopRecordingStream();
+
+        if (!blob.size) return;
+
+        const ext = (blob.type || "").includes("ogg") ? ".ogg" : ".webm";
+        const filename = `gravacao-${new Date().toISOString().replace(/[:.]/g, "-")}${ext}`;
+        const file = new File([blob], filename, { type: blob.type || "audio/webm" });
+        await uploadFiles([file]);
+      };
+
+      mediaRecorder.start();
+      setRecordState(true);
+    } catch (err) {
+      stopRecordingStream();
+      setRecordState(false);
+      alert("Nao foi possivel acessar o microfone: " + err.message);
+    }
+  };
 }
 
 function setupAttachments() {
@@ -636,6 +823,7 @@ async function init() {
   }
 
   renderUser();
+  setupQuickPrompts();
 
   const btnSend = el("btnSend");
   if (btnSend) {
@@ -670,6 +858,7 @@ async function init() {
   }
 
   setupAttachments();
+  await setupRecorder();
 
   await loadConversations();
 
@@ -682,3 +871,5 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
+
+

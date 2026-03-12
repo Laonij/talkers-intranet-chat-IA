@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-br">
 <head>
   <meta charset="utf-8" />
@@ -9,7 +9,7 @@
 <body>
   <div class="center" style="align-items:flex-start;">
     <div class="card" style="width:min(1120px, 100%); display:flex; flex-direction:column; gap:22px;">
-      <div class="row" style="justify-content:space-between; gap:12px; align-items:center; display:flex;">
+      <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
         <div style="display:flex; align-items:center; gap:12px;">
           <img class="logo-sm" src="/logo.png" alt="Logo" />
           <div>
@@ -21,7 +21,12 @@
       </div>
 
       <div style="border-top:1px solid var(--border); padding-top:16px; display:flex; flex-direction:column; gap:16px;">
-        <div style="font-weight:800;">Criar usuario</div>
+        <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:800;">Criar usuario</div>
+            <div class="small muted">Usuarios e historicos existentes sao preservados. A exclusao administrativa fica bloqueada.</div>
+          </div>
+        </div>
         <div class="row">
           <div>
             <label>Nome</label>
@@ -61,7 +66,7 @@
                   <th>Nome</th>
                   <th>Email</th>
                   <th>Role</th>
-                  <th style="text-align:right;">Acoes</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody id="usersBody"></tbody>
@@ -152,28 +157,15 @@ async function loadUsers() {
     badge.textContent = user.role;
     tdRole.appendChild(badge);
 
-    const tdActions = document.createElement('td');
-    tdActions.style.textAlign = 'right';
-    const btnDel = document.createElement('button');
-    btnDel.className = 'btn danger';
-    btnDel.textContent = 'Remover';
-    btnDel.onclick = async () => {
-      if (!confirm(`Remover usuario ${user.email}?`)) return;
-      try {
-        await api('/api/admin/users/' + user.id, { method: 'DELETE' });
-        setMsg('Usuario removido.');
-        await loadUsers();
-      } catch (err) {
-        setMsg('Erro: ' + err.message, true);
-      }
-    };
-    tdActions.appendChild(btnDel);
+    const tdStatus = document.createElement('td');
+    tdStatus.className = 'small muted';
+    tdStatus.textContent = 'Preservado';
 
     tr.appendChild(tdId);
     tr.appendChild(tdName);
     tr.appendChild(tdEmail);
     tr.appendChild(tdRole);
-    tr.appendChild(tdActions);
+    tr.appendChild(tdStatus);
     body.appendChild(tr);
   }
 }
@@ -193,34 +185,34 @@ async function loadRagFiles() {
 
   for (const file of files) {
     const tr = document.createElement('tr');
-
     const tdName = document.createElement('td');
     tdName.textContent = file.original_name;
-
     const tdStore = document.createElement('td');
     tdStore.textContent = file.vector_store_file_id ? 'Sincronizado' : 'Somente local';
-
-    const tdDate = document.createElement('td');
-    tdDate.textContent = file.created_at || '';
-
+    const tdCreated = document.createElement('td');
+    tdCreated.textContent = new Date(file.created_at).toLocaleString('pt-BR');
     tr.appendChild(tdName);
     tr.appendChild(tdStore);
-    tr.appendChild(tdDate);
+    tr.appendChild(tdCreated);
     body.appendChild(tr);
   }
 }
 
 document.getElementById('btnCreate').onclick = async () => {
-  setMsg('');
+  const name = document.getElementById('name').value.trim();
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const role = document.getElementById('role').value;
+
+  if (!name || !email || !password) {
+    setMsg('Preencha nome, email e senha.', true);
+    return;
+  }
+
   try {
     await api('/api/admin/users', {
       method: 'POST',
-      body: JSON.stringify({
-        name: document.getElementById('name').value,
-        email: document.getElementById('email').value,
-        password: document.getElementById('password').value,
-        role: document.getElementById('role').value,
-      })
+      body: JSON.stringify({ name, email, password, role }),
     });
 
     document.getElementById('name').value = '';
@@ -228,7 +220,7 @@ document.getElementById('btnCreate').onclick = async () => {
     document.getElementById('password').value = '';
     document.getElementById('role').value = 'user';
 
-    setMsg('Usuario criado.');
+    setMsg('Usuario criado com sucesso.');
     await loadUsers();
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
@@ -236,7 +228,6 @@ document.getElementById('btnCreate').onclick = async () => {
 };
 
 document.getElementById('btnUploadRag').onclick = async () => {
-  setMsg('');
   const input = document.getElementById('ragFile');
   const file = input.files?.[0];
   if (!file) {
@@ -244,17 +235,16 @@ document.getElementById('btnUploadRag').onclick = async () => {
     return;
   }
 
-  const form = new FormData();
-  form.append('file', file);
+  const fd = new FormData();
+  fd.append('file', file);
 
   try {
     await api('/api/admin/rag/upload', {
       method: 'POST',
-      body: form,
+      body: fd,
     });
-
     input.value = '';
-    setMsg('Arquivo enviado para a base interna.');
+    setMsg('Arquivo enviado para a base com sucesso.');
     await loadRagStatus();
     await loadRagFiles();
   } catch (err) {
@@ -263,7 +253,7 @@ document.getElementById('btnUploadRag').onclick = async () => {
 };
 
 Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
-  .catch((err) => setMsg('Erro: ' + err.message, true));
+  .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
 </script>
 </body>
 </html>

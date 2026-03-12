@@ -370,13 +370,56 @@ async function searchKnowledgeBase(query, limit = 4) {
   }
 }
 
-async function buildKnowledgeContext(query) {
-  const rows = await searchKnowledgeBase(query, 4);
-  if (!rows.length) return "";
+function makeSourceExcerpt(value, limit = 220) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
 
-  return rows
-    .map((row) => `[Base interna: ${row.rel_path}]\n${String(row.extracted_text || "").slice(0, 1400)}`)
-    .join("\n\n");
+function pushUniqueSource(list, source) {
+  if (!source || !Array.isArray(list)) return;
+
+  const normalized = {
+    type: String(source.type || "source").trim() || "source",
+    label: String(source.label || source.url || "Fonte").trim() || "Fonte",
+    excerpt: makeSourceExcerpt(source.excerpt || ""),
+    url: String(source.url || "").trim(),
+    file_id: String(source.file_id || "").trim(),
+  };
+
+  const key = [normalized.type, normalized.label, normalized.url, normalized.file_id].join("::");
+  if (!key.replace(/[:]/g, "")) return;
+  if (list.some((item) => [item.type, item.label, item.url || "", item.file_id || ""].join("::") === key)) {
+    return;
+  }
+
+  list.push(normalized);
+}
+
+function mapKnowledgeSource(row) {
+  return {
+    type: "knowledge_base",
+    label: String(row?.rel_path || "Documento interno").trim() || "Documento interno",
+    excerpt: makeSourceExcerpt(row?.extracted_text || ""),
+  };
+}
+
+function buildKnowledgeBundleFromRows(rows) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  return {
+    text: safeRows.length
+      ? safeRows
+          .map((row) => `[Base interna: ${row.rel_path}]\n${String(row.extracted_text || "").slice(0, 1400)}`)
+          .join("\n\n")
+      : "",
+    sources: safeRows.map(mapKnowledgeSource),
+  };
+}
+
+async function buildKnowledgeBundle(query) {
+  const rows = await searchKnowledgeBase(query, 4);
+  return buildKnowledgeBundleFromRows(rows);
 }
 async function getConversationFilesContext(conversationId) {
   try {
@@ -572,24 +615,82 @@ ${contextText || "Sem contexto adicional."}
   ];
 }
 
-function extractResponseText(data) {
-  if (data.output_text) return data.output_text;
+function extractResponsePayload(data, baseSources = []) {
+  const sources = [];
+  for (const source of baseSources || []) {
+    pushUniqueSource(sources, source);
+  }
+
+  let text = String(data?.output_text || "").trim();
 
   try {
-    return (data.output || [])
-      .flatMap((item) => item.content || [])
-      .map((part) => part.text || "")
-      .join("\n")
-      .trim();
-  } catch {
-    return "";
+    for (const item of data?.output || []) {
+      if (item?.type === "message" && Array.isArray(item.content)) {
+        for (const part of item.content) {
+          if (!text && part?.type === "output_text" && part.text) {
+            text = `${text ? `${text}\n` : ""}${part.text}`.trim();
+          }
+
+          for (const annotation of part?.annotations || []) {
+            if (annotation?.type === "file_citation") {
+              pushUniqueSource(sources, {
+                type: "file_search",
+                label: annotation.filename || annotation.file_id || "Arquivo da base",
+                file_id: annotation.file_id || "",
+              });
+            }
+
+            if (annotation?.type === "url_citation") {
+              pushUniqueSource(sources, {
+                type: "web",
+                label: annotation.title || annotation.url || "Fonte externa",
+                url: annotation.url || "",
+              });
+            }
+          }
+        }
+      }
+
+      if (item?.type === "file_search_call" && Array.isArray(item.results)) {
+        for (const result of item.results.slice(0, 6)) {
+          pushUniqueSource(sources, {
+            type: "file_search",
+            label: result?.filename || result?.file_id || "Arquivo da base",
+            file_id: result?.file_id || "",
+            excerpt: result?.text || result?.content || "",
+          });
+        }
+      }
+
+      if (item?.type === "web_search_call" && Array.isArray(item.action?.sources)) {
+        for (const source of item.action.sources.slice(0, 6)) {
+          pushUniqueSource(sources, {
+            type: "web",
+            label: source?.title || source?.url || "Fonte externa",
+            url: source?.url || "",
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.log("Erro ao extrair fontes da OpenAI:", err?.message || err);
   }
+
+  return {
+    text: (text || "").trim() || "Sem resposta da OpenAI.",
+    sources: sources.slice(0, 8),
+  };
 }
 
-async function openaiReply({ conversationId, userText, contextText }) {
+async function openaiReply({ conversationId, userText, contextText, baseSources = [] }) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-  if (!apiKey) return "Configure OPENAI_API_KEY no servidor para usar a OpenAI.";
+  if (!apiKey) {
+    return {
+      text: "Configure OPENAI_API_KEY no servidor para usar a OpenAI.",
+      sources: [...(baseSources || [])],
+    };
+  }
 
   const input = await buildOpenAIInput({ conversationId, userText, contextText });
   const resp = await fetch("https://api.openai.com/v1/responses", {
@@ -602,17 +703,21 @@ async function openaiReply({ conversationId, userText, contextText }) {
       model,
       input,
       tools: buildOpenAITools(),
+      include: ["file_search_call.results", "web_search_call.action.sources"],
     }),
   });
 
   if (!resp.ok) {
     const body = await resp.text();
     console.log("OpenAI error:", resp.status, body);
-    return "Erro ao consultar a OpenAI.";
+    return {
+      text: "Erro ao consultar a OpenAI.",
+      sources: [...(baseSources || [])],
+    };
   }
 
   const data = await resp.json();
-  return extractResponseText(data) || "Sem resposta da OpenAI.";
+  return extractResponsePayload(data, baseSources);
 }
 
 const app = express();
@@ -816,13 +921,13 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   }
 
   const fileContext = await getConversationFilesContext(id);
-  const knowledgeContext = await buildKnowledgeContext(text);
+  const knowledgeBundle = await buildKnowledgeBundle(text);
   const contextText = `
 Data atual no Brasil:
 ${nowBrazil()}
 
 Memoria interna da empresa:
-${knowledgeContext || "Sem resultados relevantes da base interna."}
+${knowledgeBundle.text || "Sem resultados relevantes da base interna."}
 
 Documentos e imagens da conversa:
 ${fileContext || "Nenhum anexo recente."}
@@ -831,20 +936,23 @@ Contexto da internet:
 ${webContext || "Sem resultados externos relevantes."}
 `.trim();
 
-  const reply = await openaiReply({
+  const assistant = await openaiReply({
     conversationId: id,
     userText: text,
     contextText,
+    baseSources: knowledgeBundle.sources,
   });
 
+  const assistantMeta = assistant.sources.length ? JSON.stringify({ sources: assistant.sources }) : null;
+
   await run(
-    "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'assistant', ?)",
-    [id, reply]
+    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
+    [id, assistant.text, assistantMeta]
   );
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-  await updateConversationMemory(id, text, reply);
+  await updateConversationMemory(id, text, assistant.text);
 
-  res.json({ reply });
+  res.json({ reply: assistant.text, meta: assistantMeta ? JSON.parse(assistantMeta) : null });
 });
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -1014,4 +1122,5 @@ ensureAdmin().finally(() => {
     console.log(`Login: ${BASE_URL}/login.html`);
   });
 });
+
 

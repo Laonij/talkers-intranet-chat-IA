@@ -99,6 +99,7 @@
             </div>
             <div class="small muted" id="ragStatus">Carregando...</div>
             <div id="ragUploadState" class="small" style="margin-top:12px; padding:10px 12px; border:1px solid var(--border); border-radius:14px; background:#fff; color:#475467;">Pronto para novos envios.</div>
+            <div id="ragUploadProgress" class="small muted" style="margin-top:10px; display:none;">0 | 0 documentos carregados</div>
           </div>
 
           <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
@@ -125,6 +126,8 @@
   </div>
 
 <script>
+const RAG_BATCH_SIZE = 20;
+
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
     ? (opts.headers || {})
@@ -176,6 +179,14 @@ function getFileDisplayName(file) {
   return file.webkitRelativePath || file.name || 'arquivo';
 }
 
+function chunkFiles(files, batchSize = RAG_BATCH_SIZE) {
+  const out = [];
+  for (let index = 0; index < files.length; index += batchSize) {
+    out.push(files.slice(index, index + batchSize));
+  }
+  return out;
+}
+
 function setRagDocumentCount(total = 0) {
   const safeTotal = Number(total || 0);
   const label = safeTotal === 1 ? '1 documento' : `${safeTotal} documentos`;
@@ -196,6 +207,18 @@ function setRagUploadState(text, tone = 'neutral') {
   el.style.background = style.background;
   el.style.borderColor = style.border;
   el.style.color = style.color;
+}
+
+function setRagUploadProgress(done = 0, total = 0, visible = false) {
+  const el = document.getElementById('ragUploadProgress');
+  if (!visible || total <= 0) {
+    el.style.display = 'none';
+    el.textContent = '0 | 0 documentos carregados';
+    return;
+  }
+
+  el.style.display = 'block';
+  el.textContent = `${done} | ${total} documentos carregados`;
 }
 
 function renderRagSelection() {
@@ -220,7 +243,8 @@ function renderRagSelection() {
 
   const totalSize = pendingRagFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
   const label = pendingRagFiles.length === 1 ? 'arquivo selecionado' : 'arquivos selecionados';
-  summary.textContent = `${pendingRagFiles.length} ${label} (${formatBytes(totalSize)}).`;
+  const totalBatches = chunkFiles(pendingRagFiles).length;
+  summary.textContent = `${pendingRagFiles.length} ${label} (${formatBytes(totalSize)}). ${totalBatches} lote(s) de envio.`;
 
   list.innerHTML = '';
   pendingRagFiles.slice(0, 8).forEach((file) => {
@@ -341,12 +365,14 @@ document.getElementById('ragFiles').addEventListener('change', (event) => {
   setPendingRagFiles(event.target.files);
   document.getElementById('ragFolder').value = '';
   setRagUploadState('Arquivos selecionados. Pronto para enviar.');
+  setRagUploadProgress(0, pendingRagFiles.length, false);
 });
 
 document.getElementById('ragFolder').addEventListener('change', (event) => {
   setPendingRagFiles(event.target.files);
   document.getElementById('ragFiles').value = '';
   setRagUploadState('Pasta carregada na fila. Pronto para enviar.');
+  setRagUploadProgress(0, pendingRagFiles.length, false);
 });
 
 document.getElementById('btnCreate').onclick = async () => {
@@ -384,39 +410,56 @@ document.getElementById('btnUploadRag').onclick = async () => {
     return;
   }
 
-  const fd = new FormData();
-  pendingRagFiles.forEach((file) => {
-    fd.append('files', file, getFileDisplayName(file));
-  });
+  const queue = [...pendingRagFiles];
+  const batches = chunkFiles(queue);
+  const totalPlanned = queue.length;
+  const failedFiles = [];
+  let uploadedCount = 0;
 
   ragUploadInProgress = true;
   renderRagSelection();
-  setRagUploadState(`Carregando ${pendingRagFiles.length} arquivo(s) para a base...`, 'loading');
+  setRagUploadProgress(0, totalPlanned, true);
+  setRagUploadState(`Preparando ${totalPlanned} arquivo(s) em ${batches.length} lote(s)...`, 'loading');
 
   try {
-    const result = await api('/api/admin/rag/upload', {
-      method: 'POST',
-      body: fd,
-    });
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+      const batch = batches[batchIndex];
+      const fd = new FormData();
+      batch.forEach((file) => {
+        fd.append('files', file, getFileDisplayName(file));
+      });
 
-    const uploadedCount = Number(result?.uploaded_count || result?.files?.length || 0);
-    const failedCount = Number(result?.failed_count || result?.errors?.length || 0);
-    const errorNames = (result?.errors || []).slice(0, 3).map((item) => item.filename).filter(Boolean);
-    const failedNameSet = new Set((result?.errors || []).map((item) => sanitizeDisplayName(item.filename)));
+      setRagUploadState(`Carregando lote ${batchIndex + 1} de ${batches.length}...`, 'loading');
+      const result = await api('/api/admin/rag/upload', {
+        method: 'POST',
+        body: fd,
+      });
 
-    if (failedCount > 0) {
-      pendingRagFiles = pendingRagFiles.filter((file) => failedNameSet.has(sanitizeDisplayName(getFileDisplayName(file))));
-    } else {
-      pendingRagFiles = [];
+      const batchUploaded = Number(result?.uploaded_count || result?.files?.length || 0);
+      const batchErrors = Array.isArray(result?.errors) ? result.errors : [];
+      uploadedCount += batchUploaded;
+      setRagUploadProgress(uploadedCount, totalPlanned, true);
+
+      if (batchErrors.length) {
+        const failedNameSet = new Set(batchErrors.map((item) => sanitizeDisplayName(item.filename)));
+        for (const file of batch) {
+          if (failedNameSet.has(sanitizeDisplayName(getFileDisplayName(file)))) {
+            failedFiles.push(file);
+          }
+        }
+      }
     }
 
+    pendingRagFiles = failedFiles;
     document.getElementById('ragFiles').value = '';
     document.getElementById('ragFolder').value = '';
 
+    const failedCount = failedFiles.length;
+    const failedNames = failedFiles.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
     const baseMessage = uploadedCount === 1
       ? '1 arquivo enviado para a base com sucesso.'
       : `${uploadedCount} arquivos enviados para a base com sucesso.`;
-    const errorDetail = failedCount ? ` ${failedCount} arquivo(s) falharam${errorNames.length ? `: ${errorNames.join(', ')}` : ''}.` : '';
+    const errorDetail = failedCount ? ` ${failedCount} arquivo(s) falharam${failedNames.length ? `: ${failedNames.join(', ')}` : ''}.` : '';
     setMsg(`${baseMessage}${errorDetail}`, failedCount > 0);
     setRagUploadState(
       failedCount > 0
@@ -433,14 +476,21 @@ document.getElementById('btnUploadRag').onclick = async () => {
   } finally {
     ragUploadInProgress = false;
     renderRagSelection();
+    if (!pendingRagFiles.length) {
+      setRagUploadProgress(0, 0, false);
+    } else {
+      setRagUploadProgress(uploadedCount, totalPlanned, true);
+    }
   }
 };
 
 renderRagSelection();
 setRagUploadState('Pronto para novos envios.');
+setRagUploadProgress(0, 0, false);
 
 Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
 </script>
 </body>
 </html>
+

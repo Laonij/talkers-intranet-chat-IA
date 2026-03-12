@@ -113,7 +113,7 @@
             </div>
             <div id="ragSelectionSummary" class="small muted" style="margin-top:12px;">Nenhum arquivo selecionado.</div>
             <div id="ragSelectionList" class="small" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
-            <div class="small muted" style="margin-top:10px;">No Chrome e no Edge, a opcao "Importar pasta" envia todos os arquivos da pasta escolhida.</div>
+            <div class="small muted" style="margin-top:10px;">No Chrome e no Edge, a opcao "Importar pasta" envia todos os arquivos da pasta escolhida. Apenas documentos suportados de ate 25 MB entram na fila.</div>
             <div style="margin-top:14px; display:flex; justify-content:flex-end; gap:10px;">
               <button class="btn primary" id="btnUploadRag" disabled>Enviar arquivos</button>
             </div>
@@ -126,8 +126,9 @@
   </div>
 
 <script>
-const RAG_BATCH_SIZE = 20;
+const RAG_BATCH_SIZE = 3;
 const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
+const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json"]);
 
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
@@ -151,6 +152,24 @@ function setMsg(text, isError = false) {
   const el = document.getElementById('msg');
   el.className = isError ? 'error' : 'muted small';
   el.textContent = text || '';
+}
+
+function describeRagUploadError(error) {
+  const code = String(error?.message || '').trim();
+  if (!code) return 'Falha ao carregar os arquivos.';
+  if (code === 'knowledge_file_too_large' || code === 'LIMIT_FILE_SIZE') {
+    return 'Um ou mais arquivos passaram de 25 MB e foram recusados pelo servidor.';
+  }
+  if (code === 'unsupported_knowledge_file') {
+    return 'Um ou mais arquivos nao sao suportados para a base interna.';
+  }
+  if (code === 'rag_batch_too_large') {
+    return 'O navegador tentou enviar um lote maior do que o servidor aceita. Atualize a pagina e tente novamente.';
+  }
+  if (code === 'rag_upload_failed') {
+    return 'O lote falhou durante a indexacao no servidor.';
+  }
+  return code;
 }
 
 let pendingRagFiles = [];
@@ -180,20 +199,34 @@ function getFileDisplayName(file) {
   return file.webkitRelativePath || file.name || 'arquivo';
 }
 
+function getFileExtension(name = '') {
+  const normalized = String(name || '').toLowerCase();
+  const dotIndex = normalized.lastIndexOf('.');
+  return dotIndex >= 0 ? normalized.slice(dotIndex) : '';
+}
+
 function splitRagFilesBySize(files) {
   const accepted = [];
-  const rejected = [];
+  const rejectedBySize = [];
+  const rejectedByType = [];
 
   for (const file of Array.from(files || [])) {
+    const ext = getFileExtension(getFileDisplayName(file));
+
+    if (!RAG_ALLOWED_EXTS.has(ext)) {
+      rejectedByType.push(file);
+      continue;
+    }
+
     if (Number(file.size || 0) > MAX_RAG_FILE_BYTES) {
-      rejected.push(file);
+      rejectedBySize.push(file);
       continue;
     }
 
     accepted.push(file);
   }
 
-  return { accepted, rejected };
+  return { accepted, rejectedBySize, rejectedByType };
 }
 
 function chunkFiles(files, batchSize = RAG_BATCH_SIZE) {
@@ -290,13 +323,15 @@ function renderRagSelection() {
 }
 
 function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
-  const { accepted, rejected } = splitRagFilesBySize(files);
+  const { accepted, rejectedBySize, rejectedByType } = splitRagFilesBySize(files);
   pendingRagFiles = accepted;
   renderRagSelection();
 
-  const rejectedNames = rejected.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+  const rejectedSizeNames = rejectedBySize.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+  const rejectedTypeNames = rejectedByType.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+  const rejectedTotal = rejectedBySize.length + rejectedByType.length;
 
-  if (!accepted.length && !rejected.length) {
+  if (!accepted.length && !rejectedTotal) {
     setRagUploadState('Nenhum arquivo selecionado.');
     setMsg('');
     return { acceptedCount: 0, rejectedCount: 0 };
@@ -304,22 +339,23 @@ function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
 
   if (accepted.length) {
     const acceptedLabel = accepted.length === 1 ? '1 arquivo pronto para envio.' : `${accepted.length} arquivos prontos para envio.`;
-    const rejectedLabel = rejected.length
-      ? ` ${rejected.length} arquivo(s) acima de 25 MB foram descartados automaticamente.`
-      : '';
-    setRagUploadState(`${sourceLabel} carregado(s) na fila. ${acceptedLabel}${rejectedLabel}`);
+    const rejectedSizeLabel = rejectedBySize.length ? ` ${rejectedBySize.length} acima de 25 MB foram descartados.` : '';
+    const rejectedTypeLabel = rejectedByType.length ? ` ${rejectedByType.length} arquivo(s) de formato nao suportado foram ignorados.` : '';
+    setRagUploadState(`${sourceLabel} carregado(s) na fila. ${acceptedLabel}${rejectedSizeLabel}${rejectedTypeLabel}`);
   } else {
-    setRagUploadState(`Nenhum arquivo elegivel para envio. ${rejected.length} arquivo(s) acima de 25 MB foram descartados automaticamente.`, 'error');
+    setRagUploadState('Nenhum arquivo elegivel para envio. Revise tamanho e formato dos arquivos.', 'error');
   }
 
-  if (rejected.length) {
-    const detail = rejectedNames.length ? ` Exemplos: ${rejectedNames.join(', ')}.` : '';
-    setMsg(`${rejected.length} arquivo(s) acima de 25 MB foram descartados automaticamente.${detail}`, true);
-  } else {
-    setMsg('');
+  const notices = [];
+  if (rejectedBySize.length) {
+    notices.push(`${rejectedBySize.length} arquivo(s) acima de 25 MB foram descartados automaticamente${rejectedSizeNames.length ? `: ${rejectedSizeNames.join(', ')}` : ''}.`);
+  }
+  if (rejectedByType.length) {
+    notices.push(`${rejectedByType.length} arquivo(s) de formato nao suportado foram ignorados${rejectedTypeNames.length ? `: ${rejectedTypeNames.join(', ')}` : ''}.`);
   }
 
-  return { acceptedCount: accepted.length, rejectedCount: rejected.length };
+  setMsg(notices.join(' '), notices.length > 0);
+  return { acceptedCount: accepted.length, rejectedCount: rejectedTotal };
 }
 
 async function loadUsers() {
@@ -454,21 +490,23 @@ document.getElementById('btnUploadRag').onclick = async () => {
   }
 
   const sizeCheck = splitRagFilesBySize(pendingRagFiles);
-  if (sizeCheck.rejected.length) {
+  if (sizeCheck.rejectedBySize.length || sizeCheck.rejectedByType.length) {
     pendingRagFiles = sizeCheck.accepted;
     renderRagSelection();
   }
 
   const queue = [...sizeCheck.accepted];
   if (!queue.length) {
-    setMsg('Todos os arquivos selecionados foram descartados por exceder 25 MB.', true);
+    setMsg('Todos os arquivos selecionados foram descartados por exceder 25 MB ou por formato nao suportado.', true);
     setRagUploadState('Nenhum arquivo elegivel para envio. Ajuste a selecao e tente novamente.', 'error');
     return;
   }
+
   const batches = chunkFiles(queue);
   const totalPlanned = queue.length;
   const failedFiles = [];
   let uploadedCount = 0;
+  let completedFileCount = 0;
 
   ragUploadInProgress = true;
   renderRagSelection();
@@ -492,6 +530,7 @@ document.getElementById('btnUploadRag').onclick = async () => {
       const batchUploaded = Number(result?.uploaded_count || result?.files?.length || 0);
       const batchErrors = Array.isArray(result?.errors) ? result.errors : [];
       uploadedCount += batchUploaded;
+      completedFileCount += batch.length;
       setRagUploadProgress(uploadedCount, totalPlanned, true);
 
       if (batchErrors.length) {
@@ -525,8 +564,16 @@ document.getElementById('btnUploadRag').onclick = async () => {
     await loadRagStatus();
     await loadRagFiles();
   } catch (err) {
-    setMsg('Erro: ' + err.message, true);
-    setRagUploadState('Falha ao carregar os arquivos. Revise a selecao e tente novamente.', 'error');
+    const remainingQueue = queue.slice(completedFileCount);
+    pendingRagFiles = [...failedFiles, ...remainingQueue];
+    const friendlyError = describeRagUploadError(err);
+    setMsg(`Erro: ${friendlyError}`, true);
+    setRagUploadState(
+      uploadedCount > 0
+        ? `Upload interrompido apos ${uploadedCount} de ${totalPlanned} documento(s). Revise os restantes e tente novamente.`
+        : 'Falha ao carregar os arquivos. Revise a selecao e tente novamente.',
+      'error'
+    );
   } finally {
     ragUploadInProgress = false;
     renderRagSelection();
@@ -547,6 +594,13 @@ Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
 </script>
 </body>
 </html>
+
+
+
+
+
+
+
 
 
 

@@ -41,6 +41,34 @@ const ADMIN_NAME = String(process.env.ADMIN_NAME || DEFAULT_ADMIN_NAME).trim() |
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || (IS_PRODUCTION ? "" : DEFAULT_ADMIN_PASSWORD));
 
 const knowledgeDir = path.join(kbDir, "manual");
+const RAG_ALLOWED_EXTS = new Set([
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".rtf",
+  ".odt",
+  ".ppt",
+  ".pptx",
+  ".xls",
+  ".xlsx",
+  ".csv",
+  ".txt",
+  ".md",
+  ".json",
+]);
+const RAG_LOCAL_EXTRACTION_LIMITS = {
+  ".pdf": 8 * 1024 * 1024,
+  ".doc": 6 * 1024 * 1024,
+  ".docx": 12 * 1024 * 1024,
+  ".ppt": 8 * 1024 * 1024,
+  ".pptx": 12 * 1024 * 1024,
+  ".xls": 8 * 1024 * 1024,
+  ".xlsx": 12 * 1024 * 1024,
+  ".csv": 5 * 1024 * 1024,
+  ".txt": 5 * 1024 * 1024,
+  ".md": 5 * 1024 * 1024,
+  ".json": 5 * 1024 * 1024,
+};
 
 validateConfig();
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -306,13 +334,31 @@ async function updateConversationMemory(conversationId, userText, assistantText)
   }
 }
 
+function getKnowledgeUploadExt(filePath, originalName = "", mimeType = "") {
+  return detectExt(filePath, originalName, mimeType) || path.extname(String(filePath || "")).toLowerCase() || ".bin";
+}
+
+function isSupportedKnowledgeUpload(originalName = "", mimeType = "", filePath = "") {
+  const ext = getKnowledgeUploadExt(filePath, originalName, mimeType);
+  return RAG_ALLOWED_EXTS.has(ext);
+}
+
+function shouldExtractKnowledgeLocally(ext, sizeBytes) {
+  const limit = RAG_LOCAL_EXTRACTION_LIMITS[ext];
+  if (!limit) return false;
+  return Number(sizeBytes || 0) <= limit;
+}
+
 async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeType }) {
   if (!fs.existsSync(sourcePath)) return null;
 
   const stat = fs.statSync(sourcePath);
-  const ext = detectExt(sourcePath, originalName, mimeType) || path.extname(sourcePath).toLowerCase() || ".bin";
-  const extracted = (await extractText(sourcePath, originalName, mimeType)).trim();
-  const safeText = extracted || `(sem texto extraido) ${relPath}`;
+  const ext = getKnowledgeUploadExt(sourcePath, originalName, mimeType);
+  const shouldExtract = shouldExtractKnowledgeLocally(ext, stat.size);
+  const extracted = shouldExtract ? (await extractText(sourcePath, originalName, mimeType)).trim() : "";
+  const safeText = extracted || (shouldExtract
+    ? `(sem texto extraido) ${relPath}`
+    : `(arquivo grande para indexacao local, mantido para busca vetorial) ${relPath}`);
   const existing = await get("SELECT id FROM documents WHERE source_path=?", [sourcePath]);
 
   if (existing) {
@@ -329,7 +375,6 @@ async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeTy
 
   return { relPath, extractedText: safeText };
 }
-
 async function searchKnowledgeBase(query, limit = 4) {
   try {
     return await searchDocuments(query, limit);
@@ -770,9 +815,22 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 const ragUpload = upload.fields([
-  { name: "files", maxCount: 200 },
+  { name: "files", maxCount: 5 },
   { name: "file", maxCount: 1 },
 ]);
+
+function ragUploadMiddleware(req, res, next) {
+  ragUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err?.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "knowledge_file_too_large" });
+    }
+    if (err?.code === "LIMIT_FILE_COUNT" || err?.code === "LIMIT_PART_COUNT" || err?.code === "LIMIT_UNEXPECTED_FILE") {
+      return res.status(400).json({ error: "rag_batch_too_large" });
+    }
+    return res.status(400).json({ error: err?.message || "rag_upload_failed" });
+  });
+}
 
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID), db_client: DB_CLIENT });
@@ -911,7 +969,13 @@ app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => 
   const full = path.join(uploadsDir, file.stored_name);
   if (!fs.existsSync(full)) return res.status(404).send("missing_on_disk");
 
-  res.download(full, file.original_name);
+  const inline = String(req.query.inline || "").trim() === "1";
+  if (inline) {
+    if (file.mime_type) res.type(file.mime_type);
+    return res.sendFile(full);
+  }
+
+  return res.download(full, file.original_name);
 });
 
 app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res) => {
@@ -1094,9 +1158,26 @@ function getAdminRagUploads(req) {
   return uploads.filter(Boolean);
 }
 
+function getRagUploadFailureStatus(errors = []) {
+  const codes = [...new Set((errors || []).map((item) => String(item?.error || '').trim()).filter(Boolean))];
+  if (!codes.length) return 500;
+  if (codes.every((code) => code === 'knowledge_file_too_large')) return 413;
+  if (codes.every((code) => code === 'unsupported_knowledge_file')) return 400;
+  return 500;
+}
+
 async function ingestKnowledgeUpload(uploaded, userId) {
   const tempPath = uploaded.path || path.join(uploadsDir, uploaded.filename);
   const safeOriginalName = sanitizeFilename(uploaded.originalname || `arquivo-${Date.now()}`);
+
+  if (Number(uploaded.size || 0) > 25 * 1024 * 1024) {
+    throw new Error("knowledge_file_too_large");
+  }
+
+  if (!isSupportedKnowledgeUpload(safeOriginalName, uploaded.mimetype || "", tempPath)) {
+    throw new Error("unsupported_knowledge_file");
+  }
+
   const storedName = `${Date.now()}-${uploaded.filename}-${safeOriginalName}`;
   const finalPath = path.join(knowledgeDir, storedName);
 
@@ -1114,7 +1195,13 @@ async function ingestKnowledgeUpload(uploaded, userId) {
   let vectorStoreFile = null;
 
   if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
-    openaiFile = await uploadFileToOpenAI(finalPath, safeOriginalName, process.env.OPENAI_API_KEY);
+    openaiFile = await uploadFileToOpenAI(
+      finalPath,
+      safeOriginalName,
+      process.env.OPENAI_API_KEY,
+      "user_data",
+      uploaded.mimetype || "application/octet-stream"
+    );
     vectorStoreFile = await attachFileToVectorStore(
       openaiFile.id,
       OPENAI_VECTOR_STORE_ID,
@@ -1150,7 +1237,7 @@ async function ingestKnowledgeUpload(uploaded, userId) {
   };
 }
 
-app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"), ragUpload, async (req, res) => {
+app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"), ragUploadMiddleware, async (req, res) => {
   const uploads = getAdminRagUploads(req);
   if (!uploads.length) return res.status(400).json({ error: "missing_file" });
 
@@ -1171,7 +1258,7 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
   }
 
   if (!files.length) {
-    return res.status(500).json({
+    return res.status(getRagUploadFailureStatus(errors)).json({
       error: errors[0]?.error || "rag_upload_failed",
       errors,
     });
@@ -1225,6 +1312,15 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
 
 
 

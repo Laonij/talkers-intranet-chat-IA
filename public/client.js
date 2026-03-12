@@ -1,38 +1,38 @@
-﻿const el = (id) => document.getElementById(id);
+const el = (id) => document.getElementById(id);
 
 const QUICK_PROMPTS = [
   {
-    icon: "📄",
+    icon: "??",
     label: "Gerar documento",
     hint: "Crie comunicados, contratos e textos organizados.",
     prompt: "Gere um documento profissional sobre este tema:",
   },
   {
-    icon: "📊",
+    icon: "??",
     label: "Criar planilha",
     hint: "Monte tabelas com colunas prontas para uso.",
     prompt: "Crie uma planilha organizada com os principais campos para:",
   },
   {
-    icon: "🎧",
+    icon: "??",
     label: "Transcrever audio",
     hint: "Analise audio enviado ou gravado no navegador.",
     prompt: "Analise e transcreva o audio enviado, depois faca um resumo objetivo.",
   },
   {
-    icon: "🖼️",
+    icon: "???",
     label: "Gerar imagem",
     hint: "Produza imagens para escola, marketing e materiais.",
     prompt: "Gere uma imagem realista e profissional de:",
   },
   {
-    icon: "🎓",
+    icon: "??",
     label: "Comunicado escolar",
     hint: "Crie avisos claros e acolhedores para alunos e familias.",
     prompt: "Crie um comunicado escolar claro e acolhedor sobre:",
   },
   {
-    icon: "🧠",
+    icon: "??",
     label: "Consultar base interna",
     hint: "Pesquise documentos e conhecimento da empresa.",
     prompt: "Consulte a base interna e me responda sobre:",
@@ -94,30 +94,30 @@ function getUserInitial(name = "") {
 
 function getConversationEmoji(title) {
   const text = normalizeText(title);
-  if (!text) return "💬";
-  if (/(planilha|tabela|excel|dados|cadastro)/.test(text)) return "📊";
-  if (/(pdf|doc|docx|documento|contrato|comunicado|texto)/.test(text)) return "📄";
-  if (/(imagem|foto|banner|arte|logo)/.test(text)) return "🖼️";
-  if (/(audio|voz|locucao|narracao|transcri|gravacao)/.test(text)) return "🎧";
-  if (/(aluno|escola|turma|matricula|pedagogico)/.test(text)) return "🎓";
-  if (/(financeiro|orcamento|boleto|pagamento)/.test(text)) return "💰";
-  if (/(site|codigo|api|script|sistema)/.test(text)) return "💻";
-  return "💬";
+  if (!text) return "??";
+  if (/(planilha|tabela|excel|dados|cadastro)/.test(text)) return "??";
+  if (/(pdf|doc|docx|documento|contrato|comunicado|texto)/.test(text)) return "??";
+  if (/(imagem|foto|banner|arte|logo)/.test(text)) return "???";
+  if (/(audio|voz|locucao|narracao|transcri|gravacao)/.test(text)) return "??";
+  if (/(aluno|escola|turma|matricula|pedagogico)/.test(text)) return "??";
+  if (/(financeiro|orcamento|boleto|pagamento)/.test(text)) return "??";
+  if (/(site|codigo|api|script|sistema)/.test(text)) return "??";
+  return "??";
 }
 
 function getFileEmoji(meta) {
   const mime = String(meta?.mimetype || "").toLowerCase();
   const name = normalizeText(meta?.filename || "");
-  if (mime.startsWith("image/")) return "🖼️";
-  if (mime.startsWith("audio/")) return "🎧";
-  if (mime.includes("pdf") || name.endsWith(".pdf")) return "📕";
-  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "📊";
-  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "📄";
-  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "📽️";
+  if (mime.startsWith("image/")) return "???";
+  if (mime.startsWith("audio/")) return "??";
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return "??";
+  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "??";
+  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "??";
+  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "???";
   if (mime.includes("json") || mime.includes("javascript") || /\.(js|ts|py|java|php|html|css)$/.test(name)) {
-    return "💻";
+    return "??";
   }
-  return "📎";
+  return "??";
 }
 
 function getFileKindLabel(meta) {
@@ -416,7 +416,8 @@ function appendFileCard(bubble, meta) {
   const mime = String(meta.mimetype || "").toLowerCase();
   const isImg = mime.startsWith("image/");
   const isAudio = mime.startsWith("audio/");
-  const url = `/api/files/${meta.file_id}/download`;
+  const downloadUrl = `/api/files/${meta.file_id}/download`;
+  const previewUrl = (isImg || isAudio) ? `${downloadUrl}?inline=1` : downloadUrl;
 
   const card = document.createElement("div");
   card.className = `file-card${isImg ? " is-image" : ""}${isAudio ? " is-audio" : ""}`;
@@ -425,11 +426,19 @@ function appendFileCard(bubble, meta) {
   preview.className = "file-preview";
 
   if (isImg) {
+    const imageLink = document.createElement("a");
+    imageLink.className = "file-preview-link";
+    imageLink.href = previewUrl;
+    imageLink.target = "_blank";
+    imageLink.rel = "noopener";
+    imageLink.setAttribute("aria-label", `Abrir ${meta.filename || "imagem"}`);
+
     const img = document.createElement("img");
     img.className = "file-thumb";
-    img.src = url;
+    img.src = previewUrl;
     img.alt = meta.filename || "imagem";
-    preview.appendChild(img);
+    imageLink.appendChild(img);
+    preview.appendChild(imageLink);
   } else {
     const badge = document.createElement("div");
     badge.className = "file-ic";
@@ -449,7 +458,7 @@ function appendFileCard(bubble, meta) {
 
   const fileName = document.createElement("a");
   fileName.className = "file-name";
-  fileName.href = url;
+  fileName.href = previewUrl;
   fileName.target = "_blank";
   fileName.rel = "noopener";
   fileName.textContent = meta.filename || "arquivo";
@@ -462,11 +471,17 @@ function appendFileCard(bubble, meta) {
   actions.className = "file-links";
 
   const openLink = document.createElement("a");
-  openLink.href = url;
+  openLink.href = previewUrl;
   openLink.target = "_blank";
   openLink.rel = "noopener";
-  openLink.textContent = isAudio ? "Ouvir / baixar" : isImg ? "Abrir imagem" : "Abrir arquivo";
+  openLink.textContent = isAudio ? "Ouvir" : isImg ? "Abrir imagem" : "Abrir arquivo";
   actions.appendChild(openLink);
+
+  const downloadLink = document.createElement("a");
+  downloadLink.href = downloadUrl;
+  downloadLink.setAttribute("download", meta.filename || "arquivo");
+  downloadLink.textContent = isAudio ? "Baixar audio" : isImg ? "Baixar imagem" : "Baixar arquivo";
+  actions.appendChild(downloadLink);
 
   top.appendChild(typePill);
   body.appendChild(top);
@@ -478,7 +493,7 @@ function appendFileCard(bubble, meta) {
     player.className = "file-audio";
     player.controls = true;
     player.preload = "none";
-    player.src = url;
+    player.src = previewUrl;
     body.appendChild(player);
   }
 
@@ -978,3 +993,5 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
+
+

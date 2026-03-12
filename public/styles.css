@@ -1,4 +1,4 @@
-:root{
+﻿:root{
   --bg:#f6f7fb;
   --panel:#ffffff;
   --panel-2:#f9fafc;
@@ -1925,3 +1925,155 @@ body.app-shell .msg.assistant .md-content {
 
 
 
+
+body.app-shell .topbar{
+  min-height:auto;
+  padding:0 0 10px;
+  border:none;
+  border-radius:0;
+  background:transparent;
+  backdrop-filter:none;
+  box-shadow:none;
+}
+
+body.app-shell .panel{
+  border:none;
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+}
+
+body.app-shell .chat-shell{
+  background:transparent;
+}
+
+body.app-shell .brand-title,
+body.app-shell .title,
+body.app-shell .account-name,
+body.app-shell .conv-title,
+body.app-shell .new-chat-btn{
+  font-weight:600;
+}
+
+body.app-shell .topbar-kicker,
+body.app-shell .section-title,
+body.app-shell .brand-sub,
+body.app-shell .account-meta{
+  color:#7b818c;
+}
+
+body.app-shell .message-avatar.user{
+  display:none;
+}
+
+body.app-shell .msg.user{
+  gap:0;
+}
+
+body.app-shell .msg.user .bubble{
+  max-width:min(680px, 86%);
+}
+
+body.app-shell .md-content strong,
+body.app-shell .structured-card-body strong{
+  font-weight:600;
+  color:#334155;
+}
+
+body.app-shell .assistant-plain{
+  position:relative;
+  width:100%;
+  max-width:min(720px, 100%);
+  padding-right:48px;
+}
+
+body.app-shell .assistant-plain .md-content > :last-child,
+body.app-shell .structured-card-body > :last-child{
+  margin-bottom:0;
+}
+
+body.app-shell .copy-btn,
+body.app-shell .icon-copy-btn{
+  width:34px;
+  height:34px;
+  padding:0;
+  border-radius:12px;
+  border:1px solid #e5e7eb;
+  background:#ffffff;
+  color:#525866;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:0 6px 18px rgba(15,23,42,.06);
+}
+
+body.app-shell .copy-btn svg,
+body.app-shell .icon-copy-btn svg{
+  width:16px;
+  height:16px;
+  stroke:currentColor;
+  stroke-width:1.8;
+  fill:none;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+
+body.app-shell .copy-btn:hover,
+body.app-shell .icon-copy-btn:hover{
+  background:#f8fafc;
+  border-color:#dbe2ea;
+  color:#1f2937;
+}
+
+body.app-shell .copy-btn.is-copied,
+body.app-shell .icon-copy-btn.is-copied{
+  background:#ecfdf5;
+  border-color:#bbf7d0;
+  color:#0f766e;
+}
+
+body.app-shell .inline-copy-btn{
+  position:absolute;
+  top:2px;
+  right:0;
+}
+
+body.app-shell .structured-card{
+  width:min(100%, 760px);
+  border:1px solid #e6e8ed;
+  border-radius:22px;
+  background:#ffffff;
+  padding:18px 20px 20px;
+  box-shadow:0 18px 40px rgba(15,23,42,.05);
+}
+
+body.app-shell .structured-card-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:14px;
+}
+
+body.app-shell .structured-card-label{
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:#6b7280;
+}
+
+body.app-shell .structured-card-body{
+  min-width:0;
+}
+
+body.app-shell .structured-card-body hr{
+  border:none;
+  border-top:1px solid #eceff3;
+  margin:18px 0;
+}
+
+body.app-shell .structured-card + .file-card,
+body.app-shell .assistant-plain + .file-card{
+  margin-top:14px;
+}

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-br">
 <head>
   <meta charset="utf-8" />
@@ -50,6 +50,23 @@
             </select>
           </div>
         </div>
+        <div class="row">
+          <div>
+            <label>Departamento</label>
+            <select id="department">
+              <option value="">Selecione</option>
+              <option value="Professor">Professor</option>
+              <option value="Administrativo">Administrativo</option>
+              <option value="Pedagogico">Pedagogico</option>
+              <option value="RH">RH</option>
+              <option value="Comercial">Comercial</option>
+              <option value="Gestao">Gestao</option>
+              <option value="Financeiro">Financeiro</option>
+              <option value="Marketing">Marketing</option>
+            </select>
+          </div>
+          <div></div>
+        </div>
         <div style="display:flex; justify-content:flex-end; gap:10px;">
           <button class="btn primary" id="btnCreate">Criar</button>
         </div>
@@ -66,6 +83,7 @@
                   <th>Nome</th>
                   <th>Email</th>
                   <th>Role</th>
+                  <th>Departamento</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -405,6 +423,10 @@ async function loadUsers() {
     badge.textContent = user.role;
     tdRole.appendChild(badge);
 
+    const tdDepartment = document.createElement('td');
+    tdDepartment.className = 'small muted';
+    tdDepartment.textContent = user.department || 'Sem departamento';
+
     const tdStatus = document.createElement('td');
     tdStatus.className = 'small muted';
     tdStatus.textContent = 'Preservado';
@@ -413,6 +435,7 @@ async function loadUsers() {
     tr.appendChild(tdName);
     tr.appendChild(tdEmail);
     tr.appendChild(tdRole);
+    tr.appendChild(tdDepartment);
     tr.appendChild(tdStatus);
     body.appendChild(tr);
   }
@@ -483,6 +506,7 @@ document.getElementById('btnCreate').onclick = async () => {
   const email = document.getElementById('email').value.trim();
   const password = document.getElementById('password').value;
   const role = document.getElementById('role').value;
+  const department = document.getElementById('department').value;
 
   if (!name || !email || !password) {
     setMsg('Preencha nome, email e senha.', true);
@@ -492,13 +516,14 @@ document.getElementById('btnCreate').onclick = async () => {
   try {
     await api('/api/admin/users', {
       method: 'POST',
-      body: JSON.stringify({ name, email, password, role }),
+      body: JSON.stringify({ name, email, password, role, department }),
     });
 
     document.getElementById('name').value = '';
     document.getElementById('email').value = '';
     document.getElementById('password').value = '';
     document.getElementById('role').value = 'user';
+    document.getElementById('department').value = '';
 
     setMsg('Usuario criado com sucesso.');
     await loadUsers();
@@ -618,6 +643,12 @@ Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
 </script>
 </body>
 </html>
+
+
+
+
+
+
 
 
 

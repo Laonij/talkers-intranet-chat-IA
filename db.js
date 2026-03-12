@@ -1,4 +1,4 @@
-const fs = require("fs");
+﻿const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 const { Pool } = require("pg");
@@ -115,9 +115,9 @@ function closeSqlite(dbConn) {
 }
 
 async function migrateSqlite() {
-  await execSqlite(\"PRAGMA journal_mode = WAL;\");
+  await execSqlite("PRAGMA journal_mode = WAL;");
 
-  await execSqlite(
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT NOT NULL UNIQUE,
@@ -127,14 +127,14 @@ async function migrateSqlite() {
       department TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  const userColumns = await allSqlite(\"PRAGMA table_info(users)\");
-  if (!userColumns.some((column) => column.name === \"department\")) {
-    await execSqlite(\"ALTER TABLE users ADD COLUMN department TEXT;\");
+  const userColumns = await allSqlite("PRAGMA table_info(users)");
+  if (!userColumns.some((column) => column.name === "department")) {
+    await execSqlite("ALTER TABLE users ADD COLUMN department TEXT;");
   }
 
-  await execSqlite(
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -143,9 +143,9 @@ async function migrateSqlite() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  await execSqlite(
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER NOT NULL,
@@ -154,9 +154,9 @@ async function migrateSqlite() {
       meta_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  await execSqlite(
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER,
@@ -167,9 +167,9 @@ async function migrateSqlite() {
       size_bytes INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  await execSqlite(
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -177,9 +177,9 @@ async function migrateSqlite() {
       meta_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  await execSqlite(
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_path TEXT NOT NULL UNIQUE,
@@ -188,20 +188,77 @@ async function migrateSqlite() {
       size_bytes INTEGER,
       modified_ms INTEGER,
       extracted_text TEXT NOT NULL,
+      language TEXT,
+      translated_text TEXT,
+      translated_language TEXT,
+      content_hash TEXT,
+      keywords TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  await execSqlite(
+  const documentColumns = await allSqlite("PRAGMA table_info(documents)");
+  if (!documentColumns.some((column) => column.name === "language")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN language TEXT;");
+  }
+  if (!documentColumns.some((column) => column.name === "translated_text")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN translated_text TEXT;");
+  }
+  if (!documentColumns.some((column) => column.name === "translated_language")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN translated_language TEXT;");
+  }
+  if (!documentColumns.some((column) => column.name === "content_hash")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN content_hash TEXT;");
+  }
+  if (!documentColumns.some((column) => column.name === "keywords")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN keywords TEXT;");
+  }
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS document_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id INTEGER NOT NULL,
+      rel_path TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      content_text TEXT NOT NULL,
+      language TEXT,
+      translated_text TEXT,
+      translated_language TEXT,
+      content_hash TEXT,
+      keywords TEXT,
+      embedding_json TEXT,
+      embedding_model TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(document_id, chunk_index)
+    );
+  `);
+
+  const chunkColumns = await allSqlite("PRAGMA table_info(document_chunks)");
+  if (!chunkColumns.some((column) => column.name === "translated_language")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN translated_language TEXT;");
+  }
+
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS conversation_memories (
       conversation_id INTEGER PRIMARY KEY,
       summary_text TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  await execSqlite(
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS user_memories (
+      user_id INTEGER PRIMARY KEY,
+      summary_text TEXT NOT NULL DEFAULT '',
+      topics_json TEXT,
+      language TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
     CREATE TABLE IF NOT EXISTS knowledge_sources (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       original_name TEXT NOT NULL,
@@ -211,38 +268,90 @@ async function migrateSqlite() {
       uploaded_by INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  );
+  `);
 
-  await execSqlite(
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS semantic_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      scope_key TEXT,
+      normalized_query TEXT NOT NULL,
+      query_text TEXT NOT NULL,
+      query_language TEXT,
+      response_text TEXT NOT NULL,
+      response_language TEXT,
+      sources_json TEXT,
+      embedding_json TEXT,
+      knowledge_signature TEXT,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
     CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
-    USING fts5(extracted_text, rel_path, content='documents', content_rowid='id');
-  );
+    USING fts5(extracted_text, translated_text, rel_path, keywords, language, content='documents', content_rowid='id');
+  `);
 
-  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);\");
-  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);\");
-  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);\");
-  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);\");
+  await execSqlite(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts
+    USING fts5(content_text, translated_text, rel_path, keywords, language, content='document_chunks', content_rowid='id');
+  `);
 
-  await execSqlite(
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_language ON documents(language);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_document_chunks_document_idx ON document_chunks(document_id, chunk_index);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_document_chunks_language ON document_chunks(language);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_semantic_cache_scope_updated ON semantic_cache(scope_key, updated_at);");
+
+  await execSqlite(`
     CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
-      INSERT INTO documents_fts(rowid, extracted_text, rel_path) VALUES (new.id, new.extracted_text, new.rel_path);
+      INSERT INTO documents_fts(rowid, extracted_text, translated_text, rel_path, keywords, language)
+      VALUES (new.id, new.extracted_text, new.translated_text, new.rel_path, new.keywords, new.language);
     END;
-  );
-  await execSqlite(
+  `);
+  await execSqlite(`
     CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
-      INSERT INTO documents_fts(documents_fts, rowid, extracted_text, rel_path) VALUES('delete', old.id, old.extracted_text, old.rel_path);
+      INSERT INTO documents_fts(documents_fts, rowid, extracted_text, translated_text, rel_path, keywords, language)
+      VALUES('delete', old.id, old.extracted_text, old.translated_text, old.rel_path, old.keywords, old.language);
     END;
-  );
-  await execSqlite(
+  `);
+  await execSqlite(`
     CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
-      INSERT INTO documents_fts(documents_fts, rowid, extracted_text, rel_path) VALUES('delete', old.id, old.extracted_text, old.rel_path);
-      INSERT INTO documents_fts(rowid, extracted_text, rel_path) VALUES (new.id, new.extracted_text, new.rel_path);
+      INSERT INTO documents_fts(documents_fts, rowid, extracted_text, translated_text, rel_path, keywords, language)
+      VALUES('delete', old.id, old.extracted_text, old.translated_text, old.rel_path, old.keywords, old.language);
+      INSERT INTO documents_fts(rowid, extracted_text, translated_text, rel_path, keywords, language)
+      VALUES (new.id, new.extracted_text, new.translated_text, new.rel_path, new.keywords, new.language);
     END;
-  );
+  `);
+  await execSqlite(`
+    CREATE TRIGGER IF NOT EXISTS document_chunks_ai AFTER INSERT ON document_chunks BEGIN
+      INSERT INTO document_chunks_fts(rowid, content_text, translated_text, rel_path, keywords, language)
+      VALUES (new.id, new.content_text, new.translated_text, new.rel_path, new.keywords, new.language);
+    END;
+  `);
+  await execSqlite(`
+    CREATE TRIGGER IF NOT EXISTS document_chunks_ad AFTER DELETE ON document_chunks BEGIN
+      INSERT INTO document_chunks_fts(document_chunks_fts, rowid, content_text, translated_text, rel_path, keywords, language)
+      VALUES('delete', old.id, old.content_text, old.translated_text, old.rel_path, old.keywords, old.language);
+    END;
+  `);
+  await execSqlite(`
+    CREATE TRIGGER IF NOT EXISTS document_chunks_au AFTER UPDATE ON document_chunks BEGIN
+      INSERT INTO document_chunks_fts(document_chunks_fts, rowid, content_text, translated_text, rel_path, keywords, language)
+      VALUES('delete', old.id, old.content_text, old.translated_text, old.rel_path, old.keywords, old.language);
+      INSERT INTO document_chunks_fts(rowid, content_text, translated_text, rel_path, keywords, language)
+      VALUES (new.id, new.content_text, new.translated_text, new.rel_path, new.keywords, new.language);
+    END;
+  `);
 }
-
 async function migratePostgres() {
-  await pgPool.query(
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -252,11 +361,9 @@ async function migratePostgres() {
       department TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(\"ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;\");
-
-  await pgPool.query(
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       user_id INTEGER NOT NULL,
@@ -265,9 +372,9 @@ async function migratePostgres() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       conversation_id INTEGER NOT NULL,
@@ -276,9 +383,9 @@ async function migratePostgres() {
       meta_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       conversation_id INTEGER,
@@ -289,9 +396,9 @@ async function migratePostgres() {
       size_bytes INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       user_id INTEGER,
@@ -299,9 +406,9 @@ async function migratePostgres() {
       meta_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       source_path TEXT NOT NULL UNIQUE,
@@ -310,20 +417,55 @@ async function migratePostgres() {
       size_bytes INTEGER,
       modified_ms BIGINT,
       extracted_text TEXT NOT NULL,
+      language TEXT,
+      translated_text TEXT,
+      translated_language TEXT,
+      content_hash TEXT,
+      keywords TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS document_chunks (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      document_id INTEGER NOT NULL,
+      rel_path TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      content_text TEXT NOT NULL,
+      language TEXT,
+      translated_text TEXT,
+      translated_language TEXT,
+      content_hash TEXT,
+      keywords TEXT,
+      embedding_json TEXT,
+      embedding_model TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(document_id, chunk_index)
+    );
+  `);
+
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS conversation_memories (
       conversation_id INTEGER PRIMARY KEY,
       summary_text TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS user_memories (
+      user_id INTEGER PRIMARY KEY,
+      summary_text TEXT NOT NULL DEFAULT '',
+      topics_json TEXT,
+      language TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
     CREATE TABLE IF NOT EXISTS knowledge_sources (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       original_name TEXT NOT NULL,
@@ -333,16 +475,63 @@ async function migratePostgres() {
       uploaded_by INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  );
+  `);
 
-  await pgPool.query(\"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(rel_path, '') || ' ' || coalesce(extracted_text, ''))) STORED;\");
-  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);\");
-  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);\");
-  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);\");
-  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);\");
-  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_documents_search_vector ON documents USING GIN(search_vector);\");
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS semantic_cache (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      user_id INTEGER,
+      scope_key TEXT,
+      normalized_query TEXT NOT NULL,
+      query_text TEXT NOT NULL,
+      query_language TEXT,
+      response_text TEXT NOT NULL,
+      response_language TEXT,
+      sources_json TEXT,
+      embedding_json TEXT,
+      knowledge_signature TEXT,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS language TEXT;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS translated_text TEXT;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS translated_language TEXT;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash TEXT;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS keywords TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS language TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS translated_text TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS translated_language TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_hash TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS keywords TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_json TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT;");
+  await pgPool.query("ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS topics_json TEXT;");
+  await pgPool.query("ALTER TABLE user_memories ADD COLUMN IF NOT EXISTS language TEXT;");
+  await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS response_language TEXT;");
+  await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS sources_json TEXT;");
+  await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS embedding_json TEXT;");
+  await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS knowledge_signature TEXT;");
+  await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS hit_count INTEGER NOT NULL DEFAULT 0;");
+
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(rel_path, '') || ' ' || coalesce(extracted_text, '') || ' ' || coalesce(translated_text, '') || ' ' || coalesce(keywords, '') || ' ' || coalesce(language, ''))) STORED;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(rel_path, '') || ' ' || coalesce(content_text, '') || ' ' || coalesce(translated_text, '') || ' ' || coalesce(keywords, '') || ' ' || coalesce(language, ''))) STORED;");
+
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_language ON documents(language);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_search_vector ON documents USING GIN(search_vector);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_document_chunks_document_idx ON document_chunks(document_id, chunk_index);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_document_chunks_language ON document_chunks(language);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_document_chunks_search_vector ON document_chunks USING GIN(search_vector);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_semantic_cache_scope_updated ON semantic_cache(scope_key, updated_at);");
 }
-
 async function postgresHasData() {
   const tables = [
     "users",
@@ -380,7 +569,7 @@ async function importLegacySqliteIntoPostgres() {
     legacyDb = await openLegacySqlite(sqlitePath);
     const tableRows = await sqliteAllFrom(
       legacyDb,
-      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','conversations','messages','files','audit_log','documents','conversation_memories','knowledge_sources')"
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','semantic_cache')"
     );
 
     if (!Array.isArray(tableRows) || !tableRows.length) {
@@ -399,8 +588,11 @@ async function importLegacySqliteIntoPostgres() {
         { name: "files", pk: "id", orderBy: "id" },
         { name: "audit_log", pk: "id", orderBy: "id" },
         { name: "documents", pk: "id", orderBy: "id" },
+        { name: "document_chunks", pk: "id", orderBy: "id" },
         { name: "conversation_memories", pk: "conversation_id", orderBy: "conversation_id" },
+        { name: "user_memories", pk: "user_id", orderBy: "user_id" },
         { name: "knowledge_sources", pk: "id", orderBy: "id" },
+        { name: "semantic_cache", pk: "id", orderBy: "id" },
       ];
 
       const availableTables = new Set(tableRows.map((row) => row.name));
@@ -427,7 +619,9 @@ async function importLegacySqliteIntoPostgres() {
       await setPostgresSequence(client, "files", "id");
       await setPostgresSequence(client, "audit_log", "id");
       await setPostgresSequence(client, "documents", "id");
+      await setPostgresSequence(client, "document_chunks", "id");
       await setPostgresSequence(client, "knowledge_sources", "id");
+      await setPostgresSequence(client, "semantic_cache", "id");
 
       await client.query("COMMIT");
       console.log(`Migracao automatica SQLite -> Postgres concluida a partir de ${sqlitePath}.`);
@@ -549,62 +743,78 @@ function buildSqliteFtsQuery(query) {
   return tokens.map((token) => `${token}*`).join(" ");
 }
 
-async function searchDocuments(query, limit = 4) {
+async function searchDocuments(query, limit = 4, options = {}) {
   await migrate();
   const safeLimit = Math.max(1, Number(limit) || 4);
+  const candidateLimit = Math.max(safeLimit * 6, 12);
   const searchText = String(query || "").trim();
+  const userLanguage = String(options?.userLanguage || "").trim();
   if (!searchText) return [];
 
   if (DB_CLIENT === "postgres") {
     try {
       const result = await pgPool.query(
-        `SELECT rel_path, extracted_text,
-                ts_rank(search_vector, plainto_tsquery('simple', $1)) AS score
-           FROM documents
+        `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json,
+                ts_rank(search_vector, plainto_tsquery('simple', $1)) +
+                CASE WHEN COALESCE(language, '') = $2 THEN 0.35 ELSE 0 END AS score
+           FROM document_chunks
           WHERE search_vector @@ plainto_tsquery('simple', $1)
           ORDER BY score DESC, updated_at DESC
-          LIMIT $2`,
-        [searchText, safeLimit]
+          LIMIT $3`,
+        [searchText, userLanguage, candidateLimit]
       );
       return result.rows || [];
     } catch (err) {
       const like = `%${searchText}%`;
       const fallback = await pgPool.query(
-        `SELECT rel_path, extracted_text
-           FROM documents
-          WHERE rel_path ILIKE $1 OR extracted_text ILIKE $1
-          ORDER BY updated_at DESC
-          LIMIT $2`,
-        [like, safeLimit]
+        `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json,
+                CASE
+                  WHEN COALESCE(language, '') = $2 THEN 0.35
+                  WHEN rel_path ILIKE $1 OR keywords ILIKE $1 THEN 0.2
+                  ELSE 0
+                END AS score
+           FROM document_chunks
+          WHERE rel_path ILIKE $1 OR content_text ILIKE $1 OR translated_text ILIKE $1 OR keywords ILIKE $1
+          ORDER BY score DESC, updated_at DESC
+          LIMIT $3`,
+        [like, userLanguage, candidateLimit]
       );
       return fallback.rows || [];
     }
   }
 
   const ftsQuery = buildSqliteFtsQuery(searchText);
-  if (!ftsQuery) return [];
-
-  try {
-    return await allSqlite(
-      `SELECT d.rel_path, d.extracted_text, bm25(documents_fts) AS score
-         FROM documents_fts
-         JOIN documents d ON d.id = documents_fts.rowid
-        WHERE documents_fts MATCH ?
-        ORDER BY score
-        LIMIT ?`,
-      [ftsQuery, safeLimit]
-    );
-  } catch (err) {
-    const like = `%${searchText}%`;
-    return allSqlite(
-      `SELECT rel_path, extracted_text
-         FROM documents
-        WHERE rel_path LIKE ? OR extracted_text LIKE ?
-        ORDER BY updated_at DESC
-        LIMIT ?`,
-      [like, like, safeLimit]
-    );
+  if (ftsQuery) {
+    try {
+      return await allSqlite(
+        `SELECT c.id, c.document_id, c.rel_path, c.content_text AS extracted_text, c.translated_text, c.translated_language, c.language, c.keywords, c.embedding_json,
+                ((-1 * bm25(document_chunks_fts)) + CASE WHEN COALESCE(c.language, '') = ? THEN 0.35 ELSE 0 END) AS score
+           FROM document_chunks_fts
+           JOIN document_chunks c ON c.id = document_chunks_fts.rowid
+          WHERE document_chunks_fts MATCH ?
+          ORDER BY score DESC
+          LIMIT ?`,
+        [userLanguage, ftsQuery, candidateLimit]
+      );
+    } catch (err) {
+      // fallback LIKE below
+    }
   }
+
+  const like = `%${searchText}%`;
+  return allSqlite(
+    `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json,
+            CASE
+              WHEN COALESCE(language, '') = ? THEN 0.35
+              WHEN rel_path LIKE ? OR keywords LIKE ? THEN 0.2
+              ELSE 0
+            END AS score
+       FROM document_chunks
+      WHERE rel_path LIKE ? OR content_text LIKE ? OR translated_text LIKE ? OR keywords LIKE ?
+      ORDER BY score DESC, updated_at DESC
+      LIMIT ?`,
+    [userLanguage, like, like, like, like, like, like, candidateLimit]
+  );
 }
 
 module.exports = {
@@ -621,6 +831,16 @@ module.exports = {
   sqlitePath,
   uploadsDir,
 };
+
+
+
+
+
+
+
+
+
+
 
 
 

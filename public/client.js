@@ -1,4 +1,4 @@
-const el = (id) => document.getElementById(id);
+﻿const el = (id) => document.getElementById(id);
 
 const QUICK_PROMPTS = [
   {
@@ -53,6 +53,8 @@ function renderIconSvg(iconName) {
     pdf: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M8 15h8"/><path d="M8 11h5"/></svg>',
     presentation: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4z"/><path d="M12 15v4"/><path d="M9 19h6"/><path d="m8 11 2.5-3 2.2 2.5 1.8-1.7L17 11"/></svg>',
     attachment: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 14.3 6.2a3 3 0 1 1 4.2 4.2l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.7-8.7"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><rect x="4" y="4" width="11" height="11" rx="2"/></svg>',
+    check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>',
   };
 
   return icons[iconName] || icons.chat;
@@ -336,7 +338,10 @@ function renderUser() {
   if (accountName) accountName.textContent = me.name || "Usuario";
 
   const accountMeta = el("accountMeta");
-  if (accountMeta) accountMeta.textContent = `${me.email || ""} - ${me.role || "user"}`;
+  if (accountMeta) {
+    const parts = [me.email || "", me.department || "", me.role || "user"].filter(Boolean);
+    accountMeta.textContent = parts.join(" - ");
+  }
 
   const accountInitial = el("accountInitial");
   if (accountInitial) accountInitial.textContent = getUserInitial(me.name);
@@ -368,11 +373,19 @@ function autoResizeTextarea() {
 async function copyText(text, button) {
   try {
     await navigator.clipboard.writeText(text || "");
-    const old = button.textContent;
-    button.textContent = "Copiado";
-    setTimeout(() => {
-      button.textContent = old;
-    }, 1200);
+    if (button) {
+      clearTimeout(button._copyTimer);
+      button.classList.add("is-copied");
+      button.innerHTML = renderIconSvg("check");
+      button.setAttribute("aria-label", "Copiado");
+      button.setAttribute("title", "Copiado");
+      button._copyTimer = setTimeout(() => {
+        button.classList.remove("is-copied");
+        button.innerHTML = renderIconSvg("copy");
+        button.setAttribute("aria-label", "Copiar");
+        button.setAttribute("title", "Copiar");
+      }, 1200);
+    }
   } catch {
     alert("Nao foi possivel copiar o texto.");
   }
@@ -556,34 +569,85 @@ function createMessageAvatar(role) {
   return avatar;
 }
 
-function appendTextContent(bubble, role, content) {
+function createCopyButton(text, extraClass = "") {
+  const copyBtn = document.createElement("button");
+  copyBtn.className = `copy-btn icon-copy-btn${extraClass ? ` ${extraClass}` : ""}`;
+  copyBtn.type = "button";
+  copyBtn.innerHTML = renderIconSvg("copy");
+  copyBtn.setAttribute("aria-label", "Copiar");
+  copyBtn.setAttribute("title", "Copiar");
+  copyBtn.onclick = () => copyText(text, copyBtn);
+  return copyBtn;
+}
+
+function looksStructuredAssistantText(text = "") {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  if (/^#{1,6}\s/m.test(value)) return true;
+  if (/^[-*]\s/m.test(value)) return true;
+  if (/^\d+\.\s/m.test(value)) return true;
+  if (/^>\s/m.test(value)) return true;
+  if (/\n\n/.test(value)) return true;
+  return value.length > 320 && /[:;]/.test(value);
+}
+
+function shouldRenderStructuredCard(meta, content) {
+  if (meta?.structured === true) return true;
+  return looksStructuredAssistantText(content);
+}
+
+function appendAssistantContent(bubble, text, meta = null) {
+  const useStructuredCard = shouldRenderStructuredCard(meta, text);
+
+  if (useStructuredCard) {
+    const card = document.createElement("section");
+    card.className = "structured-card";
+
+    const head = document.createElement("div");
+    head.className = "structured-card-head";
+
+    const label = document.createElement("div");
+    label.className = "structured-card-label";
+    label.textContent = meta?.structured_label || "Resposta estruturada";
+
+    head.appendChild(label);
+    head.appendChild(createCopyButton(text, "structured-copy-btn"));
+    card.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "structured-card-body md-content";
+    body.innerHTML = renderMarkdown(text);
+    card.appendChild(body);
+
+    bubble.appendChild(card);
+    return;
+  }
+
+  const plain = document.createElement("div");
+  plain.className = "assistant-plain";
+  plain.appendChild(createCopyButton(text, "inline-copy-btn"));
+
+  const textNode = document.createElement("div");
+  textNode.className = "md-content";
+  textNode.innerHTML = renderMarkdown(text);
+  plain.appendChild(textNode);
+
+  bubble.appendChild(plain);
+}
+
+function appendTextContent(bubble, role, content, meta = null) {
   const text = String(content || "");
   if (!text) return;
 
+  if (role === "assistant") {
+    appendAssistantContent(bubble, text, meta);
+    return;
+  }
+
   const textNode = document.createElement("div");
-  textNode.className = role === "assistant" ? "md-content" : "msg-text";
-
-  if (role === "assistant") {
-    textNode.innerHTML = renderMarkdown(text);
-  } else {
-    textNode.textContent = text;
-  }
-
+  textNode.className = "msg-text";
+  textNode.textContent = text;
   bubble.appendChild(textNode);
-
-  if (role === "assistant") {
-    const actions = document.createElement("div");
-    actions.className = "msg-actions";
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-btn";
-    copyBtn.type = "button";
-    copyBtn.textContent = "Copiar";
-    copyBtn.onclick = () => copyText(text, copyBtn);
-
-    actions.appendChild(copyBtn);
-    bubble.appendChild(actions);
-  }
 }
 
 function appendFileCard(bubble, meta) {
@@ -750,7 +814,7 @@ function addMessage(role, content, meta = null) {
   const bubble = document.createElement("div");
   bubble.className = "bubble";
 
-  appendTextContent(bubble, role, content);
+  appendTextContent(bubble, role, content, meta);
   appendFileCard(bubble, meta);
   appendSources(bubble, meta);
 
@@ -1134,7 +1198,7 @@ async function setupRecorder() {
         const ext = (blob.type || "").includes("ogg") ? ".ogg" : ".webm";
         const filename = `gravacao-${new Date().toISOString().replace(/[:.]/g, "-")}${ext}`;
         const file = new File([blob], filename, { type: blob.type || "audio/webm" });
-        await uploadFiles([file]);
+        queueComposerFiles([file]);
       };
 
       mediaRecorder.start();
@@ -1281,6 +1345,14 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
+
+
+
+
+
+
+
+
 
 
 

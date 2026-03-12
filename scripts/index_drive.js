@@ -3,6 +3,8 @@ const fs = require("fs");
 const path = require("path");
 const { migrate, get, all, run } = require("../db");
 const { extractText } = require("../lib/extract");
+const { detectLanguage } = require("../lib/language");
+const { chunkTextSemantically, extractKeywords, hashText } = require("../lib/semantic");
 
 const INDEX_FOLDER = process.env.INDEX_FOLDER || "kb";
 const SUPPORTED = new Set([".txt", ".md", ".pdf", ".docx", ".xlsx", ".csv", ".pptx"]);
@@ -25,6 +27,36 @@ function toRel(full, absIndex) {
 
 function round(x) {
   return Math.round(Number(x));
+}
+
+async function upsertDocumentChunks(documentId, relPath, safeText, language, keywordText) {
+  await run("DELETE FROM document_chunks WHERE document_id=?", [documentId]);
+
+  const documentKeywords = keywordText ? keywordText.split(", ").filter(Boolean) : [];
+  const chunks = chunkTextSemantically(safeText || relPath, {
+    maxChars: 1400,
+    minChars: 420,
+  });
+
+  if (!chunks.length) {
+    await run(
+      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [documentId, relPath, 0, safeText, language, "", null, hashText(safeText), keywordText]
+    );
+    return 1;
+  }
+
+  let created = 0;
+  for (const chunk of chunks) {
+    const keywords = [...new Set([...(chunk.keywords || []), ...documentKeywords])].slice(0, 16).join(", ");
+    await run(
+      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [documentId, relPath, chunk.index, chunk.text, language, "", null, chunk.hash, keywords]
+    );
+    created += 1;
+  }
+
+  return created;
 }
 
 async function main() {
@@ -77,17 +109,27 @@ async function main() {
     try {
       const extracted = (await extractText(full, path.basename(full), "")).trim();
       const safeText = extracted.length ? extracted : `(sem texto extraido) ${relPath}`;
+      const language = detectLanguage(safeText, "pt");
+      const keywordText = extractKeywords(safeText, 14).join(", ");
+      const contentHash = hashText(safeText);
 
+      let documentId = existing?.id || 0;
       if (!existing) {
-        await run(
-          "INSERT INTO documents (source_path, rel_path, ext, size_bytes, modified_ms, extracted_text) VALUES (?, ?, ?, ?, ?, ?)",
-          [sourcePath, relPath, ext, stat.size, round(stat.mtimeMs), safeText]
+        const created = await run(
+          "INSERT INTO documents (source_path, rel_path, ext, size_bytes, modified_ms, extracted_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [sourcePath, relPath, ext, stat.size, round(stat.mtimeMs), safeText, language, "", null, contentHash, keywordText]
         );
+        documentId = created.lastID;
       } else {
         await run(
-          "UPDATE documents SET rel_path=?, ext=?, size_bytes=?, modified_ms=?, extracted_text=?, updated_at=datetime('now') WHERE id=?",
-          [relPath, ext, stat.size, round(stat.mtimeMs), safeText, existing.id]
+          "UPDATE documents SET rel_path=?, ext=?, size_bytes=?, modified_ms=?, extracted_text=?, language=?, translated_text=?, translated_language=?, content_hash=?, keywords=?, updated_at=datetime('now') WHERE id=?",
+          [relPath, ext, stat.size, round(stat.mtimeMs), safeText, language, "", null, contentHash, keywordText, existing.id]
         );
+        documentId = existing.id;
+      }
+
+      if (documentId) {
+        await upsertDocumentChunks(documentId, relPath, safeText, language, keywordText);
       }
 
       indexed++;
@@ -104,6 +146,7 @@ async function main() {
   let removed = 0;
   for (const row of rows) {
     if (!seen.has(row.source_path)) {
+      await run("DELETE FROM document_chunks WHERE document_id=?", [row.id]);
       await run("DELETE FROM documents WHERE id=?", [row.id]);
       removed++;
     }
@@ -118,3 +161,4 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
+

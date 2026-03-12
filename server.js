@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
@@ -10,6 +10,8 @@ const multer = require("multer");
 const jwt = require("jsonwebtoken");
 
 const { DATA_DIR, DB_CLIENT, migrate, get, all, run, uploadsDir, kbDir, logEvent, searchDocuments } = require("./db");
+const { detectLanguage, formatDailyGreeting, getLanguageLabel, normalizeLanguageCode, normalizeText: normalizeLanguageText } = require("./lib/language");
+const { chunkTextSemantically, cosineSimilarity, extractKeywords, hashText, normalizeSemanticText, parseEmbedding } = require("./lib/semantic");
 const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact } = require("./lib/generate");
@@ -34,6 +36,33 @@ const DEFAULT_ADMIN_PASSWORD = "Talkers#2026!";
 const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
 const MAX_CONVERSATION_MEMORY = 6000;
 const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
+const OPENAI_EMBEDDING_MODEL = String(process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small").trim();
+const SEMANTIC_CACHE_MIN_SIMILARITY = 0.93;
+const SEARCH_CANDIDATE_LIMIT = 16;
+const STRUCTURED_REQUEST_RE = /\b(como|explique|instru|passo a passo|melhore|reescreva|reorganize|organize|estrutura|estruture|resuma|traduza|sugest|modelo|mensagem|texto pronto|texto profissional|formate|formatar|resposta|compare|analise|analisar)\b/i;
+const TONE_PROFILE_MAP = {
+  profissional: 'profissional, elegante e confiavel',
+  direto: 'direto, claro e sem rodeios',
+  objetivo: 'objetivo, pratico e focado no que importa',
+  cordial: 'cordial, acolhedor e respeitoso',
+  leve: 'leve, humano e acessivel',
+  despojado: 'despojado, natural e fluido',
+  persuasivo: 'persuasivo, comercial e orientado a conversao',
+};
+const DEPARTMENTS = [
+  'Professor',
+  'Administrativo',
+  'Pedagogico',
+  'RH',
+  'Comercial',
+  'Gestao',
+  'Financeiro',
+  'Marketing',
+];
+const FIXED_DEPARTMENT_BY_EMAIL = {
+  'julia@talkers.com': 'RH',
+  'laura@talkers.com': 'Administrativo',
+};
 
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
@@ -149,6 +178,55 @@ async function ensureAdmin() {
   }
 }
 
+async function ensureFixedDepartments() {
+  for (const [email, department] of Object.entries(FIXED_DEPARTMENT_BY_EMAIL)) {
+    const safeDepartment = sanitizeDepartment(department);
+    if (!safeDepartment) continue;
+    await run(
+      "UPDATE users SET department=? WHERE email=? AND COALESCE(department, '')<>?",
+      [safeDepartment, email, safeDepartment]
+    );
+  }
+}
+
+async function maybeInsertDailyGreeting(conversationId, user) {
+  const todayKey = brazilDateKey();
+  const priorGreetings = await all(
+    `SELECT m.meta_json
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.user_id=?
+        AND m.role='assistant'
+        AND m.meta_json IS NOT NULL
+      ORDER BY m.id DESC
+      LIMIT 40`,
+    [user.id || user.sub]
+  );
+
+  const hasGreetingToday = priorGreetings.some((row) => {
+    const meta = safeJsonParse(row?.meta_json || '');
+    return meta?.daily_greeting === true && meta?.greeting_date === todayKey;
+  });
+
+  if (hasGreetingToday) return null;
+
+  const greeting = formatDailyGreeting(user.name || 'Usuario');
+  const meta = JSON.stringify({
+    daily_greeting: true,
+    greeting_date: todayKey,
+    structured: false,
+    response_language: 'pt',
+  });
+
+  await run(
+    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
+    [conversationId, greeting, meta]
+  );
+  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [conversationId]);
+  return greeting;
+}
+
+
 function nowBrazil() {
   return new Intl.DateTimeFormat("pt-BR", {
     timeZone: "America/Sao_Paulo",
@@ -217,6 +295,84 @@ function compactMemory(text, maxChars = MAX_CONVERSATION_MEMORY) {
   return value.slice(value.length - maxChars);
 }
 
+function sanitizeDepartment(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return DEPARTMENTS.find((item) => item.toLowerCase() === normalized) || "";
+}
+
+function brazilDateKey(value = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(value));
+}
+
+function normalizeQuery(value = "") {
+  return normalizeSemanticText(String(value || "")).slice(0, 500);
+}
+
+function detectConversationLanguage(userText = "", history = []) {
+  const joined = [
+    String(userText || "").trim(),
+    ...(history || []).slice(-4).map((item) => String(item?.content || "").trim()),
+  ].filter(Boolean).join("\n");
+  return normalizeLanguageCode(detectLanguage(joined || userText || "", "pt"));
+}
+
+function analyzeConversationIntent(userText = "", userLanguage = "pt") {
+  const normalized = normalizeQuery(userText);
+  const wantsStructured = STRUCTURED_REQUEST_RE.test(normalized) || /\n/.test(String(userText || ""));
+  const wantsTranslation = /\b(traduza|translate|traduz|translation|traducao|traduccion|traduzione)\b/i.test(userText);
+  const wantsSummary = /\b(resuma|resumo|summary|summarize|resumen|riassunto)\b/i.test(userText);
+  const wantsRewrite = /\b(melhore|reescreva|rewrite|rephrase|ajuste|corrija|formate|organize)\b/i.test(userText);
+  const wantsSteps = /\b(passo a passo|step by step|como fazer|how to|como faco|como faço)\b/i.test(userText);
+  const wantsProfessional = /\b(profissional|formal|executivo|corporativo|business|profesional|professionnel)\b/i.test(userText);
+  const wantsPersuasive = /\b(venda|comercial|persuasivo|convencer|sales|conversion)\b/i.test(userText);
+
+  let tone = 'cordial';
+  if (wantsProfessional) tone = 'profissional';
+  else if (wantsPersuasive) tone = 'persuasivo';
+  else if (wantsSteps || wantsSummary) tone = 'objetivo';
+  else if (/\b(rapido|rápido|direto|curto|short|brief)\b/i.test(userText)) tone = 'direto';
+  else if (/\b(leve|humano|friendly|casual|despojado)\b/i.test(userText)) tone = 'leve';
+
+  const responseLabel = userLanguage === 'en'
+    ? 'Structured answer'
+    : userLanguage === 'es'
+      ? 'Respuesta estructurada'
+      : userLanguage === 'it'
+        ? 'Risposta strutturata'
+        : userLanguage === 'fr'
+          ? 'Reponse structuree'
+          : 'Resposta estruturada';
+
+  return {
+    language: userLanguage,
+    tone,
+    wantsStructured: wantsStructured || wantsTranslation || wantsSummary || wantsRewrite || wantsSteps,
+    wantsTranslation,
+    wantsSummary,
+    wantsRewrite,
+    wantsSteps,
+    responseLabel,
+  };
+}
+
+function getToneInstruction(intent) {
+  return TONE_PROFILE_MAP[intent?.tone] || TONE_PROFILE_MAP.cordial;
+}
+
+function makeStructuredResponseMeta(intent, extra = {}) {
+  return {
+    structured: Boolean(intent?.wantsStructured),
+    structured_label: intent?.responseLabel || 'Resposta estruturada',
+    response_language: intent?.language || 'pt',
+    tone: intent?.tone || 'cordial',
+    ...extra,
+  };
+}
 const TOPIC_SHIFT_EXPLICIT_RE = /\b(mudando de assunto|mudando totalmente de assunto|outro assunto|agora outra coisa|agora outro assunto|falando de outra coisa|novo assunto|vamos falar de outra coisa|esquece isso|esquece aquilo|deixa isso pra la|sem relacao com isso)\b/i;
 const TOPIC_CONTINUITY_HINT_RE = /\b(isso|isto|esse|essa|esses|essas|anterior|mesmo|mesma|continuar|continua|continuando|agora em|com base nisso|nesse texto|nesta imagem|nessa imagem|nesse arquivo|nessa planilha|adicione|remova|ajuste|edite|corrija|melhore|reescreva|resuma|traduza)\b/i;
 const TOPIC_STOPWORDS = new Set([
@@ -430,6 +586,64 @@ async function updateConversationMemory(conversationId, userText, assistantText,
   }
 }
 
+async function getUserMemory(userId) {
+  const row = await get(
+    "SELECT summary_text, topics_json, language FROM user_memories WHERE user_id=?",
+    [userId]
+  );
+
+  return {
+    summaryText: String(row?.summary_text || '').trim(),
+    topics: safeJsonParse(row?.topics_json || '[]') || [],
+    language: String(row?.language || '').trim(),
+  };
+}
+
+async function updateUserMemory(userId, userText, assistantText, language = 'pt') {
+  if (!userId) return;
+
+  const previous = await getUserMemory(userId);
+  const mergedTopics = [...new Set([
+    ...(Array.isArray(previous.topics) ? previous.topics : []),
+    ...extractTopicTerms(userText).slice(0, 6),
+  ])].slice(-16);
+
+  const entry = [
+    `Usuario: ${String(userText || '').trim()}`,
+    `IA: ${String(assistantText || '').trim()}`,
+  ].filter(Boolean).join('\n');
+
+  const summaryText = compactMemory([previous.summaryText, entry].filter(Boolean).join('\n\n'));
+  const existing = await get("SELECT user_id FROM user_memories WHERE user_id=?", [userId]);
+
+  if (existing) {
+    await run(
+      "UPDATE user_memories SET summary_text=?, topics_json=?, language=?, updated_at=datetime('now') WHERE user_id=?",
+      [summaryText, JSON.stringify(mergedTopics), language, userId]
+    );
+  } else {
+    await run(
+      "INSERT INTO user_memories (user_id, summary_text, topics_json, language) VALUES (?, ?, ?, ?)",
+      [userId, summaryText, JSON.stringify(mergedTopics), language]
+    );
+  }
+}
+
+async function getRelevantUserMemory(userId, userText) {
+  const memory = await getUserMemory(userId);
+  if (!memory.summaryText) return '';
+
+  const currentTerms = extractTopicTerms(userText);
+  const storedTerms = Array.isArray(memory.topics) ? memory.topics : [];
+  const overlap = currentTerms.filter((term) => storedTerms.includes(term));
+
+  if (overlap.length >= 2 || currentTerms.length <= 3) {
+    return memory.summaryText;
+  }
+
+  return '';
+}
+
 function getKnowledgeUploadExt(filePath, originalName = "", mimeType = "") {
   return detectExt(filePath, originalName, mimeType) || path.extname(String(filePath || "")).toLowerCase() || ".bin";
 }
@@ -490,9 +704,19 @@ async function findDuplicateKnowledgeUpload({ sourcePath, originalName, mimeType
     }
   }
 
-  if (RAG_TEXT_COMPARE_EXTS.has(ext)) {
-    const extracted = normalizeKnowledgeText(await extractText(sourcePath, originalName, mimeType));
-    if (extracted) {
+  const extracted = normalizeKnowledgeText(await extractText(sourcePath, originalName, mimeType));
+  if (extracted) {
+    const contentHash = hashText(extracted);
+    const duplicateHash = await get(
+      "SELECT rel_path FROM documents WHERE content_hash=? LIMIT 1",
+      [contentHash]
+    );
+
+    if (duplicateHash?.rel_path) {
+      return { relPath: duplicateHash.rel_path, reason: "content_hash" };
+    }
+
+    if (RAG_TEXT_COMPARE_EXTS.has(ext)) {
       const duplicateText = await get(
         "SELECT rel_path FROM documents WHERE extracted_text=? LIMIT 1",
         [extracted]
@@ -507,6 +731,37 @@ async function findDuplicateKnowledgeUpload({ sourcePath, originalName, mimeType
   return null;
 }
 
+async function upsertDocumentChunks(documentId, relPath, extractedText, language, documentKeywords = []) {
+  await run("DELETE FROM document_chunks WHERE document_id=?", [documentId]);
+
+  const chunks = chunkTextSemantically(extractedText || relPath, {
+    maxChars: 1400,
+    minChars: 420,
+  });
+
+  if (!chunks.length) {
+    const contentText = String(extractedText || relPath || '').trim();
+    const keywordText = extractKeywords(contentText, 12).join(', ');
+    await run(
+      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [documentId, relPath, 0, contentText, language, '', null, hashText(contentText), keywordText]
+    );
+    return 1;
+  }
+
+  let created = 0;
+  for (const chunk of chunks) {
+    const keywords = [...new Set([...(chunk.keywords || []), ...documentKeywords])].slice(0, 16).join(', ');
+    await run(
+      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [documentId, relPath, chunk.index, chunk.text, language, '', null, chunk.hash, keywords]
+    );
+    created += 1;
+  }
+
+  return created;
+}
+
 async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeType }) {
   if (!fs.existsSync(sourcePath)) return null;
 
@@ -517,27 +772,201 @@ async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeTy
   const safeText = extracted || (shouldExtract
     ? `(sem texto extraido) ${relPath}`
     : `(arquivo grande para indexacao local, mantido para busca vetorial) ${relPath}`);
+  const language = detectConversationLanguage(safeText);
+  const keywordText = extractKeywords(safeText, 14).join(', ');
+  const contentHash = hashText(safeText);
   const existing = await get("SELECT id FROM documents WHERE source_path=?", [sourcePath]);
 
+  let documentId = existing?.id || 0;
   if (existing) {
     await run(
-      "UPDATE documents SET rel_path=?, ext=?, size_bytes=?, modified_ms=?, extracted_text=?, updated_at=datetime('now') WHERE id=?",
-      [relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, existing.id]
+      "UPDATE documents SET rel_path=?, ext=?, size_bytes=?, modified_ms=?, extracted_text=?, language=?, translated_text=?, translated_language=?, content_hash=?, keywords=?, updated_at=datetime('now') WHERE id=?",
+      [relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, language, '', null, contentHash, keywordText, existing.id]
     );
   } else {
-    await run(
-      "INSERT INTO documents (source_path, rel_path, ext, size_bytes, modified_ms, extracted_text) VALUES (?, ?, ?, ?, ?, ?)",
-      [sourcePath, relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText]
+    const created = await run(
+      "INSERT INTO documents (source_path, rel_path, ext, size_bytes, modified_ms, extracted_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [sourcePath, relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, language, '', null, contentHash, keywordText]
     );
+    documentId = created.lastID;
   }
 
-  return { relPath, extractedText: safeText };
+  if (!documentId) {
+    const refreshed = await get("SELECT id FROM documents WHERE source_path=?", [sourcePath]);
+    documentId = refreshed?.id || 0;
+  }
+
+  const chunkCount = documentId
+    ? await upsertDocumentChunks(documentId, relPath, safeText, language, keywordText ? keywordText.split(', ').filter(Boolean) : [])
+    : 0;
+
+  return { relPath, extractedText: safeText, language, chunkCount, documentId };
 }
-async function searchKnowledgeBase(query, limit = 4) {
+
+async function getEmbeddingForText(text) {
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  if (!apiKey || !text) return null;
+
   try {
-    return await searchDocuments(query, limit);
+    const resp = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: OPENAI_EMBEDDING_MODEL,
+        input: String(text).slice(0, 6000),
+      }),
+    });
+
+    if (!resp.ok) {
+      console.log('Erro embeddings OpenAI:', resp.status, await resp.text());
+      return null;
+    }
+
+    const data = await resp.json();
+    return Array.isArray(data?.data?.[0]?.embedding) ? data.data[0].embedding : null;
   } catch (err) {
-    console.log("Erro na busca interna:", err?.message || err);
+    console.log('Falha ao gerar embedding:', err?.message || err);
+    return null;
+  }
+}
+
+async function ensureChunkEmbedding(row) {
+  if (!row?.id) return null;
+  const existing = parseEmbedding(row.embedding_json);
+  if (existing) return existing;
+
+  const generated = await getEmbeddingForText(row.extracted_text || row.translated_text || '');
+  if (!generated) return null;
+
+  await run(
+    "UPDATE document_chunks SET embedding_json=?, embedding_model=?, updated_at=datetime('now') WHERE id=?",
+    [JSON.stringify(generated), OPENAI_EMBEDDING_MODEL, row.id]
+  );
+  row.embedding_json = JSON.stringify(generated);
+  return generated;
+}
+
+async function translateTextSilently(text, sourceLanguage, targetLanguage) {
+  const cleanText = String(text || '').trim();
+  if (!cleanText) return '';
+  if (normalizeLanguageCode(sourceLanguage) === normalizeLanguageCode(targetLanguage)) return cleanText;
+
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  if (!apiKey) return cleanText;
+
+  try {
+    const resp = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        input: [
+          {
+            role: 'system',
+            content: [{ type: 'input_text', text: `Traduza internamente o texto para ${getLanguageLabel(targetLanguage)} preservando contexto, tom e terminologia. Responda somente com a traducao.` }],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: cleanText.slice(0, 5000) }],
+          },
+        ],
+      }),
+    });
+
+    if (!resp.ok) return cleanText;
+    const data = await resp.json();
+    return String(data?.output_text || cleanText).trim() || cleanText;
+  } catch (err) {
+    console.log('Falha ao traduzir texto:', err?.message || err);
+    return cleanText;
+  }
+}
+
+async function hydrateKnowledgeRows(rows, userLanguage, queryEmbedding = null) {
+  const enriched = [];
+
+  for (const row of rows || []) {
+    const item = { ...row };
+    const embedding = queryEmbedding ? (await ensureChunkEmbedding(item)) : parseEmbedding(item.embedding_json);
+    const currentTranslationLanguage = normalizeLanguageCode(item.translated_language || '');
+    const hasMatchingTranslation = Boolean(item.translated_text) && currentTranslationLanguage === userLanguage;
+    let translated = hasMatchingTranslation ? String(item.translated_text || '') : '';
+
+    if (!hasMatchingTranslation) {
+      translated = await translateTextSilently(
+        item.extracted_text || item.translated_text || '',
+        item.language || 'pt',
+        userLanguage
+      );
+
+      if (translated && translated !== item.extracted_text) {
+        await run(
+          "UPDATE document_chunks SET translated_text=?, translated_language=?, updated_at=datetime('now') WHERE id=?",
+          [translated, userLanguage, item.id]
+        );
+        item.translated_text = translated;
+        item.translated_language = userLanguage;
+      }
+    }
+
+    item.semantic_score = queryEmbedding && embedding ? cosineSimilarity(queryEmbedding, embedding) : 0;
+    item.score = (Number(item.score || 0) * 0.45) + (item.semantic_score * 0.55);
+    item.analysis_text = translated || item.extracted_text;
+    enriched.push(item);
+  }
+
+  enriched.sort((left, right) => (Number(right.score || 0) - Number(left.score || 0)) || String(left.rel_path || '').localeCompare(String(right.rel_path || '')));
+  return enriched;
+}
+
+async function searchKnowledgeBase(query, options = {}) {
+  const safeLimit = Math.max(1, Number(options.limit || 4));
+  const userLanguage = normalizeLanguageCode(options.userLanguage || detectLanguage(query, 'pt'));
+
+  const dedupeRows = (rows = []) => {
+    const uniqueRows = [];
+    const seenDocuments = new Set();
+
+    for (const row of rows) {
+      const key = String(row.document_id || row.rel_path || row.id || '');
+      if (!key || seenDocuments.has(key)) continue;
+      seenDocuments.add(key);
+      uniqueRows.push(row);
+      if (uniqueRows.length >= safeLimit) break;
+    }
+
+    return uniqueRows;
+  };
+
+  try {
+    const queryEmbedding = await getEmbeddingForText(query);
+    const rows = await searchDocuments(query, SEARCH_CANDIDATE_LIMIT, {
+      userLanguage,
+      queryEmbedding: queryEmbedding ? JSON.stringify(queryEmbedding) : null,
+    });
+    const hydrated = await hydrateKnowledgeRows(rows, userLanguage, queryEmbedding);
+    let uniqueRows = dedupeRows(hydrated);
+
+    if (!uniqueRows.length && queryEmbedding) {
+      const semanticCandidates = await all(
+        "SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json, 0 AS score FROM document_chunks ORDER BY updated_at DESC LIMIT ?",
+        [Math.max(safeLimit * 20, 80)]
+      );
+      const semanticHydrated = await hydrateKnowledgeRows(semanticCandidates, userLanguage, queryEmbedding);
+      uniqueRows = dedupeRows(
+        semanticHydrated.filter((row) => Number(row.semantic_score || 0) >= 0.42)
+      );
+    }
+
+    return uniqueRows;
+  } catch (err) {
+    console.log('Erro na busca interna:', err?.message || err);
     return [];
   }
 }
@@ -573,32 +1002,120 @@ function mapKnowledgeSource(row) {
   return {
     type: "knowledge_base",
     label: String(row?.rel_path || "Documento interno").trim() || "Documento interno",
-    excerpt: makeSourceExcerpt(row?.extracted_text || ""),
+    excerpt: makeSourceExcerpt(row?.analysis_text || row?.translated_text || row?.extracted_text || ""),
+    language: row?.language || '',
   };
 }
 
-function buildKnowledgeBundleFromRows(rows) {
+function buildKnowledgeBundleFromRows(rows, userLanguage = 'pt') {
   const safeRows = Array.isArray(rows) ? rows : [];
+  const deduped = [];
+  const seen = new Set();
+
+  for (const row of safeRows) {
+    const key = String(row?.document_id || row?.rel_path || row?.id || '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+
   return {
-    text: safeRows.length
-      ? safeRows
-          .map((row) => `[Base interna: ${row.rel_path}]\n${String(row.extracted_text || "").slice(0, 1400)}`)
+    text: deduped.length
+      ? deduped
+          .map((row) => {
+            const baseText = String(row.analysis_text || row.translated_text || row.extracted_text || '').slice(0, 1400);
+            const languageLabel = row?.language && row.language !== userLanguage
+              ? ` | idioma original: ${getLanguageLabel(row.language)}`
+              : '';
+            return `[Base interna: ${row.rel_path}${languageLabel}]\n${baseText}`;
+          })
           .join("\n\n")
       : "",
-    sources: safeRows.map(mapKnowledgeSource),
+    sources: deduped.map(mapKnowledgeSource),
   };
 }
 
-async function buildKnowledgeBundle(query) {
-  const rows = await searchKnowledgeBase(query, 4);
-  return buildKnowledgeBundleFromRows(rows);
+async function buildKnowledgeBundle(query, options = {}) {
+  const userLanguage = normalizeLanguageCode(options.userLanguage || detectLanguage(query, 'pt'));
+  const rows = await searchKnowledgeBase(query, { limit: options.limit || 4, userLanguage });
+  return buildKnowledgeBundleFromRows(rows, userLanguage);
+}
+
+async function getKnowledgeSignatureValue() {
+  const row = await get(
+    "SELECT COUNT(*) AS total, MAX(updated_at) AS updated_at FROM documents",
+    []
+  );
+  const chunkRow = await get(
+    "SELECT COUNT(*) AS total, MAX(updated_at) AS updated_at FROM document_chunks",
+    []
+  );
+  return `${Number(row?.total || 0)}:${row?.updated_at || '0'}:${Number(chunkRow?.total || 0)}:${chunkRow?.updated_at || '0'}`;
+}
+
+async function findSemanticCache(userId, queryText, queryLanguage, queryEmbedding, knowledgeSignature) {
+  const normalizedQuery = normalizeQuery(queryText);
+  if (!normalizedQuery) return null;
+
+  const exact = await get(
+    "SELECT id, response_text, response_language, sources_json, embedding_json FROM semantic_cache WHERE user_id=? AND normalized_query=? AND knowledge_signature=? ORDER BY updated_at DESC LIMIT 1",
+    [userId, normalizedQuery, knowledgeSignature]
+  );
+
+  if (exact) {
+    await run("UPDATE semantic_cache SET hit_count=COALESCE(hit_count, 0)+1, updated_at=datetime('now') WHERE id=?", [exact.id]);
+    return {
+      text: exact.response_text,
+      responseLanguage: exact.response_language,
+      sources: safeJsonParse(exact.sources_json || '[]') || [],
+    };
+  }
+
+  if (!queryEmbedding) return null;
+
+  const recent = await all(
+    "SELECT id, response_text, response_language, sources_json, embedding_json FROM semantic_cache WHERE user_id=? AND knowledge_signature=? ORDER BY updated_at DESC LIMIT 24",
+    [userId, knowledgeSignature]
+  );
+
+  let best = null;
+  let bestScore = 0;
+  for (const row of recent) {
+    const score = cosineSimilarity(queryEmbedding, row.embedding_json);
+    if (score > bestScore) {
+      bestScore = score;
+      best = row;
+    }
+  }
+
+  if (best && bestScore >= SEMANTIC_CACHE_MIN_SIMILARITY) {
+    await run("UPDATE semantic_cache SET hit_count=COALESCE(hit_count, 0)+1, updated_at=datetime('now') WHERE id=?", [best.id]);
+    return {
+      text: best.response_text,
+      responseLanguage: best.response_language,
+      sources: safeJsonParse(best.sources_json || '[]') || [],
+      semanticSimilarity: bestScore,
+    };
+  }
+
+  return null;
+}
+
+async function saveSemanticCache(userId, queryText, queryLanguage, responseText, responseLanguage, sources, queryEmbedding, knowledgeSignature) {
+  const normalizedQuery = normalizeQuery(queryText);
+  if (!normalizedQuery || !responseText) return;
+
+  await run(
+    "INSERT INTO semantic_cache (user_id, scope_key, normalized_query, query_text, query_language, response_text, response_language, sources_json, embedding_json, knowledge_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [userId, `${userId}:${queryLanguage}`, normalizedQuery, queryText, queryLanguage, responseText, responseLanguage, JSON.stringify(sources || []), queryEmbedding ? JSON.stringify(queryEmbedding) : null, knowledgeSignature]
+  );
 }
 
 function queryLooksExternalOrCurrent(query = "") {
   const value = String(query || "").trim().toLowerCase();
   if (!value) return false;
 
-  return /(hoje|agora|atual|atualizado|ultim|recente|noticia|noticias|mercado|cotacao|preco|precos|clima|governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado)/i.test(value);
+  return /(hoje|agora|atual|atualizado|ultim|recente|noticia|noticias|mercado|cotacao|preco|precos|clima|governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado|today|latest|current|news|market|weather|gobierno|actualidad|noticias|oggi|actuel|nouvelles)/i.test(value);
 }
 
 function shouldFetchWebContext(query, knowledgeBundle) {
@@ -615,7 +1132,7 @@ function shouldShowSourcesForReply(query) {
 
   if (!normalized) return false;
 
-  return /(fonte|fontes|referencia|referencias|origem|origens|cite|citar|citacao|citacoes|source|sources|link|links|de onde|baseou|baseada|baseado)/.test(normalized);
+  return /(fonte|fontes|referencia|referencias|origem|origens|cite|citar|citacao|citacoes|source|sources|link|links|de onde|baseou|baseada|baseado|fuente|fuentes|referencia|references|sorgente|origine|origen)/.test(normalized);
 }
 async function getConversationFilesContext(conversationId) {
   try {
@@ -804,68 +1321,80 @@ function buildOpenAITools() {
   tools.push({ type: "web_search_preview" });
   return tools;
 }
-async function buildOpenAIInput({ conversationId, userText, contextText, topicSnapshot = null }) {
+async function buildOpenAIInput({
+  conversationId,
+  userId,
+  userText,
+  contextText,
+  topicSnapshot = null,
+  responseProfile = null,
+}) {
   const snapshot = topicSnapshot || await getConversationTopicSnapshot(conversationId, userText, 12);
   const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
-  const topicShift = snapshot?.topicShift || { isShift: false, reason: "unknown" };
+  const topicShift = snapshot?.topicShift || { isShift: false, reason: 'unknown' };
+  const userLanguage = normalizeLanguageCode(responseProfile?.language || detectConversationLanguage(userText, history));
+  const intent = responseProfile || analyzeConversationIntent(userText, userLanguage);
   const memory = await getConversationMemory(conversationId);
+  const userMemory = await getRelevantUserMemory(userId, userText);
   const visionInputs = await getRecentVisionInputs(conversationId, 3);
   const documentInputs = await getRecentDocumentInputs(conversationId, 2);
-  const normalizedUserText = String(userText || "").trim();
+  const normalizedUserText = String(userText || '').trim();
 
   const historyText = topicShift.isShift
-    ? "Historico anterior ocultado nesta resposta porque o usuario mudou de assunto."
+    ? 'Historico recente ocultado nesta resposta porque o usuario mudou claramente de assunto.'
     : history
-        .map((item) => `${item.role === "assistant" ? "IA" : "Usuario"}: ${item.content}`)
+        .map((item) => `${item.role === 'assistant' ? 'IA' : 'Usuario'}: ${item.content}`)
         .filter(Boolean)
-        .join("\n");
+        .join('\n');
 
   const memoryText = topicShift.isShift
-    ? "Ignorada nesta resposta porque o usuario mudou de assunto."
-    : (memory || "Sem memoria persistente ainda.");
+    ? 'Memoria de conversa anterior ignorada nesta resposta por mudanca de assunto.'
+    : (memory || 'Sem memoria persistente desta conversa ainda.');
+
+  const userMemoryText = topicShift.isShift
+    ? 'Memoria entre conversas nao usada nesta resposta por mudanca de assunto.'
+    : (userMemory || 'Sem memoria relevante de outras conversas.');
 
   const systemText = `
-Voce e a TALKERS IA, assistente corporativa da empresa Talkers.
-Responda sempre em portugues do Brasil.
-Seja objetiva, clara, educada e util.
+Voce e a TALKERS IA, assistente corporativa e educacional da empresa Talkers.
+Idioma principal da resposta atual: ${getLanguageLabel(userLanguage)}.
+Tom desejado para esta resposta: ${getToneInstruction(intent)}.
 
-Data e hora atual no Brasil:
-${nowBrazil()}
-
-Regras:
-- Considere o historico recente da conversa antes de responder.
-- Se houver memoria acumulada da conversa, use isso para manter continuidade.
+Comportamento:
+- Detecte automaticamente o idioma do usuario e responda nesse idioma.
+- Quando o usuario pedir traducao, traduza para o idioma solicitado mantendo contexto e intencao.
+- Quando documentos estiverem em outro idioma, interprete o conteudo no idioma original, traduza silenciosamente quando necessario e responda no idioma do usuario.
 - Para perguntas sobre processos, materiais, regras e informacoes da Talkers, priorize sempre a base interna da empresa e os arquivos da conversa.
-- Use a internet apenas para complementar, atualizar ou comparar informacoes quando isso realmente ajudar a resposta.
-- Se houver conflito entre a base interna e fontes externas em temas da empresa, informe o conflito e priorize a base interna.
-- Se houver arquivos enviados, use o texto extraido e, quando disponivel, os arquivos brutos incluidos nesta chamada.
-- Se o usuario pedir para ajustar, corrigir ou editar uma imagem da conversa, gere uma nova versao editada quando houver imagem elegivel; se faltar imagem valida, peca um anexo PNG, JPG ou WEBP.
-- Se o usuario pedir geracao de arquivo, entregue o arquivo e explique em uma frase o que foi gerado.
-- Se nao houver base suficiente, diga isso claramente e peca complemento.
-- Quando o usuario mudar claramente de assunto, trate a ultima mensagem como um novo tema e nao force o contexto anterior.
-${topicShift.isShift
-  ? `- Foi detectada uma mudanca de assunto nesta ultima mensagem (${topicShift.reason}). Priorize totalmente o pedido atual e so reutilize contexto anterior se o usuario fizer referencia clara a ele.`
-  : '- Mantenha a continuidade do assunto atual usando o contexto anterior apenas quando ele for realmente relevante.'}
+- Use a web apenas como complemento ou quando o usuario pedir algo externo, atual ou publico.
+- Se houver conflito entre base interna e web em assuntos da empresa, avise e priorize a base interna.
+- Analise a intencao antes de responder e adapte o tom naturalmente.
+- Se o pedido envolver explicacao, orientacao, passo a passo, melhoria de texto, organizacao de informacao, sugestoes, traducao, resumo, reescrita ou texto pronto para uso, entregue em markdown bem estruturado, com hierarquia visual clara, blocos curtos e reutilizaveis.
+- Se o usuario mudar de assunto, foque totalmente no tema atual sem arrastar contexto irrelevante.
+- Se faltar informacao suficiente, deixe isso claro e peca complemento.
 
-Memoria persistente da conversa:
-${memoryText}
+Contexto:
+- Data e hora atual no Brasil: ${nowBrazil()}
+- Memoria da conversa atual: ${memoryText}
+- Memoria util de outras conversas deste usuario: ${userMemoryText}
+- Historico recente: ${historyText || 'Sem historico anterior.'}
+- Contexto adicional: ${contextText || 'Sem contexto adicional.'}
 
-Historico recente:
-${historyText || "Sem historico anterior."}
-
-Contexto adicional:
-${contextText || "Sem contexto adicional."}
+Perfil desta resposta:
+- Idioma da conversa: ${getLanguageLabel(userLanguage)}
+- Tom: ${intent.tone}
+- Estruturar resposta: ${intent.wantsStructured ? 'sim' : 'nao'}
+- Responder com referencias so se o usuario pedir explicitamente.
 `.trim();
 
   return [
     {
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
+      role: 'system',
+      content: [{ type: 'input_text', text: systemText }],
     },
     {
-      role: "user",
+      role: 'user',
       content: [
-        { type: "input_text", text: normalizedUserText },
+        { type: 'input_text', text: normalizedUserText },
         ...visionInputs,
         ...documentInputs,
       ],
@@ -940,7 +1469,7 @@ function extractResponsePayload(data, baseSources = []) {
   };
 }
 
-async function openaiReply({ conversationId, userText, contextText, baseSources = [], topicSnapshot = null }) {
+async function openaiReply({ conversationId, userId, userText, contextText, baseSources = [], topicSnapshot = null, responseProfile = null }) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   if (!apiKey) {
@@ -950,7 +1479,7 @@ async function openaiReply({ conversationId, userText, contextText, baseSources 
     };
   }
 
-  const input = await buildOpenAIInput({ conversationId, userText, contextText, topicSnapshot });
+  const input = await buildOpenAIInput({ conversationId, userId, userText, contextText, topicSnapshot, responseProfile });
   const resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -1042,7 +1571,20 @@ app.get("/logout", (req, res) => {
 });
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => {
-  res.json({ user: req.user });
+  const user = await get(
+    "SELECT id, name, email, role, department, created_at FROM users WHERE id=?",
+    [req.user.sub]
+  );
+
+  res.json({
+    user: user || {
+      id: req.user.sub,
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role,
+      department: req.user.department || '',
+    },
+  });
 });
 
 app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
@@ -1062,6 +1604,12 @@ app.post("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
     "INSERT INTO conversations (user_id, title, mode) VALUES (?, ?, ?)",
     [req.user.sub, title, mode]
   );
+
+  const freshUser = await get(
+    "SELECT id, name, email, role, department FROM users WHERE id=?",
+    [req.user.sub]
+  );
+  await maybeInsertDailyGreeting(created.lastID, freshUser || req.user);
 
   res.json({ conversation_id: created.lastID });
 });
@@ -1159,6 +1707,11 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
 
+  const currentUser = await get(
+    "SELECT id, name, email, role, department FROM users WHERE id=?",
+    [req.user.sub]
+  );
+  await maybeInsertDailyGreeting(id, currentUser || req.user);
   if (conv.title === "Nova conversa") {
     await run("UPDATE conversations SET title=? WHERE id=?", [titleFromMessage(text), id]);
   }
@@ -1169,6 +1722,10 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   );
 
   const topicSnapshot = await getConversationTopicSnapshot(id, text, 12);
+  const userLanguage = detectConversationLanguage(text, topicSnapshot.history);
+  const responseProfile = analyzeConversationIntent(text, userLanguage);
+  const knowledgeSignature = await getKnowledgeSignatureValue();
+  const queryEmbedding = await getEmbeddingForText(text);
   const recentImageReferences = await getRecentImageReferences(id, 4);
   const artifact = await generateArtifact({
     apiKey: process.env.OPENAI_API_KEY || "",
@@ -1182,13 +1739,17 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
 
   if (artifact) {
     if (!artifact.fullPath) {
+      const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+      });
       await run(
-        "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'assistant', ?)",
-        [id, artifact.reply]
+        "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
+        [id, artifact.reply, JSON.stringify(artifactMetaObject)]
       );
       await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
       await updateConversationMemory(id, text, artifact.reply, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
-      return res.json({ reply: artifact.reply });
+      await updateUserMemory(req.user.sub, text, artifact.reply, userLanguage);
+      return res.json({ reply: artifact.reply, meta: artifactMetaObject });
     }
 
     const stat = fs.statSync(artifact.fullPath);
@@ -1204,10 +1765,32 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     });
 
     await updateConversationMemory(id, text, artifact.reply, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
-    return res.json({ reply: artifact.reply, meta: saved.meta });
+    await updateUserMemory(req.user.sub, text, artifact.reply, userLanguage);
+    return res.json({ reply: artifact.reply, meta: { ...saved.meta, response_language: userLanguage } });
   }
+
+  const cachedReply = !queryLooksExternalOrCurrent(text)
+    ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
+    : null;
+
+  if (cachedReply?.text) {
+    const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
+      response_language: cachedReply.responseLanguage || userLanguage,
+      sources: cachedReply.sources || [],
+      show_sources: shouldShowSourcesForReply(text),
+    });
+    await run(
+      "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
+      [id, cachedReply.text, JSON.stringify(cachedMetaObject)]
+    );
+    await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
+    await updateConversationMemory(id, text, cachedReply.text, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
+    await updateUserMemory(req.user.sub, text, cachedReply.text, userLanguage);
+    return res.json({ reply: cachedReply.text, meta: cachedMetaObject });
+  }
+
   const fileContext = await getConversationFilesContext(id);
-  const knowledgeBundle = await buildKnowledgeBundle(text);
+  const knowledgeBundle = await buildKnowledgeBundle(text, { limit: 4, userLanguage });
   const shouldUseWebComplement = shouldFetchWebContext(text, knowledgeBundle);
 
   let webContext = "";
@@ -1228,6 +1811,9 @@ Prioridade de fontes:
 2. Arquivos e anexos da conversa.
 3. Internet apenas como complemento quando necessario.
 
+Idioma detectado do usuario:
+${getLanguageLabel(userLanguage)}
+
 Memoria interna da empresa:
 ${knowledgeBundle.text || "Sem resultados relevantes da base interna."}
 
@@ -1241,29 +1827,35 @@ ${shouldUseWebComplement
 `.trim();
   const assistant = await openaiReply({
     conversationId: id,
+    userId: req.user.sub,
     userText: text,
     contextText,
     baseSources: knowledgeBundle.sources,
     topicSnapshot,
+    responseProfile,
   });
 
-  const showSources = shouldShowSourcesForReply(text);
-  const assistantMetaObject = assistant.sources.length ? { sources: assistant.sources, show_sources: showSources } : null;
-  const assistantMeta = assistantMetaObject ? JSON.stringify(assistantMetaObject) : null;
+  const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
+    response_language: userLanguage,
+    sources: assistant.sources || [],
+    show_sources: shouldShowSourcesForReply(text),
+  });
 
   await run(
     "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
-    [id, assistant.text, assistantMeta]
+    [id, assistant.text, JSON.stringify(assistantMetaObject)]
   );
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
   await updateConversationMemory(id, text, assistant.text, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
+  await updateUserMemory(req.user.sub, text, assistant.text, userLanguage);
+  await saveSemanticCache(req.user.sub, text, userLanguage, assistant.text, userLanguage, assistant.sources || [], queryEmbedding, knowledgeSignature);
 
   res.json({ reply: assistant.text, meta: assistantMetaObject });
 });
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const users = await all(
-    "SELECT id, name, email, role, created_at FROM users ORDER BY id DESC",
+    "SELECT id, name, email, role, department, created_at FROM users ORDER BY id DESC",
     []
   );
   res.json({ users });
@@ -1274,6 +1866,7 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const role = req.body?.role === "admin" ? "admin" : "user";
+  const department = sanitizeDepartment(req.body?.department || "");
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: "missing_fields" });
@@ -1284,11 +1877,11 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
 
   const hash = await bcrypt.hash(password, 10);
   const created = await run(
-    "INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)",
-    [email, name, hash, role]
+    "INSERT INTO users (email, name, password_hash, role, department) VALUES (?, ?, ?, ?, ?)",
+    [email, name, hash, role, department || null]
   );
 
-  await logEvent(req.user.sub, "admin_create_user", { user_id: created.lastID, email, role });
+  await logEvent(req.user.sub, "admin_create_user", { user_id: created.lastID, email, role, department });
   res.json({ ok: true, user_id: created.lastID });
 });
 
@@ -1513,6 +2106,7 @@ app.use(express.static(publicDir));
 async function startServer() {
   await migrate();
   await ensureAdmin();
+  await ensureFixedDepartments();
 
   app.listen(PORT, () => {
     console.log(`Talkers IA rodando em ${BASE_URL}`);
@@ -1525,6 +2119,40 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

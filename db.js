@@ -1,4 +1,4 @@
-﻿const fs = require("fs");
+const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 const { Pool } = require("pg");
@@ -115,20 +115,26 @@ function closeSqlite(dbConn) {
 }
 
 async function migrateSqlite() {
-  await execSqlite("PRAGMA journal_mode = WAL;");
+  await execSqlite(\"PRAGMA journal_mode = WAL;\");
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'user',
+      department TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  const userColumns = await allSqlite(\"PRAGMA table_info(users)\");
+  if (!userColumns.some((column) => column.name === \"department\")) {
+    await execSqlite(\"ALTER TABLE users ADD COLUMN department TEXT;\");
+  }
+
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -137,9 +143,9 @@ async function migrateSqlite() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER NOT NULL,
@@ -148,9 +154,9 @@ async function migrateSqlite() {
       meta_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER,
@@ -161,9 +167,9 @@ async function migrateSqlite() {
       size_bytes INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -171,9 +177,9 @@ async function migrateSqlite() {
       meta_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_path TEXT NOT NULL UNIQUE,
@@ -185,17 +191,17 @@ async function migrateSqlite() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS conversation_memories (
       conversation_id INTEGER PRIMARY KEY,
       summary_text TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TABLE IF NOT EXISTS knowledge_sources (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       original_name TEXT NOT NULL,
@@ -205,49 +211,52 @@ async function migrateSqlite() {
       uploaded_by INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-  `);
+  );
 
-  await execSqlite(`
+  await execSqlite(
     CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
     USING fts5(extracted_text, rel_path, content='documents', content_rowid='id');
-  `);
+  );
 
-  await execSqlite("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);");
-  await execSqlite("CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);");
-  await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);");
-  await execSqlite("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
+  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);\");
+  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);\");
+  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);\");
+  await execSqlite(\"CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);\");
 
-  await execSqlite(`
+  await execSqlite(
     CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
       INSERT INTO documents_fts(rowid, extracted_text, rel_path) VALUES (new.id, new.extracted_text, new.rel_path);
     END;
-  `);
-  await execSqlite(`
+  );
+  await execSqlite(
     CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
       INSERT INTO documents_fts(documents_fts, rowid, extracted_text, rel_path) VALUES('delete', old.id, old.extracted_text, old.rel_path);
     END;
-  `);
-  await execSqlite(`
+  );
+  await execSqlite(
     CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
       INSERT INTO documents_fts(documents_fts, rowid, extracted_text, rel_path) VALUES('delete', old.id, old.extracted_text, old.rel_path);
       INSERT INTO documents_fts(rowid, extracted_text, rel_path) VALUES (new.id, new.extracted_text, new.rel_path);
     END;
-  `);
+  );
 }
 
 async function migratePostgres() {
-  await pgPool.query(`
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'user',
+      department TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query(`
+  await pgPool.query(\"ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;\");
+
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       user_id INTEGER NOT NULL,
@@ -256,9 +265,9 @@ async function migratePostgres() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query(`
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       conversation_id INTEGER NOT NULL,
@@ -267,9 +276,9 @@ async function migratePostgres() {
       meta_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query(`
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       conversation_id INTEGER,
@@ -280,9 +289,9 @@ async function migratePostgres() {
       size_bytes INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query(`
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       user_id INTEGER,
@@ -290,9 +299,9 @@ async function migratePostgres() {
       meta_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query(`
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       source_path TEXT NOT NULL UNIQUE,
@@ -304,17 +313,17 @@ async function migratePostgres() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query(`
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS conversation_memories (
       conversation_id INTEGER PRIMARY KEY,
       summary_text TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query(`
+  await pgPool.query(
     CREATE TABLE IF NOT EXISTS knowledge_sources (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       original_name TEXT NOT NULL,
@@ -324,14 +333,14 @@ async function migratePostgres() {
       uploaded_by INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  );
 
-  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(rel_path, '') || ' ' || coalesce(extracted_text, ''))) STORED;");
-  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);");
-  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);");
-  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);");
-  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
-  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_search_vector ON documents USING GIN(search_vector);");
+  await pgPool.query(\"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(rel_path, '') || ' ' || coalesce(extracted_text, ''))) STORED;\");
+  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);\");
+  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at);\");
+  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);\");
+  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);\");
+  await pgPool.query(\"CREATE INDEX IF NOT EXISTS idx_documents_search_vector ON documents USING GIN(search_vector);\");
 }
 
 async function postgresHasData() {
@@ -612,3 +621,6 @@ module.exports = {
   sqlitePath,
   uploadsDir,
 };
+
+
+

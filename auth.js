@@ -2,7 +2,7 @@ const jwt = require("jsonwebtoken");
 
 function signSession(user, jwtSecret) {
   return jwt.sign(
-    { sub: user.id, email: user.email, name: user.name, role: user.role },
+    { sub: user.id, email: user.email, name: user.name, role: user.role, department: user.department || "" },
     jwtSecret,
     { expiresIn: "7d" }
   );
@@ -30,3 +30,4 @@ function requireRole(role) {
 }
 
 module.exports = { signSession, requireAuth, requireRole };
+

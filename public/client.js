@@ -339,12 +339,20 @@ function renderUser() {
 
   const accountMeta = el("accountMeta");
   if (accountMeta) {
-    const parts = [me.email || "", me.department || "", me.role || "user"].filter(Boolean);
+    const departmentLabel = Array.isArray(me.departments) && me.departments.length
+      ? me.departments.join(", ")
+      : (me.department || "");
+    const parts = [me.email || "", departmentLabel, me.role || "user"].filter(Boolean);
     accountMeta.textContent = parts.join(" - ");
   }
 
   const accountInitial = el("accountInitial");
   if (accountInitial) accountInitial.textContent = getUserInitial(me.name);
+
+  const intranetBtn = el("btnIntranet");
+  if (intranetBtn) {
+    intranetBtn.style.display = me.can_access_intranet ? "" : "none";
+  }
 
   const adminBtn = el("adminBtn");
   if (adminBtn) {
@@ -1345,6 +1353,9 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
+
+
+
 
 
 

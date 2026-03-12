@@ -12,6 +12,13 @@ const jwt = require("jsonwebtoken");
 const { DATA_DIR, DB_CLIENT, migrate, get, all, run, uploadsDir, kbDir, logEvent, searchDocuments } = require("./db");
 const { detectLanguage, formatDailyGreeting, getLanguageLabel, normalizeLanguageCode, normalizeText: normalizeLanguageText } = require("./lib/language");
 const { chunkTextSemantically, cosineSimilarity, extractKeywords, hashText, normalizeSemanticText, parseEmbedding } = require("./lib/semantic");
+const {
+  DEPARTMENT_DEFINITIONS,
+  buildDepartmentSeedRows,
+  buildIntranetWorkspace,
+  sanitizeDepartment,
+  sanitizeDepartmentList,
+} = require("./lib/intranet");
 const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact } = require("./lib/generate");
@@ -49,20 +56,11 @@ const TONE_PROFILE_MAP = {
   despojado: 'despojado, natural e fluido',
   persuasivo: 'persuasivo, comercial e orientado a conversao',
 };
-const DEPARTMENTS = [
-  'Professor',
-  'Administrativo',
-  'Pedagogico',
-  'RH',
-  'Comercial',
-  'Gestao',
-  'Financeiro',
-  'Marketing',
-];
 const FIXED_DEPARTMENT_BY_EMAIL = {
-  'julia@talkers.com': 'RH',
-  'laura@talkers.com': 'Administrativo',
+  'julia@talkers.com': ['RH'],
+  'laura@talkers.com': ['Administrativo'],
 };
+const DEPARTMENT_NAMES = DEPARTMENT_DEFINITIONS.map((item) => item.name);
 
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
@@ -168,8 +166,8 @@ async function ensureAdmin() {
 
     const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
     const created = await run(
-      "INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, 'admin')",
-      [ADMIN_EMAIL, ADMIN_NAME, hash]
+      "INSERT INTO users (email, name, password_hash, role, can_access_intranet) VALUES (?, ?, ?, 'admin', ?)",
+      [ADMIN_EMAIL, ADMIN_NAME, hash, true]
     );
 
     await logEvent(created.lastID, "admin_bootstrap_created", { email: ADMIN_EMAIL });
@@ -179,13 +177,10 @@ async function ensureAdmin() {
 }
 
 async function ensureFixedDepartments() {
-  for (const [email, department] of Object.entries(FIXED_DEPARTMENT_BY_EMAIL)) {
-    const safeDepartment = sanitizeDepartment(department);
-    if (!safeDepartment) continue;
-    await run(
-      "UPDATE users SET department=? WHERE email=? AND COALESCE(department, '')<>?",
-      [safeDepartment, email, safeDepartment]
-    );
+  for (const [email, departments] of Object.entries(FIXED_DEPARTMENT_BY_EMAIL)) {
+    const user = await get("SELECT id FROM users WHERE email=?", [email]);
+    if (!user) continue;
+    await syncUserDepartments(user.id, departments);
   }
 }
 
@@ -295,9 +290,146 @@ function compactMemory(text, maxChars = MAX_CONVERSATION_MEMORY) {
   return value.slice(value.length - maxChars);
 }
 
-function sanitizeDepartment(value = "") {
-  const normalized = String(value || "").trim().toLowerCase();
-  return DEPARTMENTS.find((item) => item.toLowerCase() === normalized) || "";
+function parseBooleanInput(value) {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "sim", "on"].includes(normalized);
+}
+
+function parseDepartmentInput(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+    return trimmed.split(",");
+  }
+  return [];
+}
+
+function getPrimaryDepartmentName(departments = []) {
+  return departments.find(Boolean) || "";
+}
+
+function formatDepartmentNames(departments = []) {
+  const safe = sanitizeDepartmentList(departments);
+  return safe.join(", ");
+}
+
+function coerceDbBoolean(value) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+async function listDepartmentCatalog() {
+  return all(
+    "SELECT id, slug, name, description, icon, sort_order, metadata_json FROM departments ORDER BY sort_order ASC, name ASC"
+  );
+}
+
+async function getDepartmentIdMap() {
+  const rows = await listDepartmentCatalog();
+  return new Map(rows.map((row) => [row.name, row]));
+}
+
+async function getUserDepartmentDetails(userId) {
+  const rows = await all(
+    `SELECT d.id, d.slug, d.name, d.description, d.icon, d.sort_order, d.metadata_json,
+            ud.access_level, ud.is_primary
+       FROM user_departments ud
+       JOIN departments d ON d.id = ud.department_id
+      WHERE ud.user_id=?
+      ORDER BY ud.is_primary DESC, d.sort_order ASC, d.name ASC`,
+    [userId]
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    is_primary: coerceDbBoolean(row.is_primary),
+  }));
+}
+
+async function hydrateUserRecord(user) {
+  if (!user) return null;
+  const details = await getUserDepartmentDetails(user.id || user.sub);
+  const departments = details.map((item) => item.name);
+  const primaryDepartment = user.department || getPrimaryDepartmentName(departments);
+  return {
+    ...user,
+    department: primaryDepartment,
+    departments,
+    department_details: details,
+    can_access_intranet: coerceDbBoolean(user.can_access_intranet),
+  };
+}
+
+async function syncUserDepartments(userId, departmentValues = []) {
+  const safeDepartments = sanitizeDepartmentList(departmentValues);
+  const catalogMap = await getDepartmentIdMap();
+  const existing = await getUserDepartmentDetails(userId);
+  const existingByName = new Map(existing.map((item) => [item.name, item]));
+
+  for (const row of existing) {
+    if (!safeDepartments.includes(row.name)) {
+      await run("DELETE FROM user_departments WHERE user_id=? AND department_id=?", [userId, row.id]);
+    }
+  }
+
+  for (let index = 0; index < safeDepartments.length; index += 1) {
+    const name = safeDepartments[index];
+    const department = catalogMap.get(name);
+    if (!department) continue;
+    const isPrimary = index === 0;
+
+    if (existingByName.has(name)) {
+      await run(
+        "UPDATE user_departments SET access_level=?, is_primary=?, updated_at=datetime('now') WHERE user_id=? AND department_id=?",
+        [existingByName.get(name).access_level || 'colaborador', isPrimary, userId, department.id]
+      );
+    } else {
+      await run(
+        "INSERT INTO user_departments (user_id, department_id, access_level, is_primary) VALUES (?, ?, ?, ?)",
+        [userId, department.id, 'colaborador', isPrimary]
+      );
+    }
+  }
+
+  await run("UPDATE users SET department=? WHERE id=?", [getPrimaryDepartmentName(safeDepartments) || null, userId]);
+  return safeDepartments;
+}
+
+async function ensureDepartmentCatalog() {
+  const rows = buildDepartmentSeedRows();
+  for (const row of rows) {
+    await run(
+      `INSERT INTO departments (slug, name, description, icon, sort_order, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(slug) DO UPDATE SET
+         name=excluded.name,
+         description=excluded.description,
+         icon=excluded.icon,
+         sort_order=excluded.sort_order,
+         metadata_json=excluded.metadata_json,
+         updated_at=datetime('now')`,
+      [row.slug, row.name, row.description, row.icon, row.sortOrder, row.metadataJson]
+    );
+  }
+}
+
+async function syncLegacyUserDepartmentData() {
+  const users = await all("SELECT id, role, department, can_access_intranet FROM users ORDER BY id ASC");
+  for (const user of users) {
+    if (user.role === 'admin' && !coerceDbBoolean(user.can_access_intranet)) {
+      await run("UPDATE users SET can_access_intranet=? WHERE id=?", [true, user.id]);
+    }
+
+    const existingDepartments = await getUserDepartmentDetails(user.id);
+    if (!existingDepartments.length && user.department) {
+      await syncUserDepartments(user.id, [user.department]);
+    }
+  }
 }
 
 function brazilDateKey(value = new Date()) {
@@ -1507,6 +1639,64 @@ async function openaiReply({ conversationId, userId, userText, contextText, base
   return extractResponsePayload(data, baseSources);
 }
 
+async function getUserById(userId) {
+  const user = await get(
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, created_at FROM users WHERE id=?",
+    [userId]
+  );
+  return hydrateUserRecord(user);
+}
+
+async function getUserByEmail(email) {
+  const user = await get(
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, created_at FROM users WHERE email=?",
+    [email]
+  );
+  return hydrateUserRecord(user);
+}
+
+async function buildIntranetPayload(userId) {
+  const user = await getUserById(userId);
+  if (!user) return null;
+
+  const [departmentCatalog, recentDocuments, totalDocumentsRow] = await Promise.all([
+    listDepartmentCatalog(),
+    all(
+      `SELECT id, original_name, stored_name, vector_store_file_id, created_at
+         FROM knowledge_sources
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT 12`
+    ),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources"),
+  ]);
+
+  const workspace = buildIntranetWorkspace({
+    user,
+    departments: user.department_details || [],
+    recentDocuments: recentDocuments.map((document) => ({
+      id: document.id,
+      name: document.original_name,
+      status: document.vector_store_file_id ? 'Sincronizado' : 'Local',
+      created_at: document.created_at,
+    })),
+    totalDocuments: Number(totalDocumentsRow?.total || 0),
+  });
+
+  return {
+    user,
+    department_catalog: departmentCatalog,
+    intranet: workspace,
+  };
+}
+
+async function requireIntranetAccess(req, res, next) {
+  const user = await getUserById(req.user.sub);
+  if (!user) return res.status(401).json({ error: 'not_authenticated' });
+  if (!user.can_access_intranet) return res.status(403).json({ error: 'intranet_access_denied' });
+  req.currentUser = user;
+  next();
+}
+
 const app = express();
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "20mb" }));
@@ -1552,7 +1742,8 @@ app.post("/api/login", async (req, res) => {
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return res.status(401).json({ error: "invalid_credentials" });
 
-  const token = signSession(user, JWT_SECRET);
+  const sessionUser = await getUserById(user.id) || user;
+  const token = signSession(sessionUser, JWT_SECRET);
   setSessionCookie(req, res, token);
 
   await logEvent(user.id, "login", { email });
@@ -1571,10 +1762,7 @@ app.get("/logout", (req, res) => {
 });
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => {
-  const user = await get(
-    "SELECT id, name, email, role, department, created_at FROM users WHERE id=?",
-    [req.user.sub]
-  );
+  const user = await getUserById(req.user.sub);
 
   res.json({
     user: user || {
@@ -1583,6 +1771,9 @@ app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => {
       email: req.user.email,
       role: req.user.role,
       department: req.user.department || '',
+      departments: Array.isArray(req.user.departments) ? req.user.departments : [],
+      department_details: [],
+      can_access_intranet: parseBooleanInput(req.user.can_access_intranet),
     },
   });
 });
@@ -1853,12 +2044,23 @@ ${shouldUseWebComplement
   res.json({ reply: assistant.text, meta: assistantMetaObject });
 });
 
+app.get("/api/admin/departments", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const departments = await listDepartmentCatalog();
+  res.json({ departments });
+});
+
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const users = await all(
-    "SELECT id, name, email, role, department, created_at FROM users ORDER BY id DESC",
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, created_at FROM users ORDER BY id DESC",
     []
   );
-  res.json({ users });
+
+  const hydratedUsers = [];
+  for (const user of users) {
+    hydratedUsers.push(await hydrateUserRecord(user));
+  }
+
+  res.json({ users: hydratedUsers });
 });
 
 app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -1866,7 +2068,10 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const role = req.body?.role === "admin" ? "admin" : "user";
-  const department = sanitizeDepartment(req.body?.department || "");
+  const departments = sanitizeDepartmentList(parseDepartmentInput(req.body?.departments ?? req.body?.department));
+  const canAccessIntranet = parseBooleanInput(req.body?.can_access_intranet);
+  const jobTitle = String(req.body?.job_title || "").trim();
+  const unitName = String(req.body?.unit_name || "").trim();
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: "missing_fields" });
@@ -1876,13 +2081,82 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   if (existing) return res.status(409).json({ error: "email_already_exists" });
 
   const hash = await bcrypt.hash(password, 10);
+  const primaryDepartment = getPrimaryDepartmentName(departments);
   const created = await run(
-    "INSERT INTO users (email, name, password_hash, role, department) VALUES (?, ?, ?, ?, ?)",
-    [email, name, hash, role, department || null]
+    "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, job_title, unit_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [email, name, hash, role, primaryDepartment || null, canAccessIntranet, jobTitle || null, unitName || null]
   );
 
-  await logEvent(req.user.sub, "admin_create_user", { user_id: created.lastID, email, role, department });
+  await syncUserDepartments(created.lastID, departments);
+  await logEvent(req.user.sub, "admin_create_user", {
+    user_id: created.lastID,
+    email,
+    role,
+    departments,
+    can_access_intranet: canAccessIntranet,
+  });
   res.json({ ok: true, user_id: created.lastID });
+});
+
+app.patch("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const userId = Number(req.params.id);
+  const existingUser = await get(
+    "SELECT id, name, email, password_hash, role, department, can_access_intranet, job_title, unit_name FROM users WHERE id=?",
+    [userId]
+  );
+  if (!existingUser) return res.status(404).json({ error: "not_found" });
+
+  const name = String(req.body?.name || existingUser.name || "").trim();
+  const email = String(req.body?.email || existingUser.email || "").trim().toLowerCase();
+  const password = String(req.body?.password || "");
+  const role = req.body?.role === "admin" ? "admin" : (req.body?.role === "user" ? "user" : existingUser.role);
+  const hasDepartmentsPayload = Object.prototype.hasOwnProperty.call(req.body || {}, "departments") || Object.prototype.hasOwnProperty.call(req.body || {}, "department");
+  const currentDepartments = (await getUserDepartmentDetails(userId)).map((item) => item.name);
+  const departments = hasDepartmentsPayload
+    ? sanitizeDepartmentList(parseDepartmentInput(req.body?.departments ?? req.body?.department))
+    : currentDepartments;
+  const canAccessIntranet = Object.prototype.hasOwnProperty.call(req.body || {}, "can_access_intranet")
+    ? parseBooleanInput(req.body?.can_access_intranet)
+    : coerceDbBoolean(existingUser.can_access_intranet);
+  const jobTitle = Object.prototype.hasOwnProperty.call(req.body || {}, "job_title")
+    ? String(req.body?.job_title || "").trim()
+    : String(existingUser.job_title || "").trim();
+  const unitName = Object.prototype.hasOwnProperty.call(req.body || {}, "unit_name")
+    ? String(req.body?.unit_name || "").trim()
+    : String(existingUser.unit_name || "").trim();
+
+  if (!name || !email) {
+    return res.status(400).json({ error: "missing_fields" });
+  }
+
+  const emailOwner = await get("SELECT id FROM users WHERE email=?", [email]);
+  if (emailOwner && Number(emailOwner.id) !== userId) {
+    return res.status(409).json({ error: "email_already_exists" });
+  }
+
+  const passwordHash = password ? await bcrypt.hash(password, 10) : existingUser.password_hash;
+  const primaryDepartment = getPrimaryDepartmentName(departments);
+
+  await run(
+    "UPDATE users SET name=?, email=?, password_hash=?, role=?, department=?, can_access_intranet=?, job_title=?, unit_name=? WHERE id=?",
+    [name, email, passwordHash, role, primaryDepartment || null, canAccessIntranet, jobTitle || null, unitName || null, userId]
+  );
+  await syncUserDepartments(userId, departments);
+
+  const updatedUser = await getUserById(userId);
+  if (req.user.sub === userId && updatedUser) {
+    setSessionCookie(req, res, signSession(updatedUser, JWT_SECRET));
+  }
+
+  await logEvent(req.user.sub, "admin_update_user", {
+    user_id: userId,
+    email,
+    role,
+    departments,
+    can_access_intranet: canAccessIntranet,
+  });
+
+  res.json({ ok: true, user: updatedUser });
 });
 
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -2085,6 +2359,11 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
 });
 const publicDir = path.join(__dirname, "public");
 
+app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const payload = await buildIntranetPayload(req.user.sub);
+  res.json(payload || { user: null, intranet: null, department_catalog: [] });
+});
+
 app.get("/", (req, res) => res.redirect("/index.html"));
 app.get("/login.html", (req, res) => res.sendFile(path.join(publicDir, "login.html")));
 
@@ -2101,11 +2380,21 @@ app.get("/admin.html", (req, res) => {
   return res.sendFile(path.join(publicDir, "admin.html"));
 });
 
+app.get("/intranet.html", async (req, res) => {
+  const session = tryDecodeSession(req);
+  if (!session) return res.redirect("/login.html");
+  const user = await getUserById(session.sub);
+  if (!user || !user.can_access_intranet) return res.redirect("/index.html");
+  return res.sendFile(path.join(publicDir, "intranet.html"));
+});
+
 app.use(express.static(publicDir));
 
 async function startServer() {
   await migrate();
   await ensureAdmin();
+  await ensureDepartmentCatalog();
+  await syncLegacyUserDepartmentData();
   await ensureFixedDepartments();
 
   app.listen(PORT, () => {
@@ -2119,6 +2408,19 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

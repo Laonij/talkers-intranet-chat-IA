@@ -1,8 +1,16 @@
-const jwt = require("jsonwebtoken");
+﻿const jwt = require("jsonwebtoken");
 
 function signSession(user, jwtSecret) {
   return jwt.sign(
-    { sub: user.id, email: user.email, name: user.name, role: user.role, department: user.department || "" },
+    {
+      sub: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      department: user.department || "",
+      departments: Array.isArray(user.departments) ? user.departments : [],
+      can_access_intranet: Boolean(user.can_access_intranet),
+    },
     jwtSecret,
     { expiresIn: "7d" }
   );
@@ -30,4 +38,3 @@ function requireRole(role) {
 }
 
 module.exports = { signSession, requireAuth, requireRole };
-

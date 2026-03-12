@@ -7,136 +7,155 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="center" style="align-items:flex-start;">
-    <div class="card" style="width:min(1120px, 100%); display:flex; flex-direction:column; gap:22px;">
-      <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
-        <div style="display:flex; align-items:center; gap:12px;">
+  <div class="center admin-shell">
+    <div class="card admin-card-shell">
+      <div class="admin-header-row">
+        <div class="admin-header-copy">
           <img class="logo-sm" src="/logo.png" alt="Logo" />
           <div>
-            <div style="font-size:18px; font-weight:800;">Admin</div>
-            <div class="muted small">Usuarios e base de conhecimento</div>
+            <div class="admin-page-title">Admin</div>
+            <div class="muted small">Usuarios, permissoes e base de conhecimento</div>
           </div>
         </div>
         <a class="btn" href="/index.html">Voltar</a>
       </div>
 
-      <div style="border-top:1px solid var(--border); padding-top:16px; display:flex; flex-direction:column; gap:16px;">
-        <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
-          <div>
-            <div style="font-weight:800;">Criar usuario</div>
-            <div class="small muted">Usuarios e historicos existentes sao preservados. A exclusao administrativa fica bloqueada.</div>
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label>Nome</label>
-            <input id="name" placeholder="Nome" />
-          </div>
-          <div>
-            <label>Email</label>
-            <input id="email" placeholder="email@empresa.com" />
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label>Senha</label>
-            <input id="password" type="password" placeholder="Senha" />
-          </div>
-          <div>
-            <label>Tipo</label>
-            <select id="role">
-              <option value="user">Usuario</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label>Departamento</label>
-            <select id="department">
-              <option value="">Selecione</option>
-              <option value="Professor">Professor</option>
-              <option value="Administrativo">Administrativo</option>
-              <option value="Pedagogico">Pedagogico</option>
-              <option value="RH">RH</option>
-              <option value="Comercial">Comercial</option>
-              <option value="Gestao">Gestao</option>
-              <option value="Financeiro">Financeiro</option>
-              <option value="Marketing">Marketing</option>
-            </select>
-          </div>
-          <div></div>
-        </div>
-        <div style="display:flex; justify-content:flex-end; gap:10px;">
-          <button class="btn primary" id="btnCreate">Criar</button>
-        </div>
-      </div>
-
-      <div style="display:grid; grid-template-columns:1.15fr .85fr; gap:18px; align-items:start;">
-        <div style="display:flex; flex-direction:column; gap:18px; min-width:0;">
-          <div>
-            <div style="font-weight:800; margin-bottom:10px;">Usuarios</div>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Nome</th>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Departamento</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody id="usersBody"></tbody>
-            </table>
-          </div>
-
-          <div>
-            <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
-              <div style="font-weight:800;">Arquivos da base interna</div>
-              <div id="ragListCount" class="small muted">Carregando documentos...</div>
+      <div class="admin-grid">
+        <section class="admin-panel">
+          <div class="admin-panel-head">
+            <div>
+              <div class="admin-section-title" id="userFormTitle">Criar usuario</div>
+              <div class="small muted">Usuarios e historicos existentes sao preservados. A exclusao administrativa continua bloqueada.</div>
             </div>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Arquivo</th>
-                  <th>Vector Store</th>
-                  <th>Criado em</th>
-                </tr>
-              </thead>
-              <tbody id="ragFilesBody"></tbody>
-            </table>
           </div>
-        </div>
 
-        <div style="display:flex; flex-direction:column; gap:18px;">
-          <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
-            <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; margin-bottom:10px;">
-              <div style="font-weight:800;">Status do RAG</div>
-              <span id="ragDocCountBadge" class="badge">0 documentos</span>
+          <input type="hidden" id="editingUserId" value="" />
+
+          <div class="row admin-form-grid">
+            <div>
+              <label>Nome</label>
+              <input id="name" placeholder="Nome" />
             </div>
+            <div>
+              <label>Email</label>
+              <input id="email" placeholder="email@empresa.com" />
+            </div>
+          </div>
+
+          <div class="row admin-form-grid">
+            <div>
+              <label>Senha</label>
+              <input id="password" type="password" placeholder="Senha" />
+              <div class="small muted" id="passwordHint">Obrigatoria para criar. Na edicao, deixe em branco para manter.</div>
+            </div>
+            <div>
+              <label>Tipo</label>
+              <select id="role">
+                <option value="user">Usuario</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row admin-form-grid">
+            <div>
+              <label>Cargo (preparado para evolucao)</label>
+              <input id="jobTitle" placeholder="Ex.: Analista, Coordenador, Professor" />
+            </div>
+            <div>
+              <label>Unidade (preparado para evolucao)</label>
+              <input id="unitName" placeholder="Ex.: Unidade Centro" />
+            </div>
+          </div>
+
+          <div class="admin-inline-toggle">
+            <label class="admin-check-row">
+              <input id="canAccessIntranet" type="checkbox" />
+              <span>
+                <strong>Permitir acesso a Intranet Talkers</strong>
+                <small>Quando marcado, o usuario ve o botao da intranet e pode acessar a area corporativa.</small>
+              </span>
+            </label>
+          </div>
+
+          <div>
+            <label>Departamentos</label>
+            <div class="small muted" style="margin-bottom:10px;">Selecione um ou varios departamentos. A estrutura ja fica pronta para novos departamentos no futuro.</div>
+            <div id="departmentsGrid" class="departments-grid"></div>
+          </div>
+
+          <div class="admin-form-actions">
+            <button class="btn" id="btnCancelEdit" type="button" style="display:none;">Cancelar edicao</button>
+            <button class="btn primary" id="btnSaveUser" type="button">Criar usuario</button>
+          </div>
+        </section>
+
+        <aside class="admin-sidebar-panels">
+          <div class="admin-side-card">
+            <div class="admin-side-title">Status do RAG</div>
+            <span id="ragDocCountBadge" class="badge">0 documentos</span>
             <div class="small muted" id="ragStatus">Carregando...</div>
-            <div id="ragUploadState" class="small" style="margin-top:12px; padding:10px 12px; border:1px solid var(--border); border-radius:14px; background:#fff; color:#475467;">Pronto para novos envios.</div>
+            <div id="ragUploadState" class="small admin-state-box">Pronto para novos envios.</div>
             <div id="ragUploadProgress" class="small muted" style="margin-top:10px; display:none;">0 | 0 documentos carregados</div>
           </div>
 
-          <div style="border:1px solid var(--border); border-radius:20px; padding:18px; background:var(--panel-2);">
-            <div style="font-weight:800; margin-bottom:10px;">Enviar para a base da empresa</div>
+          <div class="admin-side-card">
+            <div class="admin-side-title">Enviar para a base da empresa</div>
             <div class="small muted" style="margin-bottom:12px;">Os arquivos vao para o armazenamento local do projeto e, se configurado, tambem para a Vector Store da OpenAI.</div>
             <input id="ragFiles" type="file" multiple hidden />
             <input id="ragFolder" type="file" webkitdirectory directory multiple hidden />
-            <div style="display:flex; flex-wrap:wrap; gap:10px;">
+            <div class="admin-upload-actions">
               <button class="btn" type="button" id="btnPickRagFiles">Selecionar arquivos</button>
               <button class="btn" type="button" id="btnPickRagFolder">Importar pasta</button>
             </div>
             <div id="ragSelectionSummary" class="small muted" style="margin-top:12px;">Nenhum arquivo selecionado.</div>
-            <div id="ragSelectionList" class="small" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
+            <div id="ragSelectionList" class="small admin-selection-list"></div>
             <div class="small muted" style="margin-top:10px;">No Chrome e no Edge, a opcao "Importar pasta" envia todos os arquivos da pasta escolhida. Apenas documentos suportados de ate 25 MB entram na fila.</div>
-            <div style="margin-top:14px; display:flex; justify-content:flex-end; gap:10px;">
+            <div class="admin-form-actions" style="margin-top:14px;">
               <button class="btn primary" id="btnUploadRag" disabled>Enviar arquivos</button>
             </div>
           </div>
-        </div>
+        </aside>
+      </div>
+
+      <div class="admin-content-grid">
+        <section class="admin-panel">
+          <div class="admin-panel-head">
+            <div class="admin-section-title">Usuarios</div>
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nome</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Departamentos</th>
+                <th>Intranet</th>
+                <th>Status</th>
+                <th>Acoes</th>
+              </tr>
+            </thead>
+            <tbody id="usersBody"></tbody>
+          </table>
+        </section>
+
+        <section class="admin-panel">
+          <div class="admin-panel-head">
+            <div class="admin-section-title">Arquivos da base interna</div>
+            <div id="ragListCount" class="small muted">Carregando documentos...</div>
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Arquivo</th>
+                <th>Vector Store</th>
+                <th>Criado em</th>
+              </tr>
+            </thead>
+            <tbody id="ragFilesBody"></tbody>
+          </table>
+        </section>
       </div>
 
       <div id="msg" class="small"></div>
@@ -147,6 +166,11 @@
 const RAG_BATCH_SIZE = 1;
 const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
 const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json"]);
+
+let pendingRagFiles = [];
+let ragUploadInProgress = false;
+let departmentCatalog = [];
+let cachedUsers = [];
 
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
@@ -190,9 +214,6 @@ function describeRagUploadError(error) {
   return code;
 }
 
-let pendingRagFiles = [];
-let ragUploadInProgress = false;
-
 function formatBytes(bytes = 0) {
   const value = Number(bytes || 0);
   if (!value) return '0 B';
@@ -223,7 +244,7 @@ function getFileExtension(name = '') {
   return dotIndex >= 0 ? normalized.slice(dotIndex) : '';
 }
 
-function getRagFileKey(file) {
+function getFileKey(file) {
   return [
     getFileDisplayName(file).toLowerCase(),
     Number(file.size || 0),
@@ -252,7 +273,7 @@ function splitRagFilesBySize(files) {
       continue;
     }
 
-    const key = getRagFileKey(file);
+    const key = getFileKey(file);
     if (seenKeys.has(key)) {
       rejectedByDuplicate.push(file);
       continue;
@@ -304,7 +325,7 @@ function setRagUploadProgress(done = 0, total = 0, visible = false) {
   }
 
   el.style.display = 'block';
-  el.textContent = `${done} | ${total} documentos processados`;
+  el.textContent = `${done} | ${total} documentos carregados`;
 }
 
 function renderRagSelection() {
@@ -335,10 +356,7 @@ function renderRagSelection() {
   list.innerHTML = '';
   pendingRagFiles.slice(0, 8).forEach((file) => {
     const item = document.createElement('div');
-    item.style.padding = '8px 10px';
-    item.style.border = '1px solid var(--border)';
-    item.style.borderRadius = '12px';
-    item.style.background = '#fff';
+    item.className = 'admin-selection-item';
     item.textContent = `${getFileDisplayName(file)} (${formatBytes(file.size)})`;
     list.appendChild(item);
   });
@@ -352,9 +370,7 @@ function renderRagSelection() {
 
   if (!ragUploadInProgress) {
     uploadBtn.disabled = false;
-    uploadBtn.textContent = pendingRagFiles.length === 1
-      ? 'Enviar arquivo'
-      : `Enviar ${pendingRagFiles.length} arquivos`;
+    uploadBtn.textContent = pendingRagFiles.length === 1 ? 'Enviar arquivo' : `Enviar ${pendingRagFiles.length} arquivos`;
   }
 }
 
@@ -400,12 +416,91 @@ function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
   return { acceptedCount: accepted.length, rejectedCount: rejectedTotal };
 }
 
+function renderDepartmentsGrid() {
+  const wrap = document.getElementById('departmentsGrid');
+  wrap.innerHTML = '';
+
+  departmentCatalog.forEach((department) => {
+    const label = document.createElement('label');
+    label.className = 'department-check';
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.name = 'departments';
+    input.value = department.name;
+
+    const copy = document.createElement('span');
+    copy.className = 'department-check-copy';
+    copy.innerHTML = `
+      <strong>${department.name}</strong>
+      <small>${department.description || 'Area preparada para novos modulos e permissoes.'}</small>
+    `;
+
+    label.appendChild(input);
+    label.appendChild(copy);
+    wrap.appendChild(label);
+  });
+}
+
+function getSelectedDepartments() {
+  return Array.from(document.querySelectorAll('input[name="departments"]:checked')).map((input) => input.value);
+}
+
+function setSelectedDepartments(departments = []) {
+  const safe = new Set(Array.isArray(departments) ? departments : []);
+  document.querySelectorAll('input[name="departments"]').forEach((input) => {
+    input.checked = safe.has(input.value);
+  });
+}
+
+function resetUserForm() {
+  document.getElementById('editingUserId').value = '';
+  document.getElementById('userFormTitle').textContent = 'Criar usuario';
+  document.getElementById('btnSaveUser').textContent = 'Criar usuario';
+  document.getElementById('btnCancelEdit').style.display = 'none';
+  document.getElementById('name').value = '';
+  document.getElementById('email').value = '';
+  document.getElementById('password').value = '';
+  document.getElementById('role').value = 'user';
+  document.getElementById('jobTitle').value = '';
+  document.getElementById('unitName').value = '';
+  document.getElementById('canAccessIntranet').checked = false;
+  setSelectedDepartments([]);
+}
+
+function populateUserForm(user) {
+  document.getElementById('editingUserId').value = String(user.id);
+  document.getElementById('userFormTitle').textContent = `Editar usuario #${user.id}`;
+  document.getElementById('btnSaveUser').textContent = 'Salvar alteracoes';
+  document.getElementById('btnCancelEdit').style.display = '';
+  document.getElementById('name').value = user.name || '';
+  document.getElementById('email').value = user.email || '';
+  document.getElementById('password').value = '';
+  document.getElementById('role').value = user.role || 'user';
+  document.getElementById('jobTitle').value = user.job_title || '';
+  document.getElementById('unitName').value = user.unit_name || '';
+  document.getElementById('canAccessIntranet').checked = Boolean(user.can_access_intranet);
+  setSelectedDepartments(user.departments || []);
+}
+
+function formatDepartmentLabel(user) {
+  const departments = Array.isArray(user.departments) ? user.departments : [];
+  return departments.length ? departments.join(', ') : (user.department || 'Sem departamento');
+}
+
+async function loadDepartments() {
+  const { departments } = await api('/api/admin/departments');
+  departmentCatalog = departments || [];
+  renderDepartmentsGrid();
+}
+
 async function loadUsers() {
   const { users } = await api('/api/admin/users');
+  cachedUsers = users || [];
   const body = document.getElementById('usersBody');
   body.innerHTML = '';
 
-  for (const user of users) {
+  for (const user of cachedUsers) {
     const tr = document.createElement('tr');
 
     const tdId = document.createElement('td');
@@ -423,20 +518,39 @@ async function loadUsers() {
     badge.textContent = user.role;
     tdRole.appendChild(badge);
 
-    const tdDepartment = document.createElement('td');
-    tdDepartment.className = 'small muted';
-    tdDepartment.textContent = user.department || 'Sem departamento';
+    const tdDepartments = document.createElement('td');
+    tdDepartments.className = 'small muted';
+    tdDepartments.textContent = formatDepartmentLabel(user);
+
+    const tdIntranet = document.createElement('td');
+    const intranetBadge = document.createElement('span');
+    intranetBadge.className = 'badge ' + (user.can_access_intranet ? 'admin' : '');
+    intranetBadge.textContent = user.can_access_intranet ? 'Liberado' : 'Bloqueado';
+    tdIntranet.appendChild(intranetBadge);
 
     const tdStatus = document.createElement('td');
     tdStatus.className = 'small muted';
     tdStatus.textContent = 'Preservado';
 
+    const tdActions = document.createElement('td');
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => {
+      populateUserForm(user);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    tdActions.appendChild(editBtn);
+
     tr.appendChild(tdId);
     tr.appendChild(tdName);
     tr.appendChild(tdEmail);
     tr.appendChild(tdRole);
-    tr.appendChild(tdDepartment);
+    tr.appendChild(tdDepartments);
+    tr.appendChild(tdIntranet);
     tr.appendChild(tdStatus);
+    tr.appendChild(tdActions);
     body.appendChild(tr);
   }
 }
@@ -501,31 +615,45 @@ document.getElementById('ragFolder').addEventListener('change', (event) => {
   setRagUploadProgress(0, pendingRagFiles.length, false);
 });
 
-document.getElementById('btnCreate').onclick = async () => {
-  const name = document.getElementById('name').value.trim();
-  const email = document.getElementById('email').value.trim();
-  const password = document.getElementById('password').value;
-  const role = document.getElementById('role').value;
-  const department = document.getElementById('department').value;
+document.getElementById('btnCancelEdit').onclick = () => {
+  resetUserForm();
+  setMsg('Edicao cancelada.');
+};
 
-  if (!name || !email || !password) {
-    setMsg('Preencha nome, email e senha.', true);
+document.getElementById('btnSaveUser').onclick = async () => {
+  const editingUserId = document.getElementById('editingUserId').value;
+  const payload = {
+    name: document.getElementById('name').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    password: document.getElementById('password').value,
+    role: document.getElementById('role').value,
+    departments: getSelectedDepartments(),
+    can_access_intranet: document.getElementById('canAccessIntranet').checked,
+    job_title: document.getElementById('jobTitle').value.trim(),
+    unit_name: document.getElementById('unitName').value.trim(),
+  };
+
+  if (!payload.name || !payload.email || (!editingUserId && !payload.password)) {
+    setMsg('Preencha nome, email e senha obrigatoria para criar.', true);
     return;
   }
 
   try {
-    await api('/api/admin/users', {
-      method: 'POST',
-      body: JSON.stringify({ name, email, password, role, department }),
-    });
+    if (editingUserId) {
+      await api(`/api/admin/users/${editingUserId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Usuario atualizado com sucesso.');
+    } else {
+      await api('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Usuario criado com sucesso.');
+    }
 
-    document.getElementById('name').value = '';
-    document.getElementById('email').value = '';
-    document.getElementById('password').value = '';
-    document.getElementById('role').value = 'user';
-    document.getElementById('department').value = '';
-
-    setMsg('Usuario criado com sucesso.');
+    resetUserForm();
     await loadUsers();
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
@@ -637,29 +765,10 @@ document.getElementById('btnUploadRag').onclick = async () => {
 renderRagSelection();
 setRagUploadState('Pronto para novos envios.');
 setRagUploadProgress(0, 0, false);
+resetUserForm();
 
-Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
+Promise.all([loadDepartments(), loadUsers(), loadRagStatus(), loadRagFiles()])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

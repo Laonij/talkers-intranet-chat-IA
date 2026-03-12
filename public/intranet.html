@@ -1,0 +1,139 @@
+﻿<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Intranet Talkers</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="intranet-shell">
+  <div class="intranet-app">
+    <aside class="intranet-sidebar" id="intranetSidebar">
+      <div class="intranet-brand">
+        <img class="logo-sm" src="/logo.png" alt="Logo" />
+        <div>
+          <div class="intranet-brand-title">Intranet Talkers</div>
+          <div class="intranet-brand-sub" id="intranetBrandSub">Ambiente corporativo interno</div>
+        </div>
+      </div>
+
+      <nav class="intranet-nav">
+        <a href="#home" class="intranet-nav-link">Home</a>
+        <a href="#modules" class="intranet-nav-link">Modulos</a>
+        <a href="#departments" class="intranet-nav-link">Departamentos</a>
+        <a href="#documents" class="intranet-nav-link">Documentos</a>
+        <a href="#communication" class="intranet-nav-link">Comunicacao</a>
+      </nav>
+
+      <div class="intranet-sidebar-block">
+        <div class="intranet-block-title">Departamentos liberados</div>
+        <div class="intranet-chip-list" id="sidebarDepartmentChips"></div>
+      </div>
+
+      <div class="intranet-sidebar-block">
+        <div class="intranet-block-title">Atalhos</div>
+        <div class="intranet-sidebar-links" id="sidebarQuickLinks"></div>
+      </div>
+
+      <div class="intranet-sidebar-footer">
+        <a class="btn intranet-back-btn" href="/index.html">Voltar ao chat</a>
+      </div>
+    </aside>
+
+    <main class="intranet-main">
+      <header class="intranet-topbar">
+        <button class="icon-btn intranet-menu-btn" id="btnIntranetMenu" type="button" aria-label="Abrir menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16" />
+            <path d="M4 12h16" />
+            <path d="M4 17h16" />
+          </svg>
+        </button>
+
+        <div>
+          <div class="intranet-eyebrow">Workspace corporativo</div>
+          <h1 class="intranet-page-title" id="intranetGreeting">Intranet Talkers</h1>
+        </div>
+
+        <div class="intranet-topbar-actions">
+          <a class="btn" href="/index.html">Abrir chat</a>
+        </div>
+      </header>
+
+      <section class="intranet-hero" id="home">
+        <div>
+          <div class="intranet-hero-badge">IA + conteudo corporativo</div>
+          <h2 class="intranet-hero-title" id="heroTitle">Carregando workspace...</h2>
+          <p class="intranet-hero-text" id="heroDescription">Montando a visao personalizada da intranet.</p>
+        </div>
+        <div class="intranet-highlight-list" id="heroHighlights"></div>
+      </section>
+
+      <section class="intranet-stats" id="homeStats"></section>
+
+      <section class="intranet-section">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Acesso rapido</div>
+            <h3 class="intranet-section-title">Entradas principais</h3>
+          </div>
+        </div>
+        <div class="intranet-quick-grid" id="intranetQuickGrid"></div>
+      </section>
+
+      <section class="intranet-section" id="modules">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Modulos</div>
+            <h3 class="intranet-section-title">Tudo o que seu perfil pode acessar</h3>
+          </div>
+        </div>
+        <div class="intranet-module-grid" id="moduleGrid"></div>
+      </section>
+
+      <section class="intranet-section" id="departments">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Departamentos</div>
+            <h3 class="intranet-section-title">Areas de trabalho por departamento</h3>
+          </div>
+        </div>
+        <div class="intranet-department-grid" id="departmentGrid"></div>
+      </section>
+
+      <section class="intranet-section" id="documents">
+        <div class="intranet-section-head intranet-section-head-stack">
+          <div>
+            <div class="intranet-section-eyebrow">Central de documentos</div>
+            <h3 class="intranet-section-title">Materiais internos e base corporativa</h3>
+          </div>
+          <input id="documentSearch" class="intranet-search" placeholder="Filtrar documentos e modulos" />
+        </div>
+        <div class="intranet-document-grid" id="documentGrid"></div>
+      </section>
+
+      <section class="intranet-section" id="communication">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Comunicacao interna</div>
+            <h3 class="intranet-section-title">Base pronta para mural, avisos e canais internos</h3>
+          </div>
+        </div>
+        <div class="intranet-communication-grid" id="communicationGrid"></div>
+      </section>
+
+      <section class="intranet-section" id="adminFuture" style="display:none;">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Evolucao futura</div>
+            <h3 class="intranet-section-title">Proximos passos da administracao da intranet</h3>
+          </div>
+        </div>
+        <div class="intranet-future-list" id="futureList"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/intranet.js"></script>
+</body>
+</html>

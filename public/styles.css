@@ -1,4 +1,4 @@
-:root{
+﻿:root{
   --bg:#f6f7fb;
   --panel:#ffffff;
   --panel-2:#f9fafc;
@@ -26,6 +26,12 @@ html,body{
 }
 
 body{ min-height:100vh; }
+
+body.app-shell{
+  height:100vh;
+  height:100dvh;
+  overflow:hidden;
+}
 
 a{ color:inherit; text-decoration:none; }
 img{ max-width:100%; display:block; }
@@ -66,6 +72,12 @@ label{
   min-height:100vh;
 }
 
+body.app-shell .app{
+  height:100%;
+  min-height:0;
+  overflow:hidden;
+}
+
 .sidebar{
   background:var(--panel);
   border-right:1px solid var(--border);
@@ -74,6 +86,11 @@ label{
   flex-direction:column;
   gap:14px;
   min-height:100vh;
+}
+
+body.app-shell .sidebar{
+  height:100%;
+  min-height:0;
 }
 
 .brand{
@@ -207,6 +224,12 @@ label{
   gap:14px;
 }
 
+body.app-shell .main{
+  height:100%;
+  min-height:0;
+  overflow:hidden;
+}
+
 .topbar{
   min-height:54px;
   border:1px solid var(--border);
@@ -243,6 +266,12 @@ label{
   overflow:auto;
   min-height:300px;
   max-height:calc(100vh - 170px);
+}
+
+body.app-shell .chat{
+  height:100%;
+  min-height:0;
+  max-height:none;
 }
 
 .chat::-webkit-scrollbar{ width:8px; }
@@ -529,3 +558,4 @@ label{
     grid-column:1 / -1;
   }
 }
+

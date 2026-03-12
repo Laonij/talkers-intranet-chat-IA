@@ -127,6 +127,7 @@
 
 <script>
 const RAG_BATCH_SIZE = 20;
+const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
 
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
@@ -177,6 +178,22 @@ function sanitizeDisplayName(name = 'arquivo') {
 
 function getFileDisplayName(file) {
   return file.webkitRelativePath || file.name || 'arquivo';
+}
+
+function splitRagFilesBySize(files) {
+  const accepted = [];
+  const rejected = [];
+
+  for (const file of Array.from(files || [])) {
+    if (Number(file.size || 0) > MAX_RAG_FILE_BYTES) {
+      rejected.push(file);
+      continue;
+    }
+
+    accepted.push(file);
+  }
+
+  return { accepted, rejected };
 }
 
 function chunkFiles(files, batchSize = RAG_BATCH_SIZE) {
@@ -272,9 +289,37 @@ function renderRagSelection() {
   }
 }
 
-function setPendingRagFiles(files) {
-  pendingRagFiles = Array.from(files || []);
+function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
+  const { accepted, rejected } = splitRagFilesBySize(files);
+  pendingRagFiles = accepted;
   renderRagSelection();
+
+  const rejectedNames = rejected.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+
+  if (!accepted.length && !rejected.length) {
+    setRagUploadState('Nenhum arquivo selecionado.');
+    setMsg('');
+    return { acceptedCount: 0, rejectedCount: 0 };
+  }
+
+  if (accepted.length) {
+    const acceptedLabel = accepted.length === 1 ? '1 arquivo pronto para envio.' : `${accepted.length} arquivos prontos para envio.`;
+    const rejectedLabel = rejected.length
+      ? ` ${rejected.length} arquivo(s) acima de 25 MB foram descartados automaticamente.`
+      : '';
+    setRagUploadState(`${sourceLabel} carregado(s) na fila. ${acceptedLabel}${rejectedLabel}`);
+  } else {
+    setRagUploadState(`Nenhum arquivo elegivel para envio. ${rejected.length} arquivo(s) acima de 25 MB foram descartados automaticamente.`, 'error');
+  }
+
+  if (rejected.length) {
+    const detail = rejectedNames.length ? ` Exemplos: ${rejectedNames.join(', ')}.` : '';
+    setMsg(`${rejected.length} arquivo(s) acima de 25 MB foram descartados automaticamente.${detail}`, true);
+  } else {
+    setMsg('');
+  }
+
+  return { acceptedCount: accepted.length, rejectedCount: rejected.length };
 }
 
 async function loadUsers() {
@@ -362,16 +407,14 @@ document.getElementById('btnPickRagFolder').onclick = () => {
 };
 
 document.getElementById('ragFiles').addEventListener('change', (event) => {
-  setPendingRagFiles(event.target.files);
+  setPendingRagFiles(event.target.files, 'Arquivos');
   document.getElementById('ragFolder').value = '';
-  setRagUploadState('Arquivos selecionados. Pronto para enviar.');
   setRagUploadProgress(0, pendingRagFiles.length, false);
 });
 
 document.getElementById('ragFolder').addEventListener('change', (event) => {
-  setPendingRagFiles(event.target.files);
+  setPendingRagFiles(event.target.files, 'Pasta');
   document.getElementById('ragFiles').value = '';
-  setRagUploadState('Pasta carregada na fila. Pronto para enviar.');
   setRagUploadProgress(0, pendingRagFiles.length, false);
 });
 
@@ -410,7 +453,18 @@ document.getElementById('btnUploadRag').onclick = async () => {
     return;
   }
 
-  const queue = [...pendingRagFiles];
+  const sizeCheck = splitRagFilesBySize(pendingRagFiles);
+  if (sizeCheck.rejected.length) {
+    pendingRagFiles = sizeCheck.accepted;
+    renderRagSelection();
+  }
+
+  const queue = [...sizeCheck.accepted];
+  if (!queue.length) {
+    setMsg('Todos os arquivos selecionados foram descartados por exceder 25 MB.', true);
+    setRagUploadState('Nenhum arquivo elegivel para envio. Ajuste a selecao e tente novamente.', 'error');
+    return;
+  }
   const batches = chunkFiles(queue);
   const totalPlanned = queue.length;
   const failedFiles = [];
@@ -493,4 +547,6 @@ Promise.all([loadUsers(), loadRagStatus(), loadRagFiles()])
 </script>
 </body>
 </html>
+
+
 

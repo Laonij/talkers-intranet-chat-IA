@@ -88,12 +88,62 @@
             <button class="btn" id="btnCancelEdit" type="button" style="display:none;">Cancelar edicao</button>
             <button class="btn primary" id="btnSaveUser" type="button">Criar usuario</button>
           </div>
+
+          <div class="admin-divider"></div>
+
+          <div class="admin-panel-head" style="margin-bottom:0;">
+            <div>
+              <div class="admin-section-title" id="departmentFormTitle">Criar departamento</div>
+              <div class="small muted">Crie novos departamentos sem depender de alteracao manual no codigo.</div>
+            </div>
+          </div>
+
+          <input type="hidden" id="editingDepartmentId" value="" />
+
+          <div class="row admin-form-grid">
+            <div>
+              <label>Nome do departamento</label>
+              <input id="departmentName" placeholder="Ex.: Secretaria, Coordenacao, Atendimento" />
+            </div>
+            <div>
+              <label>Slug (opcional)</label>
+              <input id="departmentSlug" placeholder="Gerado automaticamente se vazio" />
+            </div>
+          </div>
+
+          <div class="row admin-form-grid">
+            <div>
+              <label>Descricao</label>
+              <input id="departmentDescription" placeholder="Resumo do papel e da area" />
+            </div>
+            <div>
+              <label>Icone (opcional)</label>
+              <input id="departmentIcon" placeholder="Ex.: layers, briefcase, users" />
+            </div>
+          </div>
+
+          <div class="admin-inline-toggle">
+            <label class="admin-check-row">
+              <input id="departmentIsActive" type="checkbox" checked />
+              <span>
+                <strong>Departamento ativo</strong>
+                <small>Departamentos inativos deixam de aparecer na associacao de usuarios e na intranet.</small>
+              </span>
+            </label>
+          </div>
+
+          <div class="admin-form-actions">
+            <button class="btn" id="btnCancelDepartmentEdit" type="button" style="display:none;">Cancelar edicao</button>
+            <button class="btn primary" id="btnSaveDepartment" type="button">Criar departamento</button>
+          </div>
         </section>
 
         <aside class="admin-sidebar-panels">
           <div class="admin-side-card">
-            <div class="admin-side-title">Status do RAG</div>
-            <span id="ragDocCountBadge" class="badge">0 documentos</span>
+            <div class="admin-side-head">
+              <div class="admin-side-title">Status do RAG</div>
+              <span id="ragDocCountBadge" class="badge">0 documentos</span>
+            </div>
             <div class="small muted" id="ragStatus">Carregando...</div>
             <div id="ragUploadState" class="small admin-state-box">Pronto para novos envios.</div>
             <div id="ragUploadProgress" class="small muted" style="margin-top:10px; display:none;">0 | 0 documentos carregados</div>
@@ -102,6 +152,12 @@
           <div class="admin-side-card">
             <div class="admin-side-title">Enviar para a base da empresa</div>
             <div class="small muted" style="margin-bottom:12px;">Os arquivos vao para o armazenamento local do projeto e, se configurado, tambem para a Vector Store da OpenAI.</div>
+            <div>
+              <label>Departamento relacionado (opcional)</label>
+              <select id="ragDepartment">
+                <option value="">Geral / corporativo</option>
+              </select>
+            </div>
             <input id="ragFiles" type="file" multiple hidden />
             <input id="ragFolder" type="file" webkitdirectory directory multiple hidden />
             <div class="admin-upload-actions">
@@ -118,43 +174,81 @@
         </aside>
       </div>
 
-      <div class="admin-content-grid">
-        <section class="admin-panel">
-          <div class="admin-panel-head">
-            <div class="admin-section-title">Usuarios</div>
+      <div class="admin-content-grid admin-collapsible-grid">
+        <section class="admin-panel admin-collapsible" data-section="users">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Usuarios</div>
+              <div class="small muted" id="usersCountLabel">Carregando usuarios...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="users">-</button>
           </div>
-          <table class="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Nome</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Departamentos</th>
-                <th>Intranet</th>
-                <th>Status</th>
-                <th>Acoes</th>
-              </tr>
-            </thead>
-            <tbody id="usersBody"></tbody>
-          </table>
+          <div class="admin-collapsible-body" data-section-body="users">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nome</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Departamentos</th>
+                  <th>Intranet</th>
+                  <th>Status</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody id="usersBody"></tbody>
+            </table>
+          </div>
         </section>
 
-        <section class="admin-panel">
-          <div class="admin-panel-head">
-            <div class="admin-section-title">Arquivos da base interna</div>
-            <div id="ragListCount" class="small muted">Carregando documentos...</div>
+        <section class="admin-panel admin-collapsible" data-section="departments">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Departamentos</div>
+              <div class="small muted" id="departmentCountLabel">Carregando departamentos...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="departments">-</button>
           </div>
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Arquivo</th>
-                <th>Vector Store</th>
-                <th>Criado em</th>
-              </tr>
-            </thead>
-            <tbody id="ragFilesBody"></tbody>
-          </table>
+          <div class="admin-collapsible-body" data-section-body="departments">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Slug</th>
+                  <th>Status</th>
+                  <th>Usuarios</th>
+                  <th>Descricao</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody id="departmentsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible" data-section="knowledge">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Arquivos da base interna</div>
+              <div id="ragListCount" class="small muted">Carregando documentos...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="knowledge">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="knowledge">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Arquivo</th>
+                  <th>Departamento</th>
+                  <th>Idioma</th>
+                  <th>Status</th>
+                  <th>Criado em</th>
+                </tr>
+              </thead>
+              <tbody id="ragFilesBody"></tbody>
+            </table>
+          </div>
         </section>
       </div>
 
@@ -165,7 +259,7 @@
 <script>
 const RAG_BATCH_SIZE = 1;
 const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
-const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json"]);
+const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json"]);`r`nconst SECTION_STORAGE_KEY = "talkers-admin-sections";
 
 let pendingRagFiles = [];
 let ragUploadInProgress = false;
@@ -416,11 +510,16 @@ function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
   return { acceptedCount: accepted.length, rejectedCount: rejectedTotal };
 }
 
+function getDepartmentOptions(includeInactive = false) {
+  return (departmentCatalog || []).filter((department) => includeInactive || department.is_active !== false);
+}
+
 function renderDepartmentsGrid() {
   const wrap = document.getElementById('departmentsGrid');
   wrap.innerHTML = '';
 
-  departmentCatalog.forEach((department) => {
+  const options = getDepartmentOptions(false);
+  options.forEach((department) => {
     const label = document.createElement('label');
     label.className = 'department-check';
 
@@ -439,6 +538,63 @@ function renderDepartmentsGrid() {
     label.appendChild(input);
     label.appendChild(copy);
     wrap.appendChild(label);
+  });
+}
+
+function renderDepartmentSelect() {
+  const select = document.getElementById('ragDepartment');
+  const previousValue = select.value;
+  select.innerHTML = '<option value="">Geral / corporativo</option>';
+
+  getDepartmentOptions(false).forEach((department) => {
+    const option = document.createElement('option');
+    option.value = department.name;
+    option.textContent = department.name;
+    select.appendChild(option);
+  });
+
+  if (Array.from(select.options).some((option) => option.value === previousValue)) {
+    select.value = previousValue;
+  }
+}
+
+function renderDepartmentTable() {
+  const body = document.getElementById('departmentsBody');
+  body.innerHTML = '';
+  document.getElementById('departmentCountLabel').textContent = departmentCatalog.length === 1
+    ? '1 departamento cadastrado'
+    : `${departmentCatalog.length} departamentos cadastrados`;
+
+  if (!departmentCatalog.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'small muted';
+    td.textContent = 'Nenhum departamento cadastrado ainda.';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+
+  departmentCatalog.forEach((department) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${department.name}</td>
+      <td class="small muted">${department.slug || '-'}</td>
+      <td><span class="badge ${department.is_active ? 'admin' : ''}">${department.is_active ? 'Ativo' : 'Inativo'}</span></td>
+      <td class="small muted">${Number(department.total_users || 0)}</td>
+      <td class="small muted">${department.description || 'Sem descricao'}</td>
+      <td></td>
+    `;
+
+    const actionsCell = tr.lastElementChild;
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateDepartmentForm(department);
+    actionsCell.appendChild(editBtn);
+    body.appendChild(tr);
   });
 }
 
@@ -483,15 +639,86 @@ function populateUserForm(user) {
   setSelectedDepartments(user.departments || []);
 }
 
+function resetDepartmentForm() {
+  document.getElementById('editingDepartmentId').value = '';
+  document.getElementById('departmentFormTitle').textContent = 'Criar departamento';
+  document.getElementById('btnSaveDepartment').textContent = 'Criar departamento';
+  document.getElementById('btnCancelDepartmentEdit').style.display = 'none';
+  document.getElementById('departmentName').value = '';
+  document.getElementById('departmentSlug').value = '';
+  document.getElementById('departmentDescription').value = '';
+  document.getElementById('departmentIcon').value = '';
+  document.getElementById('departmentIsActive').checked = true;
+}
+
+function populateDepartmentForm(department) {
+  document.getElementById('editingDepartmentId').value = String(department.id);
+  document.getElementById('departmentFormTitle').textContent = `Editar departamento #${department.id}`;
+  document.getElementById('btnSaveDepartment').textContent = 'Salvar departamento';
+  document.getElementById('btnCancelDepartmentEdit').style.display = '';
+  document.getElementById('departmentName').value = department.name || '';
+  document.getElementById('departmentSlug').value = department.slug || '';
+  document.getElementById('departmentDescription').value = department.description || '';
+  document.getElementById('departmentIcon').value = department.icon || '';
+  document.getElementById('departmentIsActive').checked = department.is_active !== false;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function formatDepartmentLabel(user) {
   const departments = Array.isArray(user.departments) ? user.departments : [];
   return departments.length ? departments.join(', ') : (user.department || 'Sem departamento');
+}
+
+function loadSectionState() {
+  try {
+    const raw = localStorage.getItem(SECTION_STORAGE_KEY);
+    collapsedSections = new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    collapsedSections = new Set();
+  }
+}
+
+function persistSectionState() {
+  try {
+    localStorage.setItem(SECTION_STORAGE_KEY, JSON.stringify(Array.from(collapsedSections)));
+  } catch {}
+}
+
+function syncSectionToggles() {
+  document.querySelectorAll('[data-section-body]').forEach((body) => {
+    const key = body.getAttribute('data-section-body');
+    body.hidden = collapsedSections.has(key);
+  });
+
+  document.querySelectorAll('[data-toggle-section]').forEach((button) => {
+    const key = button.getAttribute('data-toggle-section');
+    const collapsed = collapsedSections.has(key);
+    button.textContent = collapsed ? '+' : '-';
+    button.setAttribute('aria-label', collapsed ? 'Expandir secao' : 'Recolher secao');
+  });
+}
+
+function bindSectionToggles() {
+  document.querySelectorAll('[data-toggle-section]').forEach((button) => {
+    button.onclick = () => {
+      const key = button.getAttribute('data-toggle-section');
+      if (collapsedSections.has(key)) {
+        collapsedSections.delete(key);
+      } else {
+        collapsedSections.add(key);
+      }
+      persistSectionState();
+      syncSectionToggles();
+    };
+  });
 }
 
 async function loadDepartments() {
   const { departments } = await api('/api/admin/departments');
   departmentCatalog = departments || [];
   renderDepartmentsGrid();
+  renderDepartmentSelect();
+  renderDepartmentTable();
 }
 
 async function loadUsers() {
@@ -499,6 +726,9 @@ async function loadUsers() {
   cachedUsers = users || [];
   const body = document.getElementById('usersBody');
   body.innerHTML = '';
+  document.getElementById('usersCountLabel').textContent = cachedUsers.length === 1
+    ? '1 usuario preservado'
+    : `${cachedUsers.length} usuarios preservados`;
 
   for (const user of cachedUsers) {
     const tr = document.createElement('tr');
@@ -537,10 +767,7 @@ async function loadUsers() {
     editBtn.type = 'button';
     editBtn.className = 'btn';
     editBtn.textContent = 'Editar';
-    editBtn.onclick = () => {
-      populateUserForm(user);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
+    editBtn.onclick = () => populateUserForm(user);
     tdActions.appendChild(editBtn);
 
     tr.appendChild(tdId);
@@ -572,7 +799,7 @@ async function loadRagFiles() {
   if (!files.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 3;
+    td.colSpan = 5;
     td.className = 'small muted';
     td.textContent = 'Nenhum documento carregado na base ainda.';
     tr.appendChild(td);
@@ -582,15 +809,13 @@ async function loadRagFiles() {
 
   for (const file of files) {
     const tr = document.createElement('tr');
-    const tdName = document.createElement('td');
-    tdName.textContent = file.original_name;
-    const tdStore = document.createElement('td');
-    tdStore.textContent = file.vector_store_file_id ? 'Sincronizado' : 'Somente local';
-    const tdCreated = document.createElement('td');
-    tdCreated.textContent = new Date(file.created_at).toLocaleString('pt-BR');
-    tr.appendChild(tdName);
-    tr.appendChild(tdStore);
-    tr.appendChild(tdCreated);
+    tr.innerHTML = `
+      <td>${file.original_name}</td>
+      <td class="small muted">${file.department_name || 'Geral'}</td>
+      <td class="small muted">${file.language || '-'}</td>
+      <td class="small muted">${file.vector_store_file_id ? 'Sincronizado' : (file.sync_status || 'Local')}</td>
+      <td class="small muted">${new Date(file.created_at).toLocaleString('pt-BR')}</td>
+    `;
     body.appendChild(tr);
   }
 }
@@ -618,6 +843,11 @@ document.getElementById('ragFolder').addEventListener('change', (event) => {
 document.getElementById('btnCancelEdit').onclick = () => {
   resetUserForm();
   setMsg('Edicao cancelada.');
+};
+
+document.getElementById('btnCancelDepartmentEdit').onclick = () => {
+  resetDepartmentForm();
+  setMsg('Edicao do departamento cancelada.');
 };
 
 document.getElementById('btnSaveUser').onclick = async () => {
@@ -654,7 +884,44 @@ document.getElementById('btnSaveUser').onclick = async () => {
     }
 
     resetUserForm();
-    await loadUsers();
+    await Promise.all([loadUsers(), loadDepartments()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnSaveDepartment').onclick = async () => {
+  const departmentId = document.getElementById('editingDepartmentId').value;
+  const payload = {
+    name: document.getElementById('departmentName').value.trim(),
+    slug: document.getElementById('departmentSlug').value.trim(),
+    description: document.getElementById('departmentDescription').value.trim(),
+    icon: document.getElementById('departmentIcon').value.trim(),
+    is_active: document.getElementById('departmentIsActive').checked,
+  };
+
+  if (!payload.name) {
+    setMsg('Informe o nome do departamento.', true);
+    return;
+  }
+
+  try {
+    if (departmentId) {
+      await api(`/api/admin/departments/${departmentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Departamento atualizado com sucesso.');
+    } else {
+      await api('/api/admin/departments', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Departamento criado com sucesso.');
+    }
+
+    resetDepartmentForm();
+    await loadDepartments();
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
   }
@@ -679,6 +946,7 @@ document.getElementById('btnUploadRag').onclick = async () => {
     return;
   }
 
+  const departmentName = document.getElementById('ragDepartment').value.trim();
   const batches = chunkFiles(queue);
   const totalPlanned = queue.length;
   const failedFiles = [];
@@ -695,6 +963,7 @@ document.getElementById('btnUploadRag').onclick = async () => {
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
       const batch = batches[batchIndex];
       const fd = new FormData();
+      if (departmentName) fd.append('department_name', departmentName);
       batch.forEach((file) => {
         fd.append('files', file, getFileDisplayName(file));
       });
@@ -742,8 +1011,7 @@ document.getElementById('btnUploadRag').onclick = async () => {
       failedCount > 0 ? 'error' : 'success'
     );
 
-    await loadRagStatus();
-    await loadRagFiles();
+    await Promise.all([loadRagStatus(), loadRagFiles()]);
   } catch (err) {
     const remainingQueue = queue.slice(completedFileCount);
     pendingRagFiles = [...failedFiles, ...remainingQueue];
@@ -762,13 +1030,22 @@ document.getElementById('btnUploadRag').onclick = async () => {
   }
 };
 
+loadSectionState();
+bindSectionToggles();
+syncSectionToggles();
 renderRagSelection();
 setRagUploadState('Pronto para novos envios.');
 setRagUploadProgress(0, 0, false);
 resetUserForm();
+resetDepartmentForm();
 
 Promise.all([loadDepartments(), loadUsers(), loadRagStatus(), loadRagFiles()])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
 </script>
 </body>
 </html>
+
+
+
+
+

@@ -319,43 +319,111 @@ function formatDepartmentNames(departments = []) {
   return safe.join(", ");
 }
 
+function normalizeDepartmentValue(value = "") {
+  return normalizeBusinessText(sanitizeDepartment(value || "") || "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function slugifyDepartmentName(value = "") {
+  return normalizeDepartmentValue(value).replace(/\s+/g, "-");
+}
+
 function coerceDbBoolean(value) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
-async function listDepartmentCatalog() {
-  return all(
-    "SELECT id, slug, name, description, icon, sort_order, metadata_json FROM departments ORDER BY sort_order ASC, name ASC"
-  );
+function mapDepartmentRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    is_active: row.is_active === undefined ? true : coerceDbBoolean(row.is_active),
+    metadata: safeJsonParse(row.metadata_json || '{}') || {},
+  };
 }
 
-async function getDepartmentIdMap() {
-  const rows = await listDepartmentCatalog();
-  return new Map(rows.map((row) => [row.name, row]));
-}
-
-async function getUserDepartmentDetails(userId) {
+async function listDepartmentCatalog(options = {}) {
+  const includeInactive = Boolean(options.includeInactive);
   const rows = await all(
-    `SELECT d.id, d.slug, d.name, d.description, d.icon, d.sort_order, d.metadata_json,
+    `SELECT id, slug, name, description, icon, is_active, sort_order, metadata_json, created_at, updated_at
+       FROM departments
+      ${includeInactive ? '' : 'WHERE COALESCE(is_active, 1) = 1'}
+      ORDER BY sort_order ASC, name ASC`
+  );
+  return rows.map(mapDepartmentRow).filter(Boolean);
+}
+
+async function getDepartmentCatalogLookup(options = {}) {
+  const map = new Map();
+  const rows = await listDepartmentCatalog({ includeInactive: options.includeInactive });
+  for (const row of rows) {
+    const keys = [row.name, row.slug].map((value) => normalizeDepartmentValue(value));
+    for (const key of keys) {
+      if (key) map.set(key, row);
+    }
+  }
+  return map;
+}
+
+async function resolveDepartmentNames(departmentValues = [], options = {}) {
+  const rawValues = Array.isArray(departmentValues)
+    ? departmentValues
+    : parseDepartmentInput(departmentValues);
+  const requested = sanitizeDepartmentList(rawValues);
+  const lookup = await getDepartmentCatalogLookup({ includeInactive: Boolean(options.includeInactive) });
+  const resolved = [];
+  const seen = new Set();
+
+  for (const item of requested) {
+    const key = normalizeDepartmentValue(item);
+    if (!key || seen.has(key)) continue;
+    const match = lookup.get(key);
+    if (!match) continue;
+    seen.add(key);
+    resolved.push(match.name);
+  }
+
+  return resolved;
+}
+
+async function getDepartmentIdMap(options = {}) {
+  const rows = await listDepartmentCatalog({ includeInactive: options.includeInactive });
+  const map = new Map();
+  for (const row of rows) {
+    map.set(row.name, row);
+    const normalizedName = normalizeDepartmentValue(row.name);
+    const normalizedSlug = normalizeDepartmentValue(row.slug);
+    if (normalizedName) map.set(normalizedName, row);
+    if (normalizedSlug) map.set(normalizedSlug, row);
+  }
+  return map;
+}
+
+async function getUserDepartmentDetails(userId, options = {}) {
+  const includeInactive = Boolean(options.includeInactive);
+  const rows = await all(
+    `SELECT d.id, d.slug, d.name, d.description, d.icon, d.is_active, d.sort_order, d.metadata_json,
             ud.access_level, ud.is_primary
        FROM user_departments ud
        JOIN departments d ON d.id = ud.department_id
       WHERE ud.user_id=?
+        ${includeInactive ? '' : 'AND COALESCE(d.is_active, 1) = 1'}
       ORDER BY ud.is_primary DESC, d.sort_order ASC, d.name ASC`,
     [userId]
   );
 
   return rows.map((row) => ({
-    ...row,
+    ...mapDepartmentRow(row),
     is_primary: coerceDbBoolean(row.is_primary),
   }));
 }
 
 async function hydrateUserRecord(user) {
   if (!user) return null;
-  const details = await getUserDepartmentDetails(user.id || user.sub);
-  const departments = details.map((item) => item.name);
-  const primaryDepartment = user.department || getPrimaryDepartmentName(departments);
+  const details = await getUserDepartmentDetails(user.id || user.sub, { includeInactive: true });
+  const departments = details.filter((item) => item.is_active !== false).map((item) => item.name);
+  const fallbackDepartments = details.map((item) => item.name);
+  const primaryDepartment = user.department || getPrimaryDepartmentName(departments) || getPrimaryDepartmentName(fallbackDepartments);
   return {
     ...user,
     department: primaryDepartment,
@@ -366,9 +434,9 @@ async function hydrateUserRecord(user) {
 }
 
 async function syncUserDepartments(userId, departmentValues = []) {
-  const safeDepartments = sanitizeDepartmentList(departmentValues);
-  const catalogMap = await getDepartmentIdMap();
-  const existing = await getUserDepartmentDetails(userId);
+  const safeDepartments = await resolveDepartmentNames(departmentValues, { includeInactive: false });
+  const catalogMap = await getDepartmentIdMap({ includeInactive: false });
+  const existing = await getUserDepartmentDetails(userId, { includeInactive: true });
   const existingByName = new Map(existing.map((item) => [item.name, item]));
 
   for (const row of existing) {
@@ -379,7 +447,7 @@ async function syncUserDepartments(userId, departmentValues = []) {
 
   for (let index = 0; index < safeDepartments.length; index += 1) {
     const name = safeDepartments[index];
-    const department = catalogMap.get(name);
+    const department = catalogMap.get(name) || catalogMap.get(normalizeDepartmentValue(name));
     if (!department) continue;
     const isPrimary = index === 0;
 
@@ -404,16 +472,17 @@ async function ensureDepartmentCatalog() {
   const rows = buildDepartmentSeedRows();
   for (const row of rows) {
     await run(
-      `INSERT INTO departments (slug, name, description, icon, sort_order, metadata_json, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      `INSERT INTO departments (slug, name, description, icon, is_active, sort_order, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT(slug) DO UPDATE SET
          name=excluded.name,
          description=excluded.description,
          icon=excluded.icon,
+         is_active=excluded.is_active,
          sort_order=excluded.sort_order,
          metadata_json=excluded.metadata_json,
          updated_at=datetime('now')`,
-      [row.slug, row.name, row.description, row.icon, row.sortOrder, row.metadataJson]
+      [row.slug, row.name, row.description, row.icon, row.isActive ? 1 : 0, row.sortOrder, row.metadataJson]
     );
   }
 }
@@ -453,7 +522,7 @@ function detectConversationLanguage(userText = "", history = []) {
   return normalizeLanguageCode(detectLanguage(joined || userText || "", "pt"));
 }
 
-function analyzeConversationIntent(userText = "", userLanguage = "pt") {
+function analyzeConversationIntent(userText = "", userLanguage = "pt", options = {}) {
   const normalized = normalizeQuery(userText);
   const wantsStructured = STRUCTURED_REQUEST_RE.test(normalized) || /\n/.test(String(userText || ""));
   const wantsTranslation = /\b(traduza|translate|traduz|translation|traducao|traduccion|traduzione)\b/i.test(userText);
@@ -462,11 +531,12 @@ function analyzeConversationIntent(userText = "", userLanguage = "pt") {
   const wantsSteps = /\b(passo a passo|step by step|como fazer|how to|como faco|como faço)\b/i.test(userText);
   const wantsProfessional = /\b(profissional|formal|executivo|corporativo|business|profesional|professionnel)\b/i.test(userText);
   const wantsPersuasive = /\b(venda|comercial|persuasivo|convencer|sales|conversion)\b/i.test(userText);
+  const businessIntent = analyzeBusinessIntent(userText, { departments: options.departments || [] });
 
   let tone = 'cordial';
   if (wantsProfessional) tone = 'profissional';
-  else if (wantsPersuasive) tone = 'persuasivo';
-  else if (wantsSteps || wantsSummary) tone = 'objetivo';
+  else if (wantsPersuasive || businessIntent.businessAreaKey === 'commercial') tone = 'persuasivo';
+  else if (wantsSteps || wantsSummary || businessIntent.responseDepth === 'deep') tone = 'objetivo';
   else if (/\b(rapido|rápido|direto|curto|short|brief)\b/i.test(userText)) tone = 'direto';
   else if (/\b(leve|humano|friendly|casual|despojado)\b/i.test(userText)) tone = 'leve';
 
@@ -483,12 +553,14 @@ function analyzeConversationIntent(userText = "", userLanguage = "pt") {
   return {
     language: userLanguage,
     tone,
-    wantsStructured: wantsStructured || wantsTranslation || wantsSummary || wantsRewrite || wantsSteps,
+    wantsStructured: wantsStructured || wantsTranslation || wantsSummary || wantsRewrite || wantsSteps || businessIntent.responseDepth !== 'compact',
     wantsTranslation,
     wantsSummary,
     wantsRewrite,
     wantsSteps,
     responseLabel,
+    businessIntent,
+    responseDepth: businessIntent.responseDepth,
   };
 }
 
@@ -863,9 +935,10 @@ async function findDuplicateKnowledgeUpload({ sourcePath, originalName, mimeType
   return null;
 }
 
-async function upsertDocumentChunks(documentId, relPath, extractedText, language, documentKeywords = []) {
+async function upsertDocumentChunks(documentId, relPath, extractedText, language, documentKeywords = [], options = {}) {
   await run("DELETE FROM document_chunks WHERE document_id=?", [documentId]);
 
+  const departmentName = String(options.departmentName || '').trim() || null;
   const chunks = chunkTextSemantically(extractedText || relPath, {
     maxChars: 1400,
     minChars: 420,
@@ -875,8 +948,8 @@ async function upsertDocumentChunks(documentId, relPath, extractedText, language
     const contentText = String(extractedText || relPath || '').trim();
     const keywordText = extractKeywords(contentText, 12).join(', ');
     await run(
-      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [documentId, relPath, 0, contentText, language, '', null, hashText(contentText), keywordText]
+      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, department_name, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [documentId, relPath, 0, contentText, departmentName, language, '', null, hashText(contentText), keywordText]
     );
     return 1;
   }
@@ -885,8 +958,8 @@ async function upsertDocumentChunks(documentId, relPath, extractedText, language
   for (const chunk of chunks) {
     const keywords = [...new Set([...(chunk.keywords || []), ...documentKeywords])].slice(0, 16).join(', ');
     await run(
-      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [documentId, relPath, chunk.index, chunk.text, language, '', null, chunk.hash, keywords]
+      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, department_name, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [documentId, relPath, chunk.index, chunk.text, departmentName, language, '', null, chunk.hash, keywords]
     );
     created += 1;
   }
@@ -894,7 +967,7 @@ async function upsertDocumentChunks(documentId, relPath, extractedText, language
   return created;
 }
 
-async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeType }) {
+async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeType, departmentName = '', sourceKind = 'manual_upload' }) {
   if (!fs.existsSync(sourcePath)) return null;
 
   const stat = fs.statSync(sourcePath);
@@ -907,18 +980,19 @@ async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeTy
   const language = detectConversationLanguage(safeText);
   const keywordText = extractKeywords(safeText, 14).join(', ');
   const contentHash = hashText(safeText);
+  const normalizedDepartment = String(departmentName || '').trim() || null;
   const existing = await get("SELECT id FROM documents WHERE source_path=?", [sourcePath]);
 
   let documentId = existing?.id || 0;
   if (existing) {
     await run(
-      "UPDATE documents SET rel_path=?, ext=?, size_bytes=?, modified_ms=?, extracted_text=?, language=?, translated_text=?, translated_language=?, content_hash=?, keywords=?, updated_at=datetime('now') WHERE id=?",
-      [relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, language, '', null, contentHash, keywordText, existing.id]
+      "UPDATE documents SET rel_path=?, ext=?, size_bytes=?, modified_ms=?, extracted_text=?, mime_type=?, department_name=?, source_kind=?, language=?, translated_text=?, translated_language=?, content_hash=?, keywords=?, updated_at=datetime('now') WHERE id=?",
+      [relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, mimeType || null, normalizedDepartment, sourceKind, language, '', null, contentHash, keywordText, existing.id]
     );
   } else {
     const created = await run(
-      "INSERT INTO documents (source_path, rel_path, ext, size_bytes, modified_ms, extracted_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [sourcePath, relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, language, '', null, contentHash, keywordText]
+      "INSERT INTO documents (source_path, rel_path, ext, size_bytes, modified_ms, extracted_text, mime_type, department_name, source_kind, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [sourcePath, relPath, ext, stat.size, Math.round(stat.mtimeMs), safeText, mimeType || null, normalizedDepartment, sourceKind, language, '', null, contentHash, keywordText]
     );
     documentId = created.lastID;
   }
@@ -929,10 +1003,10 @@ async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeTy
   }
 
   const chunkCount = documentId
-    ? await upsertDocumentChunks(documentId, relPath, safeText, language, keywordText ? keywordText.split(', ').filter(Boolean) : [])
+    ? await upsertDocumentChunks(documentId, relPath, safeText, language, keywordText ? keywordText.split(', ').filter(Boolean) : [], { departmentName: normalizedDepartment })
     : 0;
 
-  return { relPath, extractedText: safeText, language, chunkCount, documentId };
+  return { relPath, extractedText: safeText, language, contentHash, chunkCount, documentId, mimeType: mimeType || null, departmentName: normalizedDepartment, sourceKind };
 }
 
 async function getEmbeddingForText(text) {
@@ -1020,8 +1094,9 @@ async function translateTextSilently(text, sourceLanguage, targetLanguage) {
   }
 }
 
-async function hydrateKnowledgeRows(rows, userLanguage, queryEmbedding = null) {
+async function hydrateKnowledgeRows(rows, userLanguage, queryEmbedding = null, options = {}) {
   const enriched = [];
+  const departmentKeys = new Set((options.departments || []).map((item) => normalizeDepartmentValue(item)).filter(Boolean));
 
   for (const row of rows || []) {
     const item = { ...row };
@@ -1048,7 +1123,8 @@ async function hydrateKnowledgeRows(rows, userLanguage, queryEmbedding = null) {
     }
 
     item.semantic_score = queryEmbedding && embedding ? cosineSimilarity(queryEmbedding, embedding) : 0;
-    item.score = (Number(item.score || 0) * 0.45) + (item.semantic_score * 0.55);
+    const departmentBoost = departmentKeys.size && departmentKeys.has(normalizeDepartmentValue(item.department_name || '')) ? 0.22 : 0;
+    item.score = (Number(item.score || 0) * 0.45) + (item.semantic_score * 0.55) + departmentBoost;
     item.analysis_text = translated || item.extracted_text;
     enriched.push(item);
   }
@@ -1082,15 +1158,15 @@ async function searchKnowledgeBase(query, options = {}) {
       userLanguage,
       queryEmbedding: queryEmbedding ? JSON.stringify(queryEmbedding) : null,
     });
-    const hydrated = await hydrateKnowledgeRows(rows, userLanguage, queryEmbedding);
+    const hydrated = await hydrateKnowledgeRows(rows, userLanguage, queryEmbedding, { departments: options.departments || [] });
     let uniqueRows = dedupeRows(hydrated);
 
     if (!uniqueRows.length && queryEmbedding) {
       const semanticCandidates = await all(
-        "SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json, 0 AS score FROM document_chunks ORDER BY updated_at DESC LIMIT ?",
+        "SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, department_name, keywords, embedding_json, 0 AS score FROM document_chunks ORDER BY updated_at DESC LIMIT ?",
         [Math.max(safeLimit * 20, 80)]
       );
-      const semanticHydrated = await hydrateKnowledgeRows(semanticCandidates, userLanguage, queryEmbedding);
+      const semanticHydrated = await hydrateKnowledgeRows(semanticCandidates, userLanguage, queryEmbedding, { departments: options.departments || [] });
       uniqueRows = dedupeRows(
         semanticHydrated.filter((row) => Number(row.semantic_score || 0) >= 0.42)
       );
@@ -1169,7 +1245,7 @@ function buildKnowledgeBundleFromRows(rows, userLanguage = 'pt') {
 
 async function buildKnowledgeBundle(query, options = {}) {
   const userLanguage = normalizeLanguageCode(options.userLanguage || detectLanguage(query, 'pt'));
-  const rows = await searchKnowledgeBase(query, { limit: options.limit || 4, userLanguage });
+  const rows = await searchKnowledgeBase(query, { limit: options.limit || 4, userLanguage, departments: options.departments || [] });
   return buildKnowledgeBundleFromRows(rows, userLanguage);
 }
 
@@ -1464,13 +1540,22 @@ async function buildOpenAIInput({
   const snapshot = topicSnapshot || await getConversationTopicSnapshot(conversationId, userText, 12);
   const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
   const topicShift = snapshot?.topicShift || { isShift: false, reason: 'unknown' };
+  const currentUser = await getUserById(userId);
   const userLanguage = normalizeLanguageCode(responseProfile?.language || detectConversationLanguage(userText, history));
-  const intent = responseProfile || analyzeConversationIntent(userText, userLanguage);
+  const intent = responseProfile || analyzeConversationIntent(userText, userLanguage, {
+    departments: currentUser?.departments || [],
+  });
   const memory = await getConversationMemory(conversationId);
   const userMemory = await getRelevantUserMemory(userId, userText);
   const visionInputs = await getRecentVisionInputs(conversationId, 3);
   const documentInputs = await getRecentDocumentInputs(conversationId, 2);
   const normalizedUserText = String(userText || '').trim();
+  const businessContextText = buildBusinessContextBlock({
+    user: currentUser || {},
+    businessIntent: intent.businessIntent,
+    userLanguageLabel: getLanguageLabel(userLanguage),
+  });
+  const businessInstructionText = buildBusinessInstructions(intent.businessIntent);
 
   const historyText = topicShift.isShift
     ? 'Historico recente ocultado nesta resposta porque o usuario mudou claramente de assunto.'
@@ -1488,7 +1573,7 @@ async function buildOpenAIInput({
     : (userMemory || 'Sem memoria relevante de outras conversas.');
 
   const systemText = `
-Voce e a TALKERS IA, assistente corporativa e educacional da empresa Talkers.
+Voce e a TALKERS IA, assistente corporativa, educacional e operacional da empresa Talkers.
 Idioma principal da resposta atual: ${getLanguageLabel(userLanguage)}.
 Tom desejado para esta resposta: ${getToneInstruction(intent)}.
 
@@ -1496,15 +1581,23 @@ Comportamento:
 - Detecte automaticamente o idioma do usuario e responda nesse idioma.
 - Quando o usuario pedir traducao, traduza para o idioma solicitado mantendo contexto e intencao.
 - Quando documentos estiverem em outro idioma, interprete o conteudo no idioma original, traduza silenciosamente quando necessario e responda no idioma do usuario.
-- Para perguntas sobre processos, materiais, regras e informacoes da Talkers, priorize sempre a base interna da empresa e os arquivos da conversa.
-- Use a web apenas como complemento ou quando o usuario pedir algo externo, atual ou publico.
+- Para perguntas sobre processos, materiais, regras, vendas de cursos, atendimento, operacao pedagogica, marketing, financeiro e informacoes da Talkers, priorize sempre a base interna da empresa, a intranet e os arquivos da conversa.
+- Use a web apenas como complemento ou quando o usuario pedir algo externo, atual, publico ou de mercado.
 - Se houver conflito entre base interna e web em assuntos da empresa, avise e priorize a base interna.
-- Analise a intencao antes de responder e adapte o tom naturalmente.
-- Se o pedido envolver explicacao, orientacao, passo a passo, melhoria de texto, organizacao de informacao, sugestoes, traducao, resumo, reescrita ou texto pronto para uso, entregue em markdown bem estruturado, com hierarquia visual clara, blocos curtos e reutilizaveis.
+- Analise a intencao antes de responder, identifique a area do negocio e adapte o tom naturalmente.
+- Sempre que fizer sentido, entregue contexto, explicacao, passo a passo, exemplos, melhores praticas, alertas e proximo passo recomendado.
+- Se o pedido envolver explicacao, orientacao, passo a passo, melhoria de texto, organizacao de informacao, sugestoes, traducao, resumo, reescrita, roteiro, mensagem comercial, comunicado ou texto pronto para uso, entregue em markdown bem estruturado, com hierarquia visual clara, blocos curtos e reutilizaveis.
 - Se o usuario mudar de assunto, foque totalmente no tema atual sem arrastar contexto irrelevante.
 - Se faltar informacao suficiente, deixe isso claro e peca complemento.
+- Nunca responda de forma rasa quando a pergunta pedir profundidade ou aplicacao pratica.
 
-Contexto:
+Contexto do negocio:
+${businessContextText}
+
+Instrucoes especificas para esta resposta:
+${businessInstructionText}
+
+Contexto operacional atual:
 - Data e hora atual no Brasil: ${nowBrazil()}
 - Memoria da conversa atual: ${memoryText}
 - Memoria util de outras conversas deste usuario: ${userMemoryText}
@@ -1515,6 +1608,9 @@ Perfil desta resposta:
 - Idioma da conversa: ${getLanguageLabel(userLanguage)}
 - Tom: ${intent.tone}
 - Estruturar resposta: ${intent.wantsStructured ? 'sim' : 'nao'}
+- Profundidade sugerida: ${intent.responseDepth || 'balanced'}
+- Area principal detectada: ${intent.businessIntent?.businessAreaLabel || 'Administrativo'}
+- Tipo de intencao: ${intent.businessIntent?.intentTypeLabel || 'General Assistance'}
 - Responder com referencias so se o usuario pedir explicitamente.
 `.trim();
 
@@ -1898,10 +1994,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
   if (!conv) return res.status(404).json({ error: "not_found" });
 
-  const currentUser = await get(
-    "SELECT id, name, email, role, department FROM users WHERE id=?",
-    [req.user.sub]
-  );
+  const currentUser = await getUserById(req.user.sub);
   await maybeInsertDailyGreeting(id, currentUser || req.user);
   if (conv.title === "Nova conversa") {
     await run("UPDATE conversations SET title=? WHERE id=?", [titleFromMessage(text), id]);
@@ -1914,7 +2007,9 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
 
   const topicSnapshot = await getConversationTopicSnapshot(id, text, 12);
   const userLanguage = detectConversationLanguage(text, topicSnapshot.history);
-  const responseProfile = analyzeConversationIntent(text, userLanguage);
+  const responseProfile = analyzeConversationIntent(text, userLanguage, {
+    departments: currentUser?.departments || [],
+  });
   const knowledgeSignature = await getKnowledgeSignatureValue();
   const queryEmbedding = await getEmbeddingForText(text);
   const recentImageReferences = await getRecentImageReferences(id, 4);
@@ -1981,7 +2076,11 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   }
 
   const fileContext = await getConversationFilesContext(id);
-  const knowledgeBundle = await buildKnowledgeBundle(text, { limit: 4, userLanguage });
+  const knowledgeBundle = await buildKnowledgeBundle(text, {
+    limit: 4,
+    userLanguage,
+    departments: currentUser?.departments || [],
+  });
   const shouldUseWebComplement = shouldFetchWebContext(text, knowledgeBundle);
 
   let webContext = "";
@@ -2045,8 +2144,78 @@ ${shouldUseWebComplement
 });
 
 app.get("/api/admin/departments", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const departments = await listDepartmentCatalog();
-  res.json({ departments });
+  const departments = await listDepartmentCatalog({ includeInactive: true });
+  const usageRows = await all(`SELECT department_id, COUNT(*) AS total_users FROM user_departments GROUP BY department_id`);
+  const usageMap = new Map((usageRows || []).map((row) => [Number(row.department_id), Number(row.total_users || 0)]));
+  res.json({
+    departments: departments.map((department) => ({
+      ...department,
+      total_users: usageMap.get(Number(department.id)) || 0,
+    })),
+  });
+});
+
+app.post("/api/admin/departments", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const description = String(req.body?.description || '').trim();
+  const icon = String(req.body?.icon || 'layers').trim() || 'layers';
+  const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active')
+    ? parseBooleanInput(req.body?.is_active)
+    : true;
+  const slug = slugifyDepartmentName(req.body?.slug || name);
+
+  if (!name || !slug) {
+    return res.status(400).json({ error: 'missing_department_name' });
+  }
+
+  const existing = await get('SELECT id FROM departments WHERE slug=? OR lower(name)=lower(?) LIMIT 1', [slug, name]);
+  if (existing) {
+    return res.status(409).json({ error: 'department_already_exists' });
+  }
+
+  const metadataJson = JSON.stringify({
+    access_levels: ['colaborador', 'gestor', 'administrador'],
+    modules: [],
+  });
+
+  const created = await run(
+    "INSERT INTO departments (slug, name, description, icon, is_active, sort_order, metadata_json, updated_at) VALUES (?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 10 FROM departments), 10), ?, datetime('now'))",
+    [slug, name, description || null, icon, isActive, metadataJson]
+  );
+
+  await logEvent(req.user.sub, 'admin_create_department', { department_id: created.lastID, name, slug, is_active: isActive });
+  const department = await get('SELECT id, slug, name, description, icon, is_active, sort_order, metadata_json, created_at, updated_at FROM departments WHERE id=?', [created.lastID]);
+  res.json({ ok: true, department: mapDepartmentRow(department) });
+});
+
+app.patch("/api/admin/departments/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const departmentId = Number(req.params.id);
+  const existing = await get('SELECT id, slug, name, description, icon, is_active, sort_order, metadata_json FROM departments WHERE id=?', [departmentId]);
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+
+  const name = Object.prototype.hasOwnProperty.call(req.body || {}, 'name') ? String(req.body?.name || '').trim() : String(existing.name || '').trim();
+  const description = Object.prototype.hasOwnProperty.call(req.body || {}, 'description') ? String(req.body?.description || '').trim() : String(existing.description || '').trim();
+  const icon = Object.prototype.hasOwnProperty.call(req.body || {}, 'icon') ? String(req.body?.icon || '').trim() : String(existing.icon || 'layers').trim();
+  const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? parseBooleanInput(req.body?.is_active) : coerceDbBoolean(existing.is_active);
+  const slug = slugifyDepartmentName(req.body?.slug || name || existing.slug);
+
+  if (!name || !slug) {
+    return res.status(400).json({ error: 'missing_department_name' });
+  }
+
+  const conflict = await get('SELECT id FROM departments WHERE (slug=? OR lower(name)=lower(?)) AND id<>? LIMIT 1', [slug, name, departmentId]);
+  if (conflict) {
+    return res.status(409).json({ error: 'department_already_exists' });
+  }
+
+  await run(
+    "UPDATE departments SET slug=?, name=?, description=?, icon=?, is_active=?, updated_at=datetime('now') WHERE id=?",
+    [slug, name, description || null, icon || 'layers', isActive, departmentId]
+  );
+
+  await logEvent(req.user.sub, 'admin_update_department', { department_id: departmentId, name, slug, is_active: isActive });
+  const department = await get('SELECT id, slug, name, description, icon, is_active, sort_order, metadata_json, created_at, updated_at FROM departments WHERE id=?', [departmentId]);
+  res.json({ ok: true, department: mapDepartmentRow(department) });
 });
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -2068,7 +2237,7 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const role = req.body?.role === "admin" ? "admin" : "user";
-  const departments = sanitizeDepartmentList(parseDepartmentInput(req.body?.departments ?? req.body?.department));
+  const departments = await resolveDepartmentNames(parseDepartmentInput(req.body?.departments ?? req.body?.department), { includeInactive: false });
   const canAccessIntranet = parseBooleanInput(req.body?.can_access_intranet);
   const jobTitle = String(req.body?.job_title || "").trim();
   const unitName = String(req.body?.unit_name || "").trim();
@@ -2113,7 +2282,7 @@ app.patch("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"),
   const hasDepartmentsPayload = Object.prototype.hasOwnProperty.call(req.body || {}, "departments") || Object.prototype.hasOwnProperty.call(req.body || {}, "department");
   const currentDepartments = (await getUserDepartmentDetails(userId)).map((item) => item.name);
   const departments = hasDepartmentsPayload
-    ? sanitizeDepartmentList(parseDepartmentInput(req.body?.departments ?? req.body?.department))
+    ? await resolveDepartmentNames(parseDepartmentInput(req.body?.departments ?? req.body?.department), { includeInactive: false })
     : currentDepartments;
   const canAccessIntranet = Object.prototype.hasOwnProperty.call(req.body || {}, "can_access_intranet")
     ? parseBooleanInput(req.body?.can_access_intranet)
@@ -2177,7 +2346,7 @@ app.get("/api/admin/rag/status", requireAuth(JWT_SECRET), requireRole("admin"), 
 app.get("/api/admin/rag/files", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const [files, totalRow] = await Promise.all([
     all(
-      `SELECT id, original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by, created_at
+      `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, created_at
          FROM knowledge_sources
         ORDER BY datetime(created_at) DESC, id DESC
         LIMIT 50`
@@ -2210,10 +2379,12 @@ function getRagUploadFailureStatus(errors = []) {
   return 500;
 }
 
-async function ingestKnowledgeUpload(uploaded, userId) {
+async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
   const tempPath = uploaded.path || path.join(uploadsDir, uploaded.filename);
   const safeOriginalName = sanitizeFilename(uploaded.originalname || `arquivo-${Date.now()}`);
   const sizeBytes = Number(uploaded.size || 0);
+  const departmentName = String(options.departmentName || '').trim() || null;
+  const sourceKind = String(options.sourceKind || 'manual_upload').trim() || 'manual_upload';
 
   if (sizeBytes > 25 * 1024 * 1024) {
     throw new Error("knowledge_file_too_large");
@@ -2262,6 +2433,8 @@ async function ingestKnowledgeUpload(uploaded, userId) {
     relPath,
     originalName: safeOriginalName,
     mimeType: uploaded.mimetype || "",
+    departmentName,
+    sourceKind,
   });
 
   let openaiFile = null;
@@ -2282,11 +2455,18 @@ async function ingestKnowledgeUpload(uploaded, userId) {
     );
   }
 
+  const syncStatus = vectorStoreFile?.id ? "synced" : "local";
   const record = await run(
-    "INSERT INTO knowledge_sources (original_name, stored_name, openai_file_id, vector_store_file_id, uploaded_by) VALUES (?, ?, ?, ?, ?)",
+    "INSERT INTO knowledge_sources (original_name, stored_name, mime_type, language, content_hash, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       safeOriginalName,
       storedName,
+      uploaded.mimetype || null,
+      indexed?.language || null,
+      indexed?.contentHash || null,
+      departmentName,
+      sourceKind,
+      syncStatus,
       openaiFile?.id || null,
       vectorStoreFile?.id || null,
       userId,
@@ -2305,6 +2485,10 @@ async function ingestKnowledgeUpload(uploaded, userId) {
     original_name: safeOriginalName,
     stored_name: storedName,
     local_indexed: Boolean(indexed),
+    language: indexed?.language || null,
+    department_name: departmentName,
+    source_kind: sourceKind,
+    sync_status: vectorStoreFile?.id ? "synced" : "local",
     openai_file_id: openaiFile?.id || null,
     vector_store_file_id: vectorStoreFile?.id || null,
   };
@@ -2318,9 +2502,10 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
   const duplicates = [];
   const errors = [];
 
+  const departmentName = String(req.body?.department_name || req.body?.department || "").trim();
   for (const uploaded of uploads) {
     try {
-      const result = await ingestKnowledgeUpload(uploaded, req.user.sub);
+      const result = await ingestKnowledgeUpload(uploaded, req.user.sub, { departmentName, sourceKind: "manual_upload" });
       if (result?.duplicate) {
         duplicates.push(result);
       } else {
@@ -2408,6 +2593,18 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

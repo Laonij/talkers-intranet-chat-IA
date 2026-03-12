@@ -157,12 +157,18 @@ async function migrateSqlite() {
       name TEXT NOT NULL UNIQUE,
       description TEXT,
       icon TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
       metadata_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  const departmentColumns = await allSqlite("PRAGMA table_info(departments)");
+  if (!departmentColumns.some((column) => column.name === "is_active")) {
+    await execSqlite("ALTER TABLE departments ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;");
+  }
 
   await execSqlite(`
     CREATE TABLE IF NOT EXISTS user_departments (
@@ -230,6 +236,9 @@ async function migrateSqlite() {
       size_bytes INTEGER,
       modified_ms INTEGER,
       extracted_text TEXT NOT NULL,
+      mime_type TEXT,
+      department_name TEXT,
+      source_kind TEXT,
       language TEXT,
       translated_text TEXT,
       translated_language TEXT,
@@ -241,6 +250,15 @@ async function migrateSqlite() {
   `);
 
   const documentColumns = await allSqlite("PRAGMA table_info(documents)");
+  if (!documentColumns.some((column) => column.name === "mime_type")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN mime_type TEXT;");
+  }
+  if (!documentColumns.some((column) => column.name === "department_name")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN department_name TEXT;");
+  }
+  if (!documentColumns.some((column) => column.name === "source_kind")) {
+    await execSqlite("ALTER TABLE documents ADD COLUMN source_kind TEXT;");
+  }
   if (!documentColumns.some((column) => column.name === "language")) {
     await execSqlite("ALTER TABLE documents ADD COLUMN language TEXT;");
   }
@@ -264,6 +282,7 @@ async function migrateSqlite() {
       rel_path TEXT NOT NULL,
       chunk_index INTEGER NOT NULL,
       content_text TEXT NOT NULL,
+      department_name TEXT,
       language TEXT,
       translated_text TEXT,
       translated_language TEXT,
@@ -278,8 +297,29 @@ async function migrateSqlite() {
   `);
 
   const chunkColumns = await allSqlite("PRAGMA table_info(document_chunks)");
+  if (!chunkColumns.some((column) => column.name === "department_name")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN department_name TEXT;");
+  }
+  if (!chunkColumns.some((column) => column.name === "language")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN language TEXT;");
+  }
+  if (!chunkColumns.some((column) => column.name === "translated_text")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN translated_text TEXT;");
+  }
   if (!chunkColumns.some((column) => column.name === "translated_language")) {
     await execSqlite("ALTER TABLE document_chunks ADD COLUMN translated_language TEXT;");
+  }
+  if (!chunkColumns.some((column) => column.name === "content_hash")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN content_hash TEXT;");
+  }
+  if (!chunkColumns.some((column) => column.name === "keywords")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN keywords TEXT;");
+  }
+  if (!chunkColumns.some((column) => column.name === "embedding_json")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN embedding_json TEXT;");
+  }
+  if (!chunkColumns.some((column) => column.name === "embedding_model")) {
+    await execSqlite("ALTER TABLE document_chunks ADD COLUMN embedding_model TEXT;");
   }
 
   await execSqlite(`
@@ -305,12 +345,38 @@ async function migrateSqlite() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       original_name TEXT NOT NULL,
       stored_name TEXT NOT NULL,
+      mime_type TEXT,
+      language TEXT,
+      content_hash TEXT,
+      department_name TEXT,
+      source_kind TEXT NOT NULL DEFAULT 'manual_upload',
+      sync_status TEXT NOT NULL DEFAULT 'local',
       openai_file_id TEXT,
       vector_store_file_id TEXT,
       uploaded_by INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  const knowledgeSourceColumns = await allSqlite("PRAGMA table_info(knowledge_sources)");
+  if (!knowledgeSourceColumns.some((column) => column.name === "mime_type")) {
+    await execSqlite("ALTER TABLE knowledge_sources ADD COLUMN mime_type TEXT;");
+  }
+  if (!knowledgeSourceColumns.some((column) => column.name === "language")) {
+    await execSqlite("ALTER TABLE knowledge_sources ADD COLUMN language TEXT;");
+  }
+  if (!knowledgeSourceColumns.some((column) => column.name === "content_hash")) {
+    await execSqlite("ALTER TABLE knowledge_sources ADD COLUMN content_hash TEXT;");
+  }
+  if (!knowledgeSourceColumns.some((column) => column.name === "department_name")) {
+    await execSqlite("ALTER TABLE knowledge_sources ADD COLUMN department_name TEXT;");
+  }
+  if (!knowledgeSourceColumns.some((column) => column.name === "source_kind")) {
+    await execSqlite("ALTER TABLE knowledge_sources ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'manual_upload';");
+  }
+  if (!knowledgeSourceColumns.some((column) => column.name === "sync_status")) {
+    await execSqlite("ALTER TABLE knowledge_sources ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'local';");
+  }
 
   await execSqlite(`
     CREATE TABLE IF NOT EXISTS semantic_cache (
@@ -343,6 +409,7 @@ async function migrateSqlite() {
 
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_users_intranet_access ON users(can_access_intranet);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_departments_sort ON departments(sort_order, name);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_departments_active ON departments(is_active, sort_order, name);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_user_departments_user ON user_departments(user_id);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_user_departments_department ON user_departments(department_id);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);");
@@ -350,9 +417,12 @@ async function migrateSqlite() {
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_language ON documents(language);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_documents_department ON documents(department_name, updated_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_document_chunks_document_idx ON document_chunks(document_id, chunk_index);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_document_chunks_language ON document_chunks(language);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_document_chunks_department ON document_chunks(department_name, updated_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_department ON knowledge_sources(department_name, created_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_semantic_cache_scope_updated ON semantic_cache(scope_key, updated_at);");
 
   await execSqlite(`
@@ -420,6 +490,7 @@ async function migratePostgres() {
       name TEXT NOT NULL UNIQUE,
       description TEXT,
       icon TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
       sort_order INTEGER NOT NULL DEFAULT 0,
       metadata_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -493,6 +564,9 @@ async function migratePostgres() {
       size_bytes INTEGER,
       modified_ms BIGINT,
       extracted_text TEXT NOT NULL,
+      mime_type TEXT,
+      department_name TEXT,
+      source_kind TEXT,
       language TEXT,
       translated_text TEXT,
       translated_language TEXT,
@@ -510,6 +584,7 @@ async function migratePostgres() {
       rel_path TEXT NOT NULL,
       chunk_index INTEGER NOT NULL,
       content_text TEXT NOT NULL,
+      department_name TEXT,
       language TEXT,
       translated_text TEXT,
       translated_language TEXT,
@@ -546,6 +621,12 @@ async function migratePostgres() {
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       original_name TEXT NOT NULL,
       stored_name TEXT NOT NULL,
+      mime_type TEXT,
+      language TEXT,
+      content_hash TEXT,
+      department_name TEXT,
+      source_kind TEXT NOT NULL DEFAULT 'manual_upload',
+      sync_status TEXT NOT NULL DEFAULT 'local',
       openai_file_id TEXT,
       vector_store_file_id TEXT,
       uploaded_by INTEGER,
@@ -577,11 +658,16 @@ async function migratePostgres() {
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS unit_name TEXT;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS additional_permissions_json TEXT;");
+  await pgPool.query("ALTER TABLE departments ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS mime_type TEXT;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS department_name TEXT;");
+  await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_kind TEXT;");
   await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS language TEXT;");
   await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS translated_text TEXT;");
   await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS translated_language TEXT;");
   await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash TEXT;");
   await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS keywords TEXT;");
+  await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS department_name TEXT;");
   await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS language TEXT;");
   await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS translated_text TEXT;");
   await pgPool.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS translated_language TEXT;");
@@ -595,6 +681,12 @@ async function migratePostgres() {
   await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS sources_json TEXT;");
   await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS embedding_json TEXT;");
   await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS knowledge_signature TEXT;");
+  await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS mime_type TEXT;");
+  await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS language TEXT;");
+  await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS content_hash TEXT;");
+  await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS department_name TEXT;");
+  await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'manual_upload';");
+  await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS sync_status TEXT NOT NULL DEFAULT 'local';");
   await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS hit_count INTEGER NOT NULL DEFAULT 0;");
 
   await pgPool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(rel_path, '') || ' ' || coalesce(extracted_text, '') || ' ' || coalesce(translated_text, '') || ' ' || coalesce(keywords, '') || ' ' || coalesce(language, ''))) STORED;");
@@ -602,6 +694,7 @@ async function migratePostgres() {
 
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_users_intranet_access ON users(can_access_intranet);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_departments_sort ON departments(sort_order, name);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_departments_active ON departments(is_active, sort_order, name);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_user_departments_user ON user_departments(user_id);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_user_departments_department ON user_departments(department_id);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);");
@@ -609,11 +702,14 @@ async function migratePostgres() {
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_modified ON documents(modified_ms);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_language ON documents(language);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_department ON documents(department_name, updated_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_documents_search_vector ON documents USING GIN(search_vector);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_document_chunks_document_idx ON document_chunks(document_id, chunk_index);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_document_chunks_language ON document_chunks(language);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_document_chunks_department ON document_chunks(department_name, updated_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_document_chunks_search_vector ON document_chunks USING GIN(search_vector);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_department ON knowledge_sources(department_name, created_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_semantic_cache_scope_updated ON semantic_cache(scope_key, updated_at);");
 }
 async function postgresHasData() {
@@ -844,7 +940,7 @@ async function searchDocuments(query, limit = 4, options = {}) {
   if (DB_CLIENT === "postgres") {
     try {
       const result = await pgPool.query(
-        `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json,
+        `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, department_name, keywords, embedding_json,
                 ts_rank(search_vector, plainto_tsquery('simple', $1)) +
                 CASE WHEN COALESCE(language, '') = $2 THEN 0.35 ELSE 0 END AS score
            FROM document_chunks
@@ -857,7 +953,7 @@ async function searchDocuments(query, limit = 4, options = {}) {
     } catch (err) {
       const like = `%${searchText}%`;
       const fallback = await pgPool.query(
-        `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json,
+        `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, department_name, keywords, embedding_json,
                 CASE
                   WHEN COALESCE(language, '') = $2 THEN 0.35
                   WHEN rel_path ILIKE $1 OR keywords ILIKE $1 THEN 0.2
@@ -893,7 +989,7 @@ async function searchDocuments(query, limit = 4, options = {}) {
 
   const like = `%${searchText}%`;
   return allSqlite(
-    `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, keywords, embedding_json,
+    `SELECT id, document_id, rel_path, content_text AS extracted_text, translated_text, translated_language, language, department_name, keywords, embedding_json,
             CASE
               WHEN COALESCE(language, '') = ? THEN 0.35
               WHEN rel_path LIKE ? OR keywords LIKE ? THEN 0.2
@@ -921,6 +1017,15 @@ module.exports = {
   sqlitePath,
   uploadsDir,
 };
+
+
+
+
+
+
+
+
+
 
 
 

@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const cookieParser = require("cookie-parser");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
@@ -56,6 +57,7 @@ const RAG_ALLOWED_EXTS = new Set([
   ".md",
   ".json",
 ]);
+const RAG_TEXT_COMPARE_EXTS = new Set([".txt", ".md", ".csv", ".json"]);
 const RAG_LOCAL_EXTRACTION_LIMITS = {
   ".pdf": 8 * 1024 * 1024,
   ".doc": 6 * 1024 * 1024,
@@ -215,6 +217,96 @@ function compactMemory(text, maxChars = MAX_CONVERSATION_MEMORY) {
   return value.slice(value.length - maxChars);
 }
 
+const TOPIC_SHIFT_EXPLICIT_RE = /\b(mudando de assunto|mudando totalmente de assunto|outro assunto|agora outra coisa|agora outro assunto|falando de outra coisa|novo assunto|vamos falar de outra coisa|esquece isso|esquece aquilo|deixa isso pra la|sem relacao com isso)\b/i;
+const TOPIC_CONTINUITY_HINT_RE = /\b(isso|isto|esse|essa|esses|essas|anterior|mesmo|mesma|continuar|continua|continuando|agora em|com base nisso|nesse texto|nesta imagem|nessa imagem|nesse arquivo|nessa planilha|adicione|remova|ajuste|edite|corrija|melhore|reescreva|resuma|traduza)\b/i;
+const TOPIC_STOPWORDS = new Set([
+  "a", "o", "os", "as", "um", "uma", "uns", "umas", "de", "da", "do", "das", "dos", "e", "ou", "em", "no", "na", "nos", "nas", "para", "por", "com", "sem", "sobre", "entre", "ate", "apos", "que", "se", "como", "mais", "menos", "muito", "muita", "muitos", "muitas", "ja", "agora", "depois", "antes", "aqui", "ali", "isso", "isto", "esse", "essa", "esses", "essas", "dele", "dela", "deles", "delas", "me", "te", "lhe", "nos", "vos", "eu", "voce", "voces", "ela", "ele", "eles", "elas", "ser", "estar", "ficar", "ter", "tem", "quero", "preciso", "pode", "poder", "fazer", "gera", "gerar", "criar", "montar", "mostrar", "explicar", "ajudar"
+]);
+
+function normalizeTopicText(value = "") {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTopicTerms(value = "") {
+  return [...new Set(
+    normalizeTopicText(value)
+      .split(" ")
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 3 && !TOPIC_STOPWORDS.has(term))
+  )];
+}
+
+function detectTopicShift(userText, history = []) {
+  const normalizedUserText = normalizeTopicText(userText);
+  if (!normalizedUserText) return { isShift: false, reason: "empty" };
+
+  if (TOPIC_SHIFT_EXPLICIT_RE.test(normalizedUserText)) {
+    return { isShift: true, reason: "explicit" };
+  }
+
+  if (TOPIC_CONTINUITY_HINT_RE.test(normalizedUserText)) {
+    return { isShift: false, reason: "continuity_hint" };
+  }
+
+  if (normalizedUserText.length < 32) {
+    return { isShift: false, reason: "short" };
+  }
+
+  const recentUserTexts = (history || [])
+    .filter((item) => item?.role === "user")
+    .map((item) => String(item.content || "").trim())
+    .filter(Boolean)
+    .slice(-4);
+
+  if (!recentUserTexts.length) {
+    return { isShift: false, reason: "no_history" };
+  }
+
+  const currentTerms = extractTopicTerms(normalizedUserText);
+  const recentTerms = new Set(recentUserTexts.flatMap((item) => extractTopicTerms(item)));
+
+  if (currentTerms.length < 4 || recentTerms.size < 5) {
+    return { isShift: false, reason: "low_signal" };
+  }
+
+  let overlapCount = 0;
+  for (const term of currentTerms) {
+    if (recentTerms.has(term)) overlapCount += 1;
+  }
+
+  const overlapRatio = overlapCount / currentTerms.length;
+  if (overlapCount <= 1 && overlapRatio < 0.2) {
+    return { isShift: true, reason: "low_overlap" };
+  }
+
+  return { isShift: false, reason: "related" };
+}
+
+async function getConversationTopicSnapshot(conversationId, userText, limit = 12) {
+  const history = await getConversationHistory(conversationId, limit);
+  const normalizedHistory = [...history];
+  const normalizedUserText = String(userText || "").trim();
+  const lastHistoryItem = normalizedHistory[normalizedHistory.length - 1];
+
+  if (
+    lastHistoryItem?.role === "user" &&
+    String(lastHistoryItem.content || "").trim() === normalizedUserText
+  ) {
+    normalizedHistory.pop();
+  }
+
+  return {
+    history: normalizedHistory,
+    topicShift: detectTopicShift(normalizedUserText, normalizedHistory),
+  };
+}
+
 async function deleteStoredFiles(storedNames = [], baseDir = uploadsDir) {
   const uniqueNames = [...new Set((storedNames || []).filter(Boolean))];
 
@@ -306,7 +398,7 @@ async function getConversationMemory(conversationId) {
   return String(row?.summary_text || "").trim();
 }
 
-async function updateConversationMemory(conversationId, userText, assistantText) {
+async function updateConversationMemory(conversationId, userText, assistantText, options = {}) {
   const previous = await getConversationMemory(conversationId);
   const entry = [
     `Usuario: ${String(userText || "").trim()}`,
@@ -315,7 +407,11 @@ async function updateConversationMemory(conversationId, userText, assistantText)
     .filter(Boolean)
     .join("\n");
 
-  const summaryText = compactMemory([previous, entry].filter(Boolean).join("\n\n"));
+  const resetMemory = Boolean(options?.resetMemory);
+  const summaryBase = resetMemory
+    ? `[Novo assunto]\n${entry}`
+    : [previous, entry].filter(Boolean).join("\n\n");
+  const summaryText = compactMemory(summaryBase);
   const existing = await get(
     "SELECT conversation_id FROM conversation_memories WHERE conversation_id=?",
     [conversationId]
@@ -346,7 +442,69 @@ function isSupportedKnowledgeUpload(originalName = "", mimeType = "", filePath =
 function shouldExtractKnowledgeLocally(ext, sizeBytes) {
   const limit = RAG_LOCAL_EXTRACTION_LIMITS[ext];
   if (!limit) return false;
+
+  if (OPENAI_VECTOR_STORE_ID && !RAG_TEXT_COMPARE_EXTS.has(ext)) {
+    return false;
+  }
+
   return Number(sizeBytes || 0) <= limit;
+}
+
+function normalizeKnowledgeText(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+async function hashFileSha256(filePath) {
+  return await new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function findDuplicateKnowledgeUpload({ sourcePath, originalName, mimeType, sizeBytes }) {
+  if (!fs.existsSync(sourcePath)) return null;
+
+  const ext = getKnowledgeUploadExt(sourcePath, originalName, mimeType);
+  const candidates = await all(
+    "SELECT source_path, rel_path FROM documents WHERE size_bytes=? AND ext=? LIMIT 25",
+    [Number(sizeBytes || 0), ext]
+  );
+
+  if (candidates.length) {
+    const incomingHash = await hashFileSha256(sourcePath);
+
+    for (const candidate of candidates) {
+      if (!candidate?.source_path || !fs.existsSync(candidate.source_path)) continue;
+      try {
+        const candidateHash = await hashFileSha256(candidate.source_path);
+        if (candidateHash === incomingHash) {
+          return { relPath: candidate.rel_path, reason: "hash" };
+        }
+      } catch (err) {
+        console.log("Erro ao comparar duplicidade por hash:", err?.message || err);
+      }
+    }
+  }
+
+  if (RAG_TEXT_COMPARE_EXTS.has(ext)) {
+    const extracted = normalizeKnowledgeText(await extractText(sourcePath, originalName, mimeType));
+    if (extracted) {
+      const duplicateText = await get(
+        "SELECT rel_path FROM documents WHERE extracted_text=? LIMIT 1",
+        [extracted]
+      );
+
+      if (duplicateText?.rel_path) {
+        return { relPath: duplicateText.rel_path, reason: "text" };
+      }
+    }
+  }
+
+  return null;
 }
 
 async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeType }) {
@@ -446,6 +604,18 @@ function queryLooksExternalOrCurrent(query = "") {
 function shouldFetchWebContext(query, knowledgeBundle) {
   const hasInternalContext = Boolean(String(knowledgeBundle?.text || "").trim());
   return !hasInternalContext || queryLooksExternalOrCurrent(query);
+}
+
+function shouldShowSourcesForReply(query) {
+  const normalized = String(query || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) return false;
+
+  return /(fonte|fontes|referencia|referencias|origem|origens|cite|citar|citacao|citacoes|source|sources|link|links|de onde|baseou|baseada|baseado)/.test(normalized);
 }
 async function getConversationFilesContext(conversationId) {
   try {
@@ -634,26 +804,25 @@ function buildOpenAITools() {
   tools.push({ type: "web_search_preview" });
   return tools;
 }
-async function buildOpenAIInput({ conversationId, userText, contextText }) {
-  const history = await getConversationHistory(conversationId, 12);
+async function buildOpenAIInput({ conversationId, userText, contextText, topicSnapshot = null }) {
+  const snapshot = topicSnapshot || await getConversationTopicSnapshot(conversationId, userText, 12);
+  const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
+  const topicShift = snapshot?.topicShift || { isShift: false, reason: "unknown" };
   const memory = await getConversationMemory(conversationId);
   const visionInputs = await getRecentVisionInputs(conversationId, 3);
   const documentInputs = await getRecentDocumentInputs(conversationId, 2);
   const normalizedUserText = String(userText || "").trim();
-  const normalizedHistory = [...history];
-  const lastHistoryItem = normalizedHistory[normalizedHistory.length - 1];
 
-  if (
-    lastHistoryItem?.role === "user" &&
-    String(lastHistoryItem.content || "").trim() === normalizedUserText
-  ) {
-    normalizedHistory.pop();
-  }
+  const historyText = topicShift.isShift
+    ? "Historico anterior ocultado nesta resposta porque o usuario mudou de assunto."
+    : history
+        .map((item) => `${item.role === "assistant" ? "IA" : "Usuario"}: ${item.content}`)
+        .filter(Boolean)
+        .join("\n");
 
-  const historyText = normalizedHistory
-    .map((item) => `${item.role === "assistant" ? "IA" : "Usuario"}: ${item.content}`)
-    .filter(Boolean)
-    .join("\n");
+  const memoryText = topicShift.isShift
+    ? "Ignorada nesta resposta porque o usuario mudou de assunto."
+    : (memory || "Sem memoria persistente ainda.");
 
   const systemText = `
 Voce e a TALKERS IA, assistente corporativa da empresa Talkers.
@@ -673,9 +842,13 @@ Regras:
 - Se o usuario pedir para ajustar, corrigir ou editar uma imagem da conversa, gere uma nova versao editada quando houver imagem elegivel; se faltar imagem valida, peca um anexo PNG, JPG ou WEBP.
 - Se o usuario pedir geracao de arquivo, entregue o arquivo e explique em uma frase o que foi gerado.
 - Se nao houver base suficiente, diga isso claramente e peca complemento.
+- Quando o usuario mudar claramente de assunto, trate a ultima mensagem como um novo tema e nao force o contexto anterior.
+${topicShift.isShift
+  ? `- Foi detectada uma mudanca de assunto nesta ultima mensagem (${topicShift.reason}). Priorize totalmente o pedido atual e so reutilize contexto anterior se o usuario fizer referencia clara a ele.`
+  : '- Mantenha a continuidade do assunto atual usando o contexto anterior apenas quando ele for realmente relevante.'}
 
 Memoria persistente da conversa:
-${memory || "Sem memoria persistente ainda."}
+${memoryText}
 
 Historico recente:
 ${historyText || "Sem historico anterior."}
@@ -692,7 +865,7 @@ ${contextText || "Sem contexto adicional."}
     {
       role: "user",
       content: [
-        { type: "input_text", text: userText },
+        { type: "input_text", text: normalizedUserText },
         ...visionInputs,
         ...documentInputs,
       ],
@@ -767,7 +940,7 @@ function extractResponsePayload(data, baseSources = []) {
   };
 }
 
-async function openaiReply({ conversationId, userText, contextText, baseSources = [] }) {
+async function openaiReply({ conversationId, userText, contextText, baseSources = [], topicSnapshot = null }) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   if (!apiKey) {
@@ -777,7 +950,7 @@ async function openaiReply({ conversationId, userText, contextText, baseSources 
     };
   }
 
-  const input = await buildOpenAIInput({ conversationId, userText, contextText });
+  const input = await buildOpenAIInput({ conversationId, userText, contextText, topicSnapshot });
   const resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -815,7 +988,7 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 const ragUpload = upload.fields([
-  { name: "files", maxCount: 5 },
+  { name: "files", maxCount: 1 },
   { name: "file", maxCount: 1 },
 ]);
 
@@ -995,6 +1168,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     [id, text]
   );
 
+  const topicSnapshot = await getConversationTopicSnapshot(id, text, 12);
   const recentImageReferences = await getRecentImageReferences(id, 4);
   const artifact = await generateArtifact({
     apiKey: process.env.OPENAI_API_KEY || "",
@@ -1013,7 +1187,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         [id, artifact.reply]
       );
       await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-      await updateConversationMemory(id, text, artifact.reply);
+      await updateConversationMemory(id, text, artifact.reply, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
       return res.json({ reply: artifact.reply });
     }
 
@@ -1029,7 +1203,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       content: artifact.reply,
     });
 
-    await updateConversationMemory(id, text, artifact.reply);
+    await updateConversationMemory(id, text, artifact.reply, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
     return res.json({ reply: artifact.reply, meta: saved.meta });
   }
   const fileContext = await getConversationFilesContext(id);
@@ -1070,18 +1244,21 @@ ${shouldUseWebComplement
     userText: text,
     contextText,
     baseSources: knowledgeBundle.sources,
+    topicSnapshot,
   });
 
-  const assistantMeta = assistant.sources.length ? JSON.stringify({ sources: assistant.sources }) : null;
+  const showSources = shouldShowSourcesForReply(text);
+  const assistantMetaObject = assistant.sources.length ? { sources: assistant.sources, show_sources: showSources } : null;
+  const assistantMeta = assistantMetaObject ? JSON.stringify(assistantMetaObject) : null;
 
   await run(
     "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
     [id, assistant.text, assistantMeta]
   );
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-  await updateConversationMemory(id, text, assistant.text);
+  await updateConversationMemory(id, text, assistant.text, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
 
-  res.json({ reply: assistant.text, meta: assistantMeta ? JSON.parse(assistantMeta) : null });
+  res.json({ reply: assistant.text, meta: assistantMetaObject });
 });
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -1169,13 +1346,42 @@ function getRagUploadFailureStatus(errors = []) {
 async function ingestKnowledgeUpload(uploaded, userId) {
   const tempPath = uploaded.path || path.join(uploadsDir, uploaded.filename);
   const safeOriginalName = sanitizeFilename(uploaded.originalname || `arquivo-${Date.now()}`);
+  const sizeBytes = Number(uploaded.size || 0);
 
-  if (Number(uploaded.size || 0) > 25 * 1024 * 1024) {
+  if (sizeBytes > 25 * 1024 * 1024) {
     throw new Error("knowledge_file_too_large");
   }
 
   if (!isSupportedKnowledgeUpload(safeOriginalName, uploaded.mimetype || "", tempPath)) {
     throw new Error("unsupported_knowledge_file");
+  }
+
+  const duplicate = await findDuplicateKnowledgeUpload({
+    sourcePath: tempPath,
+    originalName: safeOriginalName,
+    mimeType: uploaded.mimetype || "",
+    sizeBytes,
+  });
+
+  if (duplicate) {
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch (err) {
+      console.log("Erro ao descartar duplicado temporario:", err?.message || err);
+    }
+
+    await logEvent(userId, "admin_rag_upload_duplicate", {
+      filename: safeOriginalName,
+      duplicate_of: duplicate.relPath,
+      reason: duplicate.reason,
+    });
+
+    return {
+      duplicate: true,
+      original_name: safeOriginalName,
+      duplicate_of: duplicate.relPath,
+      duplicate_reason: duplicate.reason,
+    };
   }
 
   const storedName = `${Date.now()}-${uploaded.filename}-${safeOriginalName}`;
@@ -1242,12 +1448,17 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
   if (!uploads.length) return res.status(400).json({ error: "missing_file" });
 
   const files = [];
+  const duplicates = [];
   const errors = [];
 
   for (const uploaded of uploads) {
     try {
       const result = await ingestKnowledgeUpload(uploaded, req.user.sub);
-      files.push(result);
+      if (result?.duplicate) {
+        duplicates.push(result);
+      } else {
+        files.push(result);
+      }
     } catch (err) {
       console.log("Erro no upload RAG:", err?.message || err);
       errors.push({
@@ -1257,24 +1468,26 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
     }
   }
 
-  if (!files.length) {
+  if (!files.length && !duplicates.length) {
     return res.status(getRagUploadFailureStatus(errors)).json({
       error: errors[0]?.error || "rag_upload_failed",
       errors,
     });
   }
 
-  const first = files[0];
+  const first = files[0] || null;
   return res.status(errors.length ? 207 : 200).json({
     ok: errors.length === 0,
     uploaded_count: files.length,
+    duplicate_count: duplicates.length,
     failed_count: errors.length,
     files,
+    duplicates,
     errors,
-    knowledge_source_id: first.knowledge_source_id,
-    local_indexed: first.local_indexed,
-    openai_file_id: first.openai_file_id,
-    vector_store_file_id: first.vector_store_file_id,
+    knowledge_source_id: first?.knowledge_source_id || null,
+    local_indexed: first?.local_indexed || false,
+    openai_file_id: first?.openai_file_id || null,
+    vector_store_file_id: first?.vector_store_file_id || null,
   });
 });
 const publicDir = path.join(__dirname, "public");
@@ -1312,6 +1525,17 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+
+
 
 
 

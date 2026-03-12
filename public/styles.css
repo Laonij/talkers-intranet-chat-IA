@@ -993,8 +993,9 @@ body.app-shell .logo-sm{
 
 body.app-shell .brand-title{
   font-size:18px;
-  font-weight:800;
-  letter-spacing:-.02em;
+  font-weight:600;
+  letter-spacing:-.01em;
+  color:#1f2937;
 }
 
 body.app-shell .brand-sub{
@@ -1040,16 +1041,19 @@ body.app-shell .conv.active{
 body.app-shell .conv-emoji{
   width:30px;
   height:30px;
+  display:grid;
+  place-items:center;
   border-radius:10px;
-  font-size:16px;
   background:#fff;
   border:1px solid #e8eaee;
+  color:#111827;
 }
 
 body.app-shell .conv-title{
   font-size:13px;
-  font-weight:700;
+  font-weight:600;
   line-height:1.35;
+  color:#374151;
 }
 
 body.app-shell .conv-meta{
@@ -1101,6 +1105,7 @@ body.app-shell .new-chat-btn{
   border-radius:16px;
   padding:13px 14px;
   box-shadow:0 8px 20px rgba(15,23,42,.04);
+  font-weight:600;
 }
 
 body.app-shell .new-chat-btn svg{
@@ -1152,7 +1157,8 @@ body.app-shell .account-copy{
 
 body.app-shell .account-name{
   font-size:13px;
-  font-weight:700;
+  font-weight:600;
+  color:#374151;
 }
 
 body.app-shell .account-meta{
@@ -1212,8 +1218,9 @@ body.app-shell .topbar-kicker{
 
 body.app-shell .title{
   font-size:18px;
-  font-weight:800;
-  letter-spacing:-.02em;
+  font-weight:600;
+  letter-spacing:-.01em;
+  color:#1f2937;
 }
 
 body.app-shell .topbar-pill{
@@ -1306,8 +1313,10 @@ body.app-shell .empty-badge{
 body.app-shell .empty-title{
   margin:0;
   font-size:34px;
+  font-weight:600;
   line-height:1.05;
-  letter-spacing:-.04em;
+  letter-spacing:-.03em;
+  color:#1f2937;
 }
 
 body.app-shell .empty-subtitle{
@@ -1353,14 +1362,15 @@ body.app-shell .prompt-icon{
   place-items:center;
   border-radius:14px;
   background:#f4f4f5;
-  font-size:18px;
+  color:#111827;
   flex:0 0 auto;
 }
 
 body.app-shell .prompt-title{
   font-size:14px;
-  font-weight:800;
+  font-weight:600;
   line-height:1.3;
+  color:#374151;
 }
 
 body.app-shell .prompt-hint{
@@ -1386,8 +1396,8 @@ body.app-shell .message-avatar{
   place-items:center;
   border-radius:11px;
   font-size:12px;
-  font-weight:800;
-  letter-spacing:.04em;
+  font-weight:600;
+  letter-spacing:.02em;
 }
 
 body.app-shell .message-avatar.assistant{
@@ -1411,7 +1421,17 @@ body.app-shell .bubble{
 }
 
 body.app-shell .msg.assistant .bubble{
-  background:transparent;
+  display:inline-flex;
+  flex-direction:column;
+  align-items:flex-start;
+  max-width:min(660px, 100% - 48px);
+  background:transparent !important;
+  border:none !important;
+  box-shadow:none !important;
+}
+
+body.app-shell .msg.assistant{
+  margin-bottom:18px;
 }
 
 body.app-shell .msg.user{
@@ -1554,10 +1574,12 @@ body.app-shell .file-thumb{
 body.app-shell .file-ic{
   width:52px;
   height:52px;
+  display:grid;
+  place-items:center;
   border-radius:16px;
   border:1px solid #e6e8ed;
   background:#f7f7f8;
-  font-size:22px;
+  color:#111827;
 }
 
 body.app-shell .file-body{
@@ -1651,6 +1673,108 @@ body.app-shell .composer-field{
   gap:6px;
 }
 
+body.app-shell .composer-uploads{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  padding:2px 2px 4px;
+}
+
+body.app-shell .composer-uploads[hidden]{
+  display:none !important;
+}
+
+body.app-shell .composer-upload{
+  width:min(100%, 420px);
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:12px;
+  padding:10px 12px;
+  border:1px solid #e5e7eb;
+  border-radius:18px;
+  background:#fafafa;
+}
+
+body.app-shell .composer-upload-thumb,
+body.app-shell .composer-upload-icon{
+  display:grid;
+  place-items:center;
+  background:#f4f4f5;
+  color:#111827;
+}
+
+body.app-shell .composer-upload-thumb{
+  object-fit:cover;
+  background:#f3f4f6;
+}
+
+body.app-shell .composer-upload-icon{
+  display:grid;
+  place-items:center;
+  background:#f4f4f5;
+  color:#111827;
+}
+
+body.app-shell .prompt-icon svg,
+body.app-shell .conv-emoji svg,
+body.app-shell .file-ic svg,
+body.app-shell .composer-upload-icon svg{
+  width:20px;
+  height:20px;
+  stroke:currentColor;
+  stroke-width:1.8;
+  fill:none;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+body.app-shell .composer-upload-copy{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+
+body.app-shell .composer-upload-name{
+  font-size:14px;
+  font-weight:700;
+  color:#111827;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+body.app-shell .composer-upload-meta{
+  font-size:12px;
+  color:#6b7280;
+}
+
+body.app-shell .composer-upload-remove{
+  width:34px;
+  height:34px;
+  border:none;
+  border-radius:999px;
+  display:grid;
+  place-items:center;
+  background:#111827;
+  color:#fff;
+  cursor:pointer;
+}
+
+body.app-shell .composer-upload-remove svg{
+  width:16px;
+  height:16px;
+  stroke:currentColor;
+  stroke-width:2;
+  fill:none;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+
+body.app-shell .composer-upload-remove:hover{
+  background:#1f2937;
+}
+
 body.app-shell #msg{
   min-height:56px;
   max-height:220px;
@@ -1692,6 +1816,18 @@ body.app-shell .send-btn{
 body.app-shell .send-btn:hover{
   background:#1f2937;
   transform:translateY(-1px);
+}
+
+body.app-shell .send-btn:disabled,
+body.app-shell .composer-icon:disabled,
+body.app-shell .composer-upload-remove:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+  transform:none;
+}
+
+body.app-shell .composer.is-busy{
+  opacity:.88;
 }
 
 body.app-shell .send-btn svg{
@@ -1776,4 +1912,16 @@ body.app-shell .backdrop{
     align-items:center;
   }
 }
+
+
+
+
+
+
+
+body.app-shell .msg.assistant .md-content {
+  max-width:min(660px, 100%);
+}
+
+
 

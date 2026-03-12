@@ -2,42 +2,61 @@ const el = (id) => document.getElementById(id);
 
 const QUICK_PROMPTS = [
   {
-    icon: "??",
+    icon: "document",
     label: "Gerar documento",
     hint: "Crie comunicados, contratos e textos organizados.",
     prompt: "Gere um documento profissional sobre este tema:",
   },
   {
-    icon: "??",
+    icon: "spreadsheet",
     label: "Criar planilha",
     hint: "Monte tabelas com colunas prontas para uso.",
     prompt: "Crie uma planilha organizada com os principais campos para:",
   },
   {
-    icon: "??",
+    icon: "audio",
     label: "Transcrever audio",
     hint: "Analise audio enviado ou gravado no navegador.",
     prompt: "Analise e transcreva o audio enviado, depois faca um resumo objetivo.",
   },
   {
-    icon: "???",
+    icon: "image",
     label: "Gerar imagem",
     hint: "Produza imagens para escola, marketing e materiais.",
     prompt: "Gere uma imagem realista e profissional de:",
   },
   {
-    icon: "??",
+    icon: "graduation",
     label: "Comunicado escolar",
     hint: "Crie avisos claros e acolhedores para alunos e familias.",
     prompt: "Crie um comunicado escolar claro e acolhedor sobre:",
   },
   {
-    icon: "??",
+    icon: "brain",
     label: "Consultar base interna",
     hint: "Pesquise documentos e conhecimento da empresa.",
     prompt: "Consulte a base interna e me responda sobre:",
   },
 ];
+
+function renderIconSvg(iconName) {
+  const icons = {
+    document: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>',
+    spreadsheet: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M12 10v10"/></svg>',
+    audio: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/></svg>',
+    image: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 13 2.5-2.5a1 1 0 0 1 1.4 0L16 15"/><path d="m14 13 1.5-1.5a1 1 0 0 1 1.4 0L20 14.6"/><circle cx="8.5" cy="9" r="1.2"/></svg>',
+    graduation: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 9 9-4 9 4-9 4-9-4Z"/><path d="M7 10.8v3.7c0 .7 2.2 2.5 5 2.5s5-1.8 5-2.5v-3.7"/><path d="M21 10v4"/></svg>',
+    brain: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4a3.5 3.5 0 0 0-3.5 3.5V8a3 3 0 0 0-2 2.8A3 3 0 0 0 6 13.6V15a3 3 0 0 0 3 3h1"/><path d="M14.5 4A3.5 3.5 0 0 1 18 7.5V8a3 3 0 0 1 2 2.8 3 3 0 0 1-2 2.8V15a3 3 0 0 1-3 3h-1"/><path d="M12 4v16"/><path d="M9 10h3"/><path d="M12 14h3"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 3 21V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7Z"/></svg>',
+    money: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 12h.01"/><path d="M17 12h.01"/><path d="M12 9.5c-1.2 0-2 .7-2 1.5s.8 1.5 2 1.5 2 .7 2 1.5-.8 1.5-2 1.5"/><path d="M12 8v8"/></svg>',
+    code: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18-6-6 6-6"/><path d="m15 6 6 6-6 6"/></svg>',
+    pdf: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M8 15h8"/><path d="M8 11h5"/></svg>',
+    presentation: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4z"/><path d="M12 15v4"/><path d="M9 19h6"/><path d="m8 11 2.5-3 2.2 2.5 1.8-1.7L17 11"/></svg>',
+    attachment: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 14.3 6.2a3 3 0 1 1 4.2 4.2l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.7-8.7"/></svg>',
+  };
+
+  return icons[iconName] || icons.chat;
+}
 
 let me = null;
 let conversations = [];
@@ -45,6 +64,10 @@ let currentConvId = null;
 let mediaRecorder = null;
 let recordingStream = null;
 let recordingChunks = [];
+let pendingComposerFiles = [];
+let isSendingMessage = false;
+
+const MAX_COMPOSER_FILE_BYTES = 25 * 1024 * 1024;
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -94,30 +117,30 @@ function getUserInitial(name = "") {
 
 function getConversationEmoji(title) {
   const text = normalizeText(title);
-  if (!text) return "??";
-  if (/(planilha|tabela|excel|dados|cadastro)/.test(text)) return "??";
-  if (/(pdf|doc|docx|documento|contrato|comunicado|texto)/.test(text)) return "??";
-  if (/(imagem|foto|banner|arte|logo)/.test(text)) return "???";
-  if (/(audio|voz|locucao|narracao|transcri|gravacao)/.test(text)) return "??";
-  if (/(aluno|escola|turma|matricula|pedagogico)/.test(text)) return "??";
-  if (/(financeiro|orcamento|boleto|pagamento)/.test(text)) return "??";
-  if (/(site|codigo|api|script|sistema)/.test(text)) return "??";
-  return "??";
+  if (!text) return "chat";
+  if (/(planilha|tabela|excel|dados|cadastro)/.test(text)) return "spreadsheet";
+  if (/(pdf|doc|docx|documento|contrato|comunicado|texto)/.test(text)) return "document";
+  if (/(imagem|foto|banner|arte|logo)/.test(text)) return "image";
+  if (/(audio|voz|locucao|narracao|transcri|gravacao)/.test(text)) return "audio";
+  if (/(aluno|escola|turma|matricula|pedagogico)/.test(text)) return "graduation";
+  if (/(financeiro|orcamento|boleto|pagamento)/.test(text)) return "money";
+  if (/(site|codigo|api|script|sistema)/.test(text)) return "code";
+  return "chat";
 }
 
 function getFileEmoji(meta) {
   const mime = String(meta?.mimetype || "").toLowerCase();
   const name = normalizeText(meta?.filename || "");
-  if (mime.startsWith("image/")) return "???";
-  if (mime.startsWith("audio/")) return "??";
-  if (mime.includes("pdf") || name.endsWith(".pdf")) return "??";
-  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "??";
-  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "??";
-  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "???";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return "pdf";
+  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "spreadsheet";
+  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "document";
+  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "presentation";
   if (mime.includes("json") || mime.includes("javascript") || /\.(js|ts|py|java|php|html|css)$/.test(name)) {
-    return "??";
+    return "code";
   }
-  return "??";
+  return "attachment";
 }
 
 function getFileKindLabel(meta) {
@@ -140,6 +163,159 @@ function formatBytes(value) {
   return `${(size / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`;
 }
 
+function makePendingComposerId() {
+  return `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getComposerFileKey(file) {
+  return [
+    String(file?.name || ""),
+    Number(file?.size || 0),
+    Number(file?.lastModified || 0),
+    String(file?.type || ""),
+  ].join("::");
+}
+
+function revokePendingComposerFile(item) {
+  if (item?.objectUrl) {
+    URL.revokeObjectURL(item.objectUrl);
+  }
+}
+
+function buildPendingComposerFile(file) {
+  const meta = {
+    filename: file?.name || "arquivo",
+    mimetype: file?.type || "",
+    size: Number(file?.size || 0),
+  };
+  const mime = String(file?.type || "").toLowerCase();
+  const isImage = mime.startsWith("image/");
+
+  return {
+    id: makePendingComposerId(),
+    key: getComposerFileKey(file),
+    file,
+    isImage,
+    objectUrl: isImage ? URL.createObjectURL(file) : "",
+    emoji: getFileEmoji(meta),
+    typeLabel: getFileKindLabel(meta),
+    sizeLabel: formatBytes(file?.size || 0),
+  };
+}
+
+function setComposerBusy(isBusy) {
+  const disabled = Boolean(isBusy);
+  const composer = document.querySelector(".composer");
+  if (composer) composer.classList.toggle("is-busy", disabled);
+
+  [el("btnAttach"), el("btnRecord"), el("btnSend"), el("msg")].forEach((node) => {
+    if (!node) return;
+    node.disabled = disabled;
+  });
+}
+
+function removePendingComposerFile(id) {
+  const index = pendingComposerFiles.findIndex((item) => item.id === id);
+  if (index < 0) return;
+
+  const [removed] = pendingComposerFiles.splice(index, 1);
+  revokePendingComposerFile(removed);
+  renderPendingComposerFiles();
+  autoResizeTextarea();
+}
+
+function clearPendingComposerFiles() {
+  pendingComposerFiles.forEach(revokePendingComposerFile);
+  pendingComposerFiles = [];
+  renderPendingComposerFiles();
+}
+
+function renderPendingComposerFiles() {
+  const wrap = el("composerUploads");
+  if (!wrap) return;
+
+  wrap.innerHTML = "";
+  if (!pendingComposerFiles.length) {
+    wrap.hidden = true;
+    return;
+  }
+
+  wrap.hidden = false;
+
+  for (const item of pendingComposerFiles) {
+    const chip = document.createElement("div");
+    chip.className = "composer-upload";
+
+    const preview = document.createElement(item.isImage ? "img" : "div");
+    preview.className = item.isImage ? "composer-upload-thumb" : "composer-upload-icon";
+    if (item.isImage) {
+      preview.src = item.objectUrl;
+      preview.alt = item.file?.name || "imagem";
+    } else {
+      preview.innerHTML = renderIconSvg(item.emoji);
+    }
+
+    const copy = document.createElement("div");
+    copy.className = "composer-upload-copy";
+
+    const name = document.createElement("div");
+    name.className = "composer-upload-name";
+    name.textContent = item.file?.name || "arquivo";
+
+    const meta = document.createElement("div");
+    meta.className = "composer-upload-meta";
+    meta.textContent = [item.typeLabel, item.sizeLabel].filter(Boolean).join(" - ");
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "composer-upload-remove";
+    remove.setAttribute("aria-label", `Remover ${item.file?.name || "arquivo"}`);
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12" /><path d="M18 6 6 18" /></svg>';
+    remove.onclick = () => removePendingComposerFile(item.id);
+
+    copy.appendChild(name);
+    copy.appendChild(meta);
+    chip.appendChild(preview);
+    chip.appendChild(copy);
+    chip.appendChild(remove);
+    wrap.appendChild(chip);
+  }
+}
+
+function queueComposerFiles(files) {
+  const list = Array.from(files || []);
+  if (!list.length) return;
+
+  const oversized = [];
+  const existingKeys = new Set(pendingComposerFiles.map((item) => item.key));
+
+  for (const file of list) {
+    if (!file) continue;
+
+    if (Number(file.size || 0) > MAX_COMPOSER_FILE_BYTES) {
+      oversized.push(file.name || "arquivo");
+      continue;
+    }
+
+    const key = getComposerFileKey(file);
+    if (existingKeys.has(key)) continue;
+
+    pendingComposerFiles.push(buildPendingComposerFile(file));
+    existingKeys.add(key);
+  }
+
+  renderPendingComposerFiles();
+  autoResizeTextarea();
+
+  if (oversized.length) {
+    const previewNames = oversized.slice(0, 3).join(", ");
+    alert(`${oversized.length} arquivo(s) acima de 25 MB foram ignorados${previewNames ? `: ${previewNames}` : ""}.`);
+  }
+
+  const msgEl = el("msg");
+  if (msgEl) msgEl.focus();
+}
+
 function updateConversationTitle() {
   const titleBox = el("convTitle");
   if (!titleBox) return;
@@ -153,7 +329,7 @@ function renderUser() {
 
   const sub = el("userSub");
   if (sub) {
-    sub.textContent = me.role === "admin" ? "Workspace administrativo" : "Workspace da escola";
+    sub.textContent = me.role === "admin" ? "Painel administrativo" : "Assistente da escola";
   }
 
   const accountName = el("accountName");
@@ -442,7 +618,7 @@ function appendFileCard(bubble, meta) {
   } else {
     const badge = document.createElement("div");
     badge.className = "file-ic";
-    badge.textContent = getFileEmoji(meta);
+    badge.innerHTML = renderIconSvg(getFileEmoji(meta));
     preview.appendChild(badge);
   }
 
@@ -504,6 +680,7 @@ function appendFileCard(bubble, meta) {
 }
 
 function appendSources(bubble, meta) {
+  if (!meta?.show_sources) return;
   const sources = Array.isArray(meta?.sources) ? meta.sources.filter(Boolean) : [];
   if (!sources.length) return;
 
@@ -603,7 +780,7 @@ function renderConversations() {
 
     const emoji = document.createElement("div");
     emoji.className = "conv-emoji";
-    emoji.textContent = getConversationEmoji(c.title);
+    emoji.innerHTML = renderIconSvg(getConversationEmoji(c.title));
 
     const body = document.createElement("div");
     body.className = "conv-body";
@@ -680,7 +857,11 @@ async function ensureConversation() {
 }
 
 async function openConversation(id) {
+  const shouldResetComposer = currentConvId !== null && currentConvId !== id;
   currentConvId = id;
+  if (shouldResetComposer) {
+    clearPendingComposerFiles();
+  }
   renderConversations();
   updateConversationTitle();
   clearChat();
@@ -704,28 +885,36 @@ async function openConversation(id) {
   updateEmptyState();
 }
 
-async function sendMessage() {
-  const msgEl = el("msg");
-  const text = (msgEl?.value || "").trim();
-  if (!text) return;
-
-  const convId = await ensureConversation();
-  msgEl.value = "";
-  autoResizeTextarea();
-
-  addMessage("user", text);
-  scrollChat();
-
+function createTypingIndicator() {
   const chat = el("chat");
+  if (!chat) return null;
+
   const typing = document.createElement("div");
   typing.className = "msg assistant";
   typing.innerHTML = `
     <div class="message-avatar assistant">AI</div>
     <div class="bubble typing-bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>
   `;
+
   chat.appendChild(typing);
   updateEmptyState();
   scrollChat();
+  return typing;
+}
+
+async function sendTextOnlyMessage(text) {
+  const msgEl = el("msg");
+  const convId = await ensureConversation();
+
+  isSendingMessage = true;
+  setComposerBusy(true);
+  msgEl.value = "";
+  autoResizeTextarea();
+
+  addMessage("user", text);
+  scrollChat();
+
+  const typing = createTypingIndicator();
 
   try {
     const data = await api(`/api/conversations/${convId}/send`, {
@@ -733,22 +922,29 @@ async function sendMessage() {
       body: JSON.stringify({ message: text }),
     });
 
-    typing.remove();
+    typing?.remove();
     addMessage("assistant", data.reply || "OK", data.meta || null);
     await loadConversations();
     scrollChat();
   } catch (err) {
-    typing.remove();
+    typing?.remove();
     addMessage("assistant", "Erro: " + err.message);
     scrollChat();
+  } finally {
+    isSendingMessage = false;
+    setComposerBusy(false);
   }
 }
 
-async function uploadFiles(files) {
+async function uploadFiles(files, { convId: providedConvId = null, refresh = true } = {}) {
   const list = Array.from(files || []);
-  if (!list.length) return;
+  if (!list.length) {
+    return { conversationId: providedConvId, uploadedCount: 0, errors: [] };
+  }
 
-  const convId = await ensureConversation();
+  const convId = providedConvId || await ensureConversation();
+  const errors = [];
+  let uploadedCount = 0;
 
   for (const file of list) {
     const fd = new FormData();
@@ -759,13 +955,98 @@ async function uploadFiles(files) {
         method: "POST",
         body: fd,
       });
+      uploadedCount += 1;
     } catch (err) {
-      alert(`Erro ao enviar arquivo "${file.name}": ${err.message}`);
+      errors.push({
+        key: getComposerFileKey(file),
+        name: file.name || "arquivo",
+        message: err.message,
+      });
     }
   }
 
-  await openConversation(convId);
-  await loadConversations();
+  if (refresh) {
+    await openConversation(convId);
+    await loadConversations();
+  }
+
+  return { conversationId: convId, uploadedCount, errors };
+}
+
+async function sendMessageWithAttachments(text) {
+  const msgEl = el("msg");
+  const snapshot = [...pendingComposerFiles];
+  if (!snapshot.length) return;
+
+  const convId = await ensureConversation();
+  isSendingMessage = true;
+  setComposerBusy(true);
+
+  try {
+    const uploadResult = await uploadFiles(snapshot.map((item) => item.file), {
+      convId,
+      refresh: false,
+    });
+
+    const failedKeys = new Set(uploadResult.errors.map((item) => item.key));
+    const uploadedItems = snapshot.filter((item) => !failedKeys.has(item.key));
+    const failedItems = snapshot.filter((item) => failedKeys.has(item.key));
+
+    uploadedItems.forEach(revokePendingComposerFile);
+    pendingComposerFiles = failedItems;
+    renderPendingComposerFiles();
+
+    if (uploadResult.errors.length) {
+      await openConversation(convId);
+      await loadConversations();
+      const firstError = uploadResult.errors[0];
+      throw new Error(`Erro ao enviar "${firstError.name}": ${firstError.message}`);
+    }
+
+    if (text) {
+      const typing = createTypingIndicator();
+      try {
+        await api(`/api/conversations/${convId}/send`, {
+          method: "POST",
+          body: JSON.stringify({ message: text }),
+        });
+      } finally {
+        typing?.remove();
+      }
+    }
+
+    msgEl.value = "";
+    autoResizeTextarea();
+    clearPendingComposerFiles();
+    await openConversation(convId);
+    await loadConversations();
+    scrollChat();
+  } catch (err) {
+    if (currentConvId) {
+      await openConversation(currentConvId);
+      await loadConversations();
+    }
+    alert(err.message || "Nao foi possivel enviar a mensagem com anexos.");
+  } finally {
+    isSendingMessage = false;
+    setComposerBusy(false);
+  }
+}
+
+async function sendMessage() {
+  const msgEl = el("msg");
+  const text = (msgEl?.value || "").trim();
+  const hasPendingFiles = pendingComposerFiles.length > 0;
+
+  if (isSendingMessage) return;
+  if (!text && !hasPendingFiles) return;
+
+  if (hasPendingFiles) {
+    await sendMessageWithAttachments(text);
+    return;
+  }
+
+  await sendTextOnlyMessage(text);
 }
 
 function setupQuickPrompts() {
@@ -780,7 +1061,7 @@ function setupQuickPrompts() {
     button.type = "button";
     button.className = "prompt-card";
     button.innerHTML = `
-      <div class="prompt-icon">${item.icon}</div>
+      <div class="prompt-icon">${renderIconSvg(item.icon)}</div>
       <div class="prompt-copy">
         <div class="prompt-title">${item.label}</div>
         <div class="prompt-hint">${item.hint}</div>
@@ -877,15 +1158,15 @@ function setupAttachments() {
       input.click();
     };
 
-    input.onchange = async () => {
-      await uploadFiles(input.files);
+    input.onchange = () => {
+      queueComposerFiles(input.files);
       input.value = "";
     };
   }
 
   const msgEl = el("msg");
   if (msgEl) {
-    msgEl.addEventListener("paste", async (e) => {
+    msgEl.addEventListener("paste", (e) => {
       const items = e.clipboardData?.items;
       if (!items) return;
 
@@ -900,7 +1181,7 @@ function setupAttachments() {
 
       if (!images.length) return;
       e.preventDefault();
-      await uploadFiles(images);
+      queueComposerFiles(images);
     });
   }
 }
@@ -964,6 +1245,12 @@ async function init() {
   const btnNew = el("btnNewChat");
   if (btnNew) {
     btnNew.onclick = async () => {
+      clearPendingComposerFiles();
+      const composerMsg = el("msg");
+      if (composerMsg) {
+        composerMsg.value = "";
+        autoResizeTextarea();
+      }
       currentConvId = null;
       const id = await ensureConversation();
       await openConversation(id);
@@ -980,6 +1267,7 @@ async function init() {
   }
 
   setupAttachments();
+  renderPendingComposerFiles();
   await setupRecorder();
 
   await loadConversations();
@@ -993,5 +1281,19 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

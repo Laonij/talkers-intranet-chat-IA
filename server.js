@@ -1,4 +1,4 @@
-ï»¿require("dotenv").config();
+require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
@@ -31,6 +31,20 @@ const {
   uploadFileToOpenAI,
 } = require("./lib/rag");
 const { searchWeb } = require("./lib/webSearch");
+const {
+  analyzeBusinessIntent,
+  buildBusinessContextBlock,
+  buildBusinessInstructions,
+  normalizeBusinessText,
+} = require("./lib/business");
+const {
+  DEFAULT_CLOSER_ALIAS_SEEDS,
+  SALES_PRIMARY_SHEET,
+  extractCloserSheetNames,
+  normalizeSalesText,
+  parseMatriculasWorkbook,
+  readWorkbookFromFile,
+} = require("./lib/sales");
 
 const PORT = Number(process.env.PORT || 10000);
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -60,7 +74,9 @@ const FIXED_DEPARTMENT_BY_EMAIL = {
   'julia@talkers.com': ['RH'],
   'laura@talkers.com': ['Administrativo'],
 };
-const DEPARTMENT_NAMES = DEPARTMENT_DEFINITIONS.map((item) => item.name);
+const SALES_VIEW_DEPARTMENTS = new Set(['comercial', 'gestao', 'administrativo', 'financeiro', 'atendimento']);
+const SALES_EDITABLE_FIELDS = ['operational_status', 'follow_up_notes', 'next_action', 'next_action_date', 'observations'];
+const SALES_SOURCE_KEY = 'matriculas-novas';
 
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
@@ -314,6 +330,13 @@ function getPrimaryDepartmentName(departments = []) {
   return departments.find(Boolean) || "";
 }
 
+function parseAliasInput(value) {
+  if (Array.isArray(value)) return value;
+  const safe = String(value || '').trim();
+  if (!safe) return [];
+  return safe.split(/[\n,;]+/g).map((item) => item.trim()).filter(Boolean);
+}
+
 function formatDepartmentNames(departments = []) {
   const safe = sanitizeDepartmentList(departments);
   return safe.join(", ");
@@ -501,6 +524,756 @@ async function syncLegacyUserDepartmentData() {
   }
 }
 
+async function ensureSalesImportSource() {
+  const existing = await get('SELECT id, source_key, name, source_type, sheet_name, status, config_json, last_imported_at FROM sales_import_sources WHERE source_key=? LIMIT 1', [SALES_SOURCE_KEY]);
+  if (existing) return existing;
+
+  const created = await run(
+    "INSERT INTO sales_import_sources (source_key, name, source_type, sheet_name, status, config_json) VALUES (?, ?, 'manual_upload', ?, 'active', ?)",
+    [SALES_SOURCE_KEY, 'Planilha de matriculas novas', SALES_PRIMARY_SHEET, JSON.stringify({ transition_mode: 'spreadsheet_to_intranet' })]
+  );
+
+  return get('SELECT id, source_key, name, source_type, sheet_name, status, config_json, last_imported_at FROM sales_import_sources WHERE id=?', [created.lastID]);
+}
+
+function normalizeCloserValue(value = '') {
+  return normalizeSalesText(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeSqlTextValue(value) {
+  return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function listSalesImportedFields() {
+  return [
+    'student_name',
+    'course_name',
+    'sale_month',
+    'sale_date',
+    'semester_label',
+    'availability',
+    'modality',
+    'class_type',
+    'system_name',
+    'contract_status',
+    'language',
+    'closer_original',
+    'closer_normalized',
+    'closer_id',
+    'user_id',
+    'media_source',
+    'profession',
+    'indication',
+    'source_payload_json',
+    'row_hash',
+    'source_workbook',
+    'source_sheet',
+    'source_row_number',
+    'source_row_identifier',
+  ];
+}
+
+async function logEntityChange({
+  entityType,
+  entityId,
+  action,
+  fieldName = null,
+  oldValue = null,
+  newValue = null,
+  actorUserId = null,
+  closerId = null,
+  origin = 'system',
+  detail = null,
+}) {
+  return run(
+    'INSERT INTO entity_change_log (entity_type, entity_id, action, field_name, old_value, new_value, actor_user_id, closer_id, origin, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      entityType,
+      entityId,
+      action,
+      fieldName,
+      oldValue === undefined ? null : oldValue,
+      newValue === undefined ? null : newValue,
+      actorUserId,
+      closerId,
+      origin,
+      detail ? JSON.stringify(detail) : null,
+    ]
+  );
+}
+
+async function ensureCloserRecord(payload = {}, options = {}) {
+  const officialName = String(payload.official_name || payload.name || '').trim();
+  if (!officialName) return null;
+
+  const displayName = String(payload.display_name || officialName).trim() || officialName;
+  const status = String(payload.status || 'active').trim() || 'active';
+  const notes = String(payload.notes || '').trim() || null;
+  const userId = payload.user_id ? Number(payload.user_id) : null;
+  const aliases = Array.isArray(payload.aliases) ? payload.aliases : [];
+
+  let closer = await get('SELECT id, official_name, display_name, user_id, status, notes, created_at, updated_at FROM closers WHERE lower(official_name)=lower(?) LIMIT 1', [officialName]);
+  if (!closer) {
+    const created = await run(
+      "INSERT INTO closers (official_name, display_name, user_id, status, notes, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+      [officialName, displayName, userId, status, notes]
+    );
+    closer = await get('SELECT id, official_name, display_name, user_id, status, notes, created_at, updated_at FROM closers WHERE id=?', [created.lastID]);
+    if (options.actorUserId) {
+      await logEvent(options.actorUserId, 'admin_create_closer', { closer_id: closer.id, official_name: officialName });
+    }
+  } else {
+    await run(
+      "UPDATE closers SET display_name=?, user_id=?, status=?, notes=?, updated_at=datetime('now') WHERE id=?",
+      [displayName, userId, status, notes, closer.id]
+    );
+    closer = await get('SELECT id, official_name, display_name, user_id, status, notes, created_at, updated_at FROM closers WHERE id=?', [closer.id]);
+  }
+
+  for (const alias of aliases) {
+    const safeAlias = String(alias || '').trim();
+    if (!safeAlias) continue;
+    const existingAlias = await get('SELECT id, closer_id FROM closer_aliases WHERE lower(alias_name)=lower(?) LIMIT 1', [safeAlias]);
+    if (existingAlias) {
+      if (Number(existingAlias.closer_id) !== Number(closer.id)) continue;
+    } else {
+      await run(
+        "INSERT INTO closer_aliases (closer_id, alias_name, origin, updated_at) VALUES (?, ?, ?, datetime('now'))",
+        [closer.id, safeAlias, String(options.aliasOrigin || 'seed').trim() || 'seed']
+      );
+    }
+  }
+
+  return closer;
+}
+
+async function ensureDefaultCloserCatalog() {
+  await ensureSalesImportSource();
+  for (const seed of DEFAULT_CLOSER_ALIAS_SEEDS) {
+    await ensureCloserRecord({
+      official_name: seed.official_name,
+      display_name: seed.official_name,
+      aliases: [seed.alias_name],
+      status: 'active',
+    }, { aliasOrigin: seed.origin || 'bootstrap' });
+  }
+}
+
+async function syncClosersFromWorkbook(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  const workbook = readWorkbookFromFile(filePath);
+  const sheetNames = extractCloserSheetNames(workbook);
+  const synced = [];
+  for (const officialName of sheetNames) {
+    const closer = await ensureCloserRecord({ official_name: officialName, display_name: officialName, status: 'active' }, { aliasOrigin: 'post_sale_workbook' });
+    if (closer) synced.push(closer.official_name);
+  }
+  return synced;
+}
+
+async function listClosers(options = {}) {
+  const includeInactive = Boolean(options.includeInactive);
+  const rows = await all(
+    `SELECT c.id, c.official_name, c.display_name, c.user_id, c.status, c.notes, c.created_at, c.updated_at,
+            u.name AS user_name, u.email AS user_email
+       FROM closers c
+       LEFT JOIN users u ON u.id = c.user_id
+      ${includeInactive ? '' : "WHERE c.status <> 'inactive'"}
+      ORDER BY c.official_name ASC`
+  );
+  const aliases = await all('SELECT id, closer_id, alias_name, origin, created_at, updated_at FROM closer_aliases ORDER BY alias_name ASC');
+  const aliasMap = new Map();
+  for (const alias of aliases) {
+    if (!aliasMap.has(Number(alias.closer_id))) aliasMap.set(Number(alias.closer_id), []);
+    aliasMap.get(Number(alias.closer_id)).push(alias);
+  }
+  return rows.map((row) => ({
+    ...row,
+    aliases: aliasMap.get(Number(row.id)) || [],
+  }));
+}
+
+async function getCloserCatalog() {
+  const closers = await listClosers({ includeInactive: false });
+  const byNormalized = new Map();
+  for (const closer of closers) {
+    const keys = [closer.official_name, closer.display_name, ...(closer.aliases || []).map((alias) => alias.alias_name)]
+      .map((value) => normalizeCloserValue(value))
+      .filter(Boolean);
+    for (const key of keys) {
+      if (!byNormalized.has(key)) byNormalized.set(key, closer);
+    }
+  }
+  return { closers, byNormalized };
+}
+
+async function resolveCloserMatch(rawName = '', catalog = null) {
+  const normalized = normalizeCloserValue(rawName);
+  if (!normalized) return { normalizedName: '', closer: null };
+  const safeCatalog = catalog || await getCloserCatalog();
+  let closer = safeCatalog.byNormalized.get(normalized) || null;
+
+  if (!closer) {
+    const users = await all('SELECT id, name FROM users ORDER BY name ASC');
+    const exactMatches = users.filter((item) => normalizeCloserValue(item.name) === normalized);
+    const prefixMatches = users.filter((item) => normalizeCloserValue(item.name).startsWith(normalized));
+    const userMatch = exactMatches[0] || (prefixMatches.length === 1 ? prefixMatches[0] : null);
+
+    if (userMatch) {
+      const aliasList = normalizeCloserValue(userMatch.name) === normalized ? [] : [String(rawName || '').trim()];
+      closer = await ensureCloserRecord({
+        official_name: userMatch.name,
+        display_name: userMatch.name,
+        user_id: userMatch.id,
+        status: 'active',
+        aliases: aliasList,
+      }, { aliasOrigin: 'auto_user_match' });
+    }
+  }
+
+  return {
+    normalizedName: closer?.official_name || String(rawName || '').trim(),
+    closer,
+  };
+}
+
+async function replaceCloserAliases(closerId, aliasValues = [], origin = 'manual') {
+  const safeCloserId = Number(closerId);
+  if (!safeCloserId) return [];
+  const aliases = Array.isArray(aliasValues) ? aliasValues : [];
+  const normalized = [];
+  const seen = new Set();
+  for (const alias of aliases) {
+    const safeAlias = String(alias || '').trim();
+    const key = normalizeCloserValue(safeAlias);
+    if (!safeAlias || !key || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(safeAlias);
+  }
+
+  const existing = await all('SELECT id, alias_name FROM closer_aliases WHERE closer_id=? ORDER BY id ASC', [safeCloserId]);
+  const existingMap = new Map(existing.map((item) => [normalizeCloserValue(item.alias_name), item]));
+
+  for (const item of existing) {
+    if (!seen.has(normalizeCloserValue(item.alias_name))) {
+      await run('DELETE FROM closer_aliases WHERE id=?', [item.id]);
+    }
+  }
+
+  for (const alias of normalized) {
+    const key = normalizeCloserValue(alias);
+    if (existingMap.has(key)) {
+      await run("UPDATE closer_aliases SET alias_name=?, origin=?, updated_at=datetime('now') WHERE id=?", [alias, origin, existingMap.get(key).id]);
+      continue;
+    }
+
+    const conflict = await get('SELECT id, closer_id FROM closer_aliases WHERE lower(alias_name)=lower(?) LIMIT 1', [alias]);
+    if (conflict && Number(conflict.closer_id) !== safeCloserId) continue;
+    if (!conflict) {
+      await run("INSERT INTO closer_aliases (closer_id, alias_name, origin, updated_at) VALUES (?, ?, ?, datetime('now'))", [safeCloserId, alias, origin]);
+    }
+  }
+
+  return all('SELECT id, closer_id, alias_name, origin, created_at, updated_at FROM closer_aliases WHERE closer_id=? ORDER BY alias_name ASC', [safeCloserId]);
+}
+
+async function saveCloser(payload = {}, actorUserId = null) {
+  const closerId = Number(payload.id || 0);
+  const officialName = String(payload.official_name || '').trim();
+  const displayName = String(payload.display_name || officialName).trim() || officialName;
+  const status = String(payload.status || 'active').trim() || 'active';
+  const userId = payload.user_id ? Number(payload.user_id) : null;
+  const notes = String(payload.notes || '').trim() || null;
+  const aliases = Array.isArray(payload.aliases) ? payload.aliases : [];
+
+  if (!officialName) {
+    throw new Error('missing_closer_name');
+  }
+
+  const conflict = await get('SELECT id FROM closers WHERE lower(official_name)=lower(?) AND id<>? LIMIT 1', [officialName, closerId || 0]);
+  if (conflict) throw new Error('closer_name_conflict');
+
+  let id = closerId;
+  if (id) {
+    await run(
+      "UPDATE closers SET official_name=?, display_name=?, user_id=?, status=?, notes=?, updated_at=datetime('now') WHERE id=?",
+      [officialName, displayName, userId, status, notes, id]
+    );
+    if (actorUserId) {
+      await logEvent(actorUserId, 'admin_update_closer', { closer_id: id, official_name: officialName, user_id: userId, status });
+    }
+  } else {
+    const created = await run(
+      "INSERT INTO closers (official_name, display_name, user_id, status, notes, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+      [officialName, displayName, userId, status, notes]
+    );
+    id = created.lastID;
+    if (actorUserId) {
+      await logEvent(actorUserId, 'admin_create_closer', { closer_id: id, official_name: officialName, user_id: userId, status });
+    }
+  }
+
+  await replaceCloserAliases(id, aliases, 'admin');
+  const closer = (await listClosers({ includeInactive: true })).find((item) => Number(item.id) === Number(id));
+  return closer || null;
+}
+
+function getUserDepartmentKeySet(user = {}) {
+  return new Set((user.departments || []).map((item) => normalizeDepartmentValue(item)).filter(Boolean));
+}
+
+async function getSalesAccessScope(user) {
+  if (!user) {
+    return { enabled: false, canViewAll: false, canEditAll: false, closer: null };
+  }
+  const departmentKeys = [...getUserDepartmentKeySet(user)];
+  const canViewAll = user.role === 'admin' || departmentKeys.some((key) => SALES_VIEW_DEPARTMENTS.has(key));
+  const closer = await get('SELECT id, official_name, display_name, user_id, status FROM closers WHERE user_id=? AND status<>? LIMIT 1', [user.id || user.sub, 'inactive']);
+  return {
+    enabled: canViewAll || Boolean(closer),
+    canViewAll,
+    canEditAll: user.role === 'admin',
+    closer,
+  };
+}
+
+function buildSalesWhereClause(scope, filters = {}) {
+  const clauses = [];
+  const params = [];
+
+  if (!scope.canViewAll) {
+    if (scope.closer?.id) {
+      clauses.push('sr.closer_id=?');
+      params.push(scope.closer.id);
+    } else {
+      clauses.push('1=0');
+    }
+  }
+
+  if (filters.closerId) {
+    clauses.push('sr.closer_id=?');
+    params.push(Number(filters.closerId));
+  }
+
+  if (filters.status) {
+    clauses.push('lower(sr.operational_status)=lower(?)');
+    params.push(String(filters.status).trim());
+  }
+
+  if (filters.search) {
+    const search = `%${String(filters.search).trim()}%`;
+    clauses.push("(lower(coalesce(sr.student_name, '')) LIKE lower(?) OR lower(coalesce(sr.course_name, '')) LIKE lower(?) OR lower(coalesce(sr.closer_original, '')) LIKE lower(?) OR lower(coalesce(sr.media_source, '')) LIKE lower(?))");
+    params.push(search, search, search, search);
+  }
+
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
+
+async function getSalesSummaryForScope(scope, filters = {}) {
+  const where = buildSalesWhereClause(scope, filters);
+  const limit = Math.min(200, Math.max(1, Number(filters.limit || 80)));
+  const [rows, totalRow, closerTotals, statusTotals] = await Promise.all([
+    all(
+      `SELECT sr.id, sr.student_name, sr.course_name, sr.sale_date, sr.modality, sr.language, sr.media_source, sr.operational_status,
+              sr.closer_original, sr.closer_normalized, sr.closer_id, sr.user_id, sr.updated_at,
+              COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}
+         ORDER BY COALESCE(sr.sale_date, sr.created_at) DESC, sr.id DESC
+         LIMIT ?`,
+      [...where.params, limit]
+    ),
+    get(
+      `SELECT COUNT(*) AS total
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}`,
+      where.params
+    ),
+    all(
+      `SELECT sr.closer_id,
+              COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name,
+              COUNT(*) AS total
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}
+        GROUP BY sr.closer_id, COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer')
+        ORDER BY COUNT(*) DESC, closer_name ASC`,
+      where.params
+    ),
+    all(
+      `SELECT COALESCE(sr.operational_status, 'Novo') AS status_name, COUNT(*) AS total
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}
+        GROUP BY COALESCE(sr.operational_status, 'Novo')
+        ORDER BY COUNT(*) DESC, status_name ASC`,
+      where.params
+    ),
+  ]);
+
+  const groupedRecent = new Map();
+  for (const row of rows) {
+    const key = `${row.closer_id || 'none'}:${row.closer_name || 'Sem closer'}`;
+    if (!groupedRecent.has(key)) groupedRecent.set(key, []);
+    if (groupedRecent.get(key).length < 5) groupedRecent.get(key).push(row);
+  }
+
+  const totals = {
+    total: Number(totalRow?.total || 0),
+    by_closer: closerTotals.map((item) => {
+      const key = `${item.closer_id || 'none'}:${item.closer_name || 'Sem closer'}`;
+      return {
+        closer_id: item.closer_id || null,
+        closer_name: item.closer_name || 'Sem closer',
+        total: Number(item.total || 0),
+        recent_records: groupedRecent.get(key) || [],
+      };
+    }),
+    statuses: statusTotals.reduce((acc, item) => {
+      acc[String(item.status_name || 'Novo').trim() || 'Novo'] = Number(item.total || 0);
+      return acc;
+    }, {}),
+  };
+
+  return {
+    totals,
+    records: rows,
+  };
+}
+
+async function getSalesRecordById(recordId) {
+  return get(
+    `SELECT sr.*, COALESCE(c.display_name, c.official_name) AS closer_name,
+            u.name AS responsible_user_name,
+            m.name AS last_modified_by_name
+       FROM sales_records sr
+       LEFT JOIN closers c ON c.id = sr.closer_id
+       LEFT JOIN users u ON u.id = sr.user_id
+       LEFT JOIN users m ON m.id = sr.last_modified_by
+      WHERE sr.id=?`,
+    [recordId]
+  );
+}
+
+function serializeSalesRecord(record) {
+  if (!record) return null;
+  return {
+    ...record,
+    source_payload: safeJsonParse(record.source_payload_json || '{}') || null,
+    custom_fields: safeJsonParse(record.custom_fields_json || '{}') || null,
+  };
+}
+
+async function getSalesRecordHistory(recordId) {
+  const rows = await all(
+    `SELECT l.id, l.entity_type, l.entity_id, l.action, l.field_name, l.old_value, l.new_value, l.origin, l.detail_json, l.created_at,
+            l.actor_user_id, u.name AS actor_name, c.official_name AS closer_name
+       FROM entity_change_log l
+       LEFT JOIN users u ON u.id = l.actor_user_id
+       LEFT JOIN closers c ON c.id = l.closer_id
+      WHERE l.entity_type='sales_record' AND l.entity_id=?
+      ORDER BY datetime(l.created_at) DESC, l.id DESC`,
+    [recordId]
+  );
+  return rows.map((row) => ({ ...row, detail: safeJsonParse(row.detail_json || '{}') || null }));
+}
+
+async function updateSalesRecord(recordId, payload = {}, actorUser) {
+  const existing = await getSalesRecordById(recordId);
+  if (!existing) throw new Error('not_found');
+
+  const scope = await getSalesAccessScope(actorUser);
+  const actorId = actorUser.id || actorUser.sub;
+  const canEdit = scope.canEditAll || Number(existing.user_id || 0) === Number(actorId);
+  if (!canEdit) throw new Error('forbidden');
+
+  const updates = {};
+  for (const field of SALES_EDITABLE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(payload || {}, field)) {
+      updates[field] = String(payload[field] ?? '').trim() || null;
+    }
+  }
+
+  if (!Object.keys(updates).length) {
+    return serializeSalesRecord(existing);
+  }
+
+  const merged = { ...existing, ...updates };
+  await run(
+    "UPDATE sales_records SET operational_status=?, follow_up_notes=?, next_action=?, next_action_date=?, observations=?, last_modified_by=?, updated_at=datetime('now') WHERE id=?",
+    [
+      merged.operational_status || 'Novo',
+      merged.follow_up_notes,
+      merged.next_action,
+      merged.next_action_date,
+      merged.observations,
+      actorId,
+      recordId,
+    ]
+  );
+
+  for (const [field, nextValue] of Object.entries(updates)) {
+    const previousValue = existing[field] ?? null;
+    if (normalizeSqlTextValue(previousValue) === normalizeSqlTextValue(nextValue)) continue;
+    await logEntityChange({
+      entityType: 'sales_record',
+      entityId: recordId,
+      action: 'field_update',
+      fieldName: field,
+      oldValue: previousValue,
+      newValue: nextValue,
+      actorUserId: actorId,
+      closerId: existing.closer_id || null,
+      origin: 'manual_edit',
+      detail: { source: 'intranet_sales_editor' },
+    });
+  }
+
+  await logEvent(actorId, 'sales_record_update', { record_id: recordId, fields: Object.keys(updates) });
+  return serializeSalesRecord(await getSalesRecordById(recordId));
+}
+
+async function recordSalesImportChange(existing, nextValues, actorUserId, origin) {
+  for (const field of listSalesImportedFields()) {
+    const previousValue = existing[field] ?? null;
+    const nextValue = nextValues[field] ?? null;
+    if (normalizeSqlTextValue(previousValue) === normalizeSqlTextValue(nextValue)) continue;
+    await logEntityChange({
+      entityType: 'sales_record',
+      entityId: existing.id,
+      action: 'import_sync',
+      fieldName: field,
+      oldValue: previousValue,
+      newValue: nextValue,
+      actorUserId,
+      closerId: nextValues.closer_id || existing.closer_id || null,
+      origin,
+      detail: { source_workbook: nextValues.source_workbook, source_sheet: nextValues.source_sheet },
+    });
+  }
+}
+
+async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, postSaleWorkbookPath = '', postSaleWorkbookName = '', actorUserId = null }) {
+  if (!salesWorkbookPath || !fs.existsSync(salesWorkbookPath)) {
+    throw new Error('missing_sales_workbook');
+  }
+
+  const source = await ensureSalesImportSource();
+  await ensureDefaultCloserCatalog();
+  const syncedCloserNames = postSaleWorkbookPath ? await syncClosersFromWorkbook(postSaleWorkbookPath) : [];
+  const closerCatalog = await getCloserCatalog();
+  const parsed = parseMatriculasWorkbook(readWorkbookFromFile(salesWorkbookPath), {
+    workbookName: salesWorkbookName || path.basename(salesWorkbookPath),
+    sheetName: SALES_PRIMARY_SHEET,
+  });
+
+  const runResult = await run(
+    "INSERT INTO sales_import_runs (source_id, origin_type, source_workbook, post_sale_workbook, source_sheet, total_rows, status, triggered_by, summary_json, updated_at) VALUES (?, 'manual_upload', ?, ?, ?, ?, 'running', ?, ?, datetime('now'))",
+    [
+      source?.id || null,
+      parsed.workbook_name,
+      postSaleWorkbookName ? path.basename(postSaleWorkbookName) : (postSaleWorkbookPath ? path.basename(postSaleWorkbookPath) : null),
+      parsed.sheet_name,
+      parsed.records.length,
+      actorUserId,
+      JSON.stringify({ synced_closers: syncedCloserNames }),
+    ]
+  );
+
+  const importRunId = runResult.lastID;
+  let insertedRows = 0;
+  let updatedRows = 0;
+  let duplicateRows = 0;
+  let ignoredRows = 0;
+  const importedRecordIds = [];
+
+  for (const item of parsed.records) {
+    const match = await resolveCloserMatch(item.closer_original, closerCatalog);
+    const prepared = {
+      ...item,
+      source_id: source?.id || null,
+      import_run_id: importRunId,
+      closer_normalized: match.normalizedName || item.closer_original,
+      closer_id: match.closer?.id || null,
+      user_id: match.closer?.user_id || null,
+      source_payload_json: JSON.stringify(item.source_payload || {}),
+      last_synced_at: new Date().toISOString(),
+    };
+
+    const existing = await get('SELECT * FROM sales_records WHERE dedupe_hash=? LIMIT 1', [prepared.dedupe_hash]);
+    if (!existing) {
+      const created = await run(
+        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, course_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, 'spreadsheet_import', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        [
+          prepared.source_id,
+          prepared.import_run_id,
+          prepared.source_workbook,
+          prepared.source_sheet,
+          prepared.source_row_number,
+          prepared.source_row_identifier,
+          prepared.dedupe_hash,
+          prepared.row_hash,
+          prepared.student_name,
+          prepared.course_name,
+          prepared.sale_month,
+          prepared.sale_date,
+          prepared.semester_label,
+          prepared.availability,
+          prepared.modality,
+          prepared.class_type,
+          prepared.system_name,
+          prepared.contract_status,
+          prepared.language,
+          prepared.closer_original,
+          prepared.closer_normalized,
+          prepared.closer_id,
+          prepared.user_id,
+          prepared.media_source,
+          prepared.profession,
+          prepared.indication,
+          prepared.source_payload_json,
+          prepared.last_synced_at,
+        ]
+      );
+      insertedRows += 1;
+      importedRecordIds.push(created.lastID);
+      await logEntityChange({
+        entityType: 'sales_record',
+        entityId: created.lastID,
+        action: 'created',
+        actorUserId,
+        closerId: prepared.closer_id,
+        origin: 'spreadsheet_import',
+        detail: {
+          source_workbook: prepared.source_workbook,
+          source_sheet: prepared.source_sheet,
+          source_row_identifier: prepared.source_row_identifier,
+        },
+      });
+      continue;
+    }
+
+    if (String(existing.row_hash || '') === String(prepared.row_hash || '')) {
+      duplicateRows += 1;
+      continue;
+    }
+
+    await recordSalesImportChange(existing, prepared, actorUserId, 'spreadsheet_sync');
+    await run(
+      "UPDATE sales_records SET source_id=?, import_run_id=?, source_workbook=?, source_sheet=?, source_row_number=?, source_row_identifier=?, row_hash=?, student_name=?, course_name=?, sale_month=?, sale_date=?, semester_label=?, availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, closer_id=?, user_id=?, media_source=?, profession=?, indication=?, source_payload_json=?, last_synced_at=?, updated_at=datetime('now') WHERE id=?",
+      [
+        prepared.source_id,
+        prepared.import_run_id,
+        prepared.source_workbook,
+        prepared.source_sheet,
+        prepared.source_row_number,
+        prepared.source_row_identifier,
+        prepared.row_hash,
+        prepared.student_name,
+        prepared.course_name,
+        prepared.sale_month,
+        prepared.sale_date,
+        prepared.semester_label,
+        prepared.availability,
+        prepared.modality,
+        prepared.class_type,
+        prepared.system_name,
+        prepared.contract_status,
+        prepared.language,
+        prepared.closer_original,
+        prepared.closer_normalized,
+        prepared.closer_id,
+        prepared.user_id,
+        prepared.media_source,
+        prepared.profession,
+        prepared.indication,
+        prepared.source_payload_json,
+        prepared.last_synced_at,
+        existing.id,
+      ]
+    );
+    updatedRows += 1;
+    importedRecordIds.push(existing.id);
+  }
+
+  const summary = {
+    synced_closers: syncedCloserNames,
+    imported_record_ids: importedRecordIds.slice(0, 20),
+  };
+
+  await run(
+    "UPDATE sales_import_runs SET inserted_rows=?, updated_rows=?, duplicate_rows=?, ignored_rows=?, status='completed', summary_json=?, updated_at=datetime('now') WHERE id=?",
+    [insertedRows, updatedRows, duplicateRows, ignoredRows, JSON.stringify(summary), importRunId]
+  );
+  await run("UPDATE sales_import_sources SET last_imported_at=datetime('now'), updated_at=datetime('now') WHERE id=?", [source?.id || null]);
+  if (actorUserId) {
+    await logEvent(actorUserId, 'sales_import_completed', {
+      import_run_id: importRunId,
+      inserted_rows: insertedRows,
+      updated_rows: updatedRows,
+      duplicate_rows: duplicateRows,
+      synced_closers: syncedCloserNames,
+      workbook: parsed.workbook_name,
+    });
+  }
+
+  return {
+    import_run_id: importRunId,
+    total_rows: parsed.records.length,
+    inserted_rows: insertedRows,
+    updated_rows: updatedRows,
+    duplicate_rows: duplicateRows,
+    ignored_rows: ignoredRows,
+    synced_closers: syncedCloserNames,
+    workbook: parsed.workbook_name,
+    sheet_name: parsed.sheet_name,
+  };
+}
+
+async function buildSalesIntranetPayload(user) {
+  const scope = await getSalesAccessScope(user);
+  if (!scope.enabled) {
+    return {
+      enabled: false,
+      can_view_all: false,
+      can_edit_all: false,
+      summary: null,
+      records: [],
+      closers: [],
+    };
+  }
+
+  const [salesSummary, closers] = await Promise.all([
+    getSalesSummaryForScope(scope, { limit: 24 }),
+    listClosers({ includeInactive: false }),
+  ]);
+  const visibleClosers = scope.canViewAll
+    ? closers
+    : closers.filter((closer) => Number(closer.id) === Number(scope.closer?.id || 0));
+
+  return {
+    enabled: true,
+    can_view_all: scope.canViewAll,
+    can_edit_all: scope.canEditAll,
+    scope_closer_id: scope.closer?.id || null,
+    summary: salesSummary.totals,
+    records: salesSummary.records.map(serializeSalesRecord),
+    closers: visibleClosers.map((closer) => ({
+      id: closer.id,
+      official_name: closer.official_name,
+      display_name: closer.display_name || closer.official_name,
+      user_id: closer.user_id || null,
+      user_name: closer.user_name || null,
+      aliases: (closer.aliases || []).map((alias) => alias.alias_name),
+      status: closer.status,
+    })),
+  };
+}
 function brazilDateKey(value = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
@@ -528,7 +1301,7 @@ function analyzeConversationIntent(userText = "", userLanguage = "pt", options =
   const wantsTranslation = /\b(traduza|translate|traduz|translation|traducao|traduccion|traduzione)\b/i.test(userText);
   const wantsSummary = /\b(resuma|resumo|summary|summarize|resumen|riassunto)\b/i.test(userText);
   const wantsRewrite = /\b(melhore|reescreva|rewrite|rephrase|ajuste|corrija|formate|organize)\b/i.test(userText);
-  const wantsSteps = /\b(passo a passo|step by step|como fazer|how to|como faco|como faÃ§o)\b/i.test(userText);
+  const wantsSteps = /\b(passo a passo|step by step|como fazer|how to|como faco|como faço)\b/i.test(userText);
   const wantsProfessional = /\b(profissional|formal|executivo|corporativo|business|profesional|professionnel)\b/i.test(userText);
   const wantsPersuasive = /\b(venda|comercial|persuasivo|convencer|sales|conversion)\b/i.test(userText);
   const businessIntent = analyzeBusinessIntent(userText, { departments: options.departments || [] });
@@ -537,7 +1310,7 @@ function analyzeConversationIntent(userText = "", userLanguage = "pt", options =
   if (wantsProfessional) tone = 'profissional';
   else if (wantsPersuasive || businessIntent.businessAreaKey === 'commercial') tone = 'persuasivo';
   else if (wantsSteps || wantsSummary || businessIntent.responseDepth === 'deep') tone = 'objetivo';
-  else if (/\b(rapido|rÃ¡pido|direto|curto|short|brief)\b/i.test(userText)) tone = 'direto';
+  else if (/\b(rapido|rápido|direto|curto|short|brief)\b/i.test(userText)) tone = 'direto';
   else if (/\b(leve|humano|friendly|casual|despojado)\b/i.test(userText)) tone = 'leve';
 
   const responseLabel = userLanguage === 'en'
@@ -1755,15 +2528,28 @@ async function buildIntranetPayload(userId) {
   const user = await getUserById(userId);
   if (!user) return null;
 
-  const [departmentCatalog, recentDocuments, totalDocumentsRow] = await Promise.all([
+  const visibleDepartments = Array.isArray(user.departments) ? user.departments.filter(Boolean) : [];
+  const documentWhere = [];
+  const documentParams = [];
+  if (visibleDepartments.length) {
+    documentWhere.push(`(department_name IS NULL OR department_name='' OR department_name IN (${visibleDepartments.map(() => '?').join(', ')}))`);
+    documentParams.push(...visibleDepartments);
+  }
+
+  const documentWhereSql = documentWhere.length ? `WHERE ${documentWhere.join(' AND ')}` : '';
+
+  const [departmentCatalog, recentDocuments, totalDocumentsRow, salesPayload] = await Promise.all([
     listDepartmentCatalog(),
     all(
-      `SELECT id, original_name, stored_name, vector_store_file_id, created_at
+      `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, vector_store_file_id, created_at
          FROM knowledge_sources
+         ${documentWhereSql}
         ORDER BY datetime(created_at) DESC, id DESC
-        LIMIT 12`
+        LIMIT 12`,
+      documentParams
     ),
-    get("SELECT COUNT(*) AS total FROM knowledge_sources"),
+    get(`SELECT COUNT(*) AS total FROM knowledge_sources ${documentWhereSql}`, documentParams),
+    buildSalesIntranetPayload(user),
   ]);
 
   const workspace = buildIntranetWorkspace({
@@ -1774,9 +2560,16 @@ async function buildIntranetPayload(userId) {
       name: document.original_name,
       status: document.vector_store_file_id ? 'Sincronizado' : 'Local',
       created_at: document.created_at,
+      department_name: document.department_name || '',
+      language: document.language || '',
+      mime_type: document.mime_type || '',
+      source_kind: document.source_kind || '',
     })),
     totalDocuments: Number(totalDocumentsRow?.total || 0),
+    salesWorkspace: salesPayload,
   });
+
+  workspace.sales = salesPayload;
 
   return {
     user,
@@ -1806,6 +2599,10 @@ const ragUpload = upload.fields([
   { name: "files", maxCount: 1 },
   { name: "file", maxCount: 1 },
 ]);
+const salesImportUpload = upload.fields([
+  { name: "sales_workbook", maxCount: 1 },
+  { name: "post_sale_workbook", maxCount: 1 },
+]);
 
 function ragUploadMiddleware(req, res, next) {
   ragUpload(req, res, (err) => {
@@ -1817,6 +2614,16 @@ function ragUploadMiddleware(req, res, next) {
       return res.status(400).json({ error: "rag_batch_too_large" });
     }
     return res.status(400).json({ error: err?.message || "rag_upload_failed" });
+  });
+}
+
+function salesImportUploadMiddleware(req, res, next) {
+  salesImportUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err?.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "sales_workbook_too_large" });
+    }
+    return res.status(400).json({ error: err?.message || "sales_import_upload_failed" });
   });
 }
 
@@ -2328,6 +3135,163 @@ app.patch("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"),
   res.json({ ok: true, user: updatedUser });
 });
 
+function getSalesImportFiles(req) {
+  const files = [];
+  if (req.files && typeof req.files === 'object') {
+    for (const group of Object.values(req.files)) {
+      if (Array.isArray(group)) files.push(...group);
+    }
+  }
+  return files.filter(Boolean);
+}
+
+function cleanupUploadedFiles(files = []) {
+  for (const file of files) {
+    try {
+      const tempPath = file?.path || (file?.filename ? path.join(uploadsDir, file.filename) : '');
+      if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch (err) {
+      console.log('Falha ao limpar upload temporario:', err?.message || err);
+    }
+  }
+}
+
+app.get('/api/admin/closers', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  const closers = await listClosers({ includeInactive: true });
+  res.json({ closers });
+});
+
+app.post('/api/admin/closers', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  try {
+    const closer = await saveCloser({
+      official_name: req.body?.official_name,
+      display_name: req.body?.display_name,
+      user_id: req.body?.user_id,
+      status: req.body?.status,
+      notes: req.body?.notes,
+      aliases: parseAliasInput(req.body?.aliases),
+    }, req.user.sub);
+    res.json({ ok: true, closer });
+  } catch (err) {
+    res.status(err?.message === 'closer_name_conflict' ? 409 : 400).json({ error: err?.message || 'closer_save_failed' });
+  }
+});
+
+app.patch('/api/admin/closers/:id', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  try {
+    const closer = await saveCloser({
+      id: Number(req.params.id),
+      official_name: req.body?.official_name,
+      display_name: req.body?.display_name,
+      user_id: req.body?.user_id,
+      status: req.body?.status,
+      notes: req.body?.notes,
+      aliases: parseAliasInput(req.body?.aliases),
+    }, req.user.sub);
+    res.json({ ok: true, closer });
+  } catch (err) {
+    if (err?.message === 'not_found') return res.status(404).json({ error: 'not_found' });
+    res.status(err?.message === 'closer_name_conflict' ? 409 : 400).json({ error: err?.message || 'closer_save_failed' });
+  }
+});
+
+app.get('/api/admin/sales/records', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  const scope = { enabled: true, canViewAll: true, canEditAll: true, closer: null };
+  const payload = await getSalesSummaryForScope(scope, {
+    closerId: req.query?.closer_id,
+    status: req.query?.status,
+    search: req.query?.search,
+    limit: Math.min(200, Math.max(1, Number(req.query?.limit || 100))),
+  });
+  res.json({ summary: payload.totals, records: payload.records.map(serializeSalesRecord) });
+});
+
+app.get('/api/admin/sales/logs', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  const filters = [];
+  const params = [];
+  if (req.query?.user_id) {
+    filters.push('l.actor_user_id=?');
+    params.push(Number(req.query.user_id));
+  }
+  if (req.query?.closer_id) {
+    filters.push('l.closer_id=?');
+    params.push(Number(req.query.closer_id));
+  }
+  if (req.query?.record_id) {
+    filters.push("l.entity_type='sales_record' AND l.entity_id=?");
+    params.push(Number(req.query.record_id));
+  }
+  if (req.query?.action) {
+    filters.push('lower(l.action)=lower(?)');
+    params.push(String(req.query.action).trim());
+  }
+  if (req.query?.from) {
+    filters.push('datetime(l.created_at) >= datetime(?)');
+    params.push(String(req.query.from).trim());
+  }
+  if (req.query?.to) {
+    filters.push('datetime(l.created_at) <= datetime(?)');
+    params.push(String(req.query.to).trim());
+  }
+  const whereSql = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const rows = await all(
+    `SELECT l.id, l.entity_type, l.entity_id, l.action, l.field_name, l.old_value, l.new_value, l.origin, l.detail_json, l.created_at,
+            l.actor_user_id, u.name AS actor_name, c.official_name AS closer_name
+       FROM entity_change_log l
+       LEFT JOIN users u ON u.id = l.actor_user_id
+       LEFT JOIN closers c ON c.id = l.closer_id
+       ${whereSql}
+      ORDER BY datetime(l.created_at) DESC, l.id DESC
+      LIMIT 120`,
+    params
+  );
+  res.json({
+    logs: rows.map((row) => ({ ...row, detail: safeJsonParse(row.detail_json || '{}') || null })),
+  });
+});
+
+app.post('/api/admin/sales/import', requireAuth(JWT_SECRET), requireRole('admin'), salesImportUploadMiddleware, async (req, res) => {
+  const uploads = getSalesImportFiles(req);
+  const salesWorkbook = (req.files?.sales_workbook || [])[0] || null;
+  const postSaleWorkbook = (req.files?.post_sale_workbook || [])[0] || null;
+
+  if (!salesWorkbook) {
+    cleanupUploadedFiles(uploads);
+    return res.status(400).json({ error: 'missing_sales_workbook' });
+  }
+
+  try {
+    const summary = await importSalesWorkbookBatch({
+      salesWorkbookPath: salesWorkbook.path,
+      salesWorkbookName: salesWorkbook.originalname,
+      postSaleWorkbookPath: postSaleWorkbook?.path || '',
+      postSaleWorkbookName: postSaleWorkbook?.originalname || '',
+      actorUserId: req.user.sub,
+    });
+
+    res.json({ ok: true, summary });
+  } catch (err) {
+    console.log('Erro ao importar planilha comercial:', err?.message || err);
+    res.status(400).json({ error: err?.message || 'sales_import_failed' });
+  } finally {
+    cleanupUploadedFiles(uploads);
+  }
+});
+
+app.get('/api/admin/sales/overview', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  const scope = { enabled: true, canViewAll: true, canEditAll: true, closer: null };
+  const [summary, closers, recentRuns] = await Promise.all([
+    getSalesSummaryForScope(scope, { limit: 40 }),
+    listClosers({ includeInactive: true }),
+    all('SELECT id, source_workbook, post_sale_workbook, total_rows, inserted_rows, updated_rows, duplicate_rows, status, created_at FROM sales_import_runs ORDER BY datetime(created_at) DESC, id DESC LIMIT 12'),
+  ]);
+
+  res.json({
+    summary: summary.totals,
+    closers,
+    recent_runs: recentRuns,
+  });
+});
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   await logEvent(req.user.sub, "admin_delete_user_blocked", { target_user_id: Number(req.params.id) || null });
   res.status(403).json({ error: "user_deletion_disabled" });
@@ -2544,6 +3508,50 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
 });
 const publicDir = path.join(__dirname, "public");
 
+app.get('/api/intranet/sales/bootstrap', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const sales = await buildSalesIntranetPayload(req.currentUser || await getUserById(req.user.sub));
+  if (!sales.enabled) return res.status(403).json({ error: 'sales_access_denied' });
+  res.json({ sales });
+});
+
+app.get('/api/intranet/sales/records', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  const scope = await getSalesAccessScope(user);
+  if (!scope.enabled) return res.status(403).json({ error: 'sales_access_denied' });
+  const payload = await getSalesSummaryForScope(scope, {
+    closerId: req.query?.closer_id,
+    status: req.query?.status,
+    search: req.query?.search,
+    limit: Math.min(150, Math.max(1, Number(req.query?.limit || 80))),
+  });
+  res.json({ summary: payload.totals, records: payload.records.map(serializeSalesRecord) });
+});
+
+app.get('/api/intranet/sales/records/:id/history', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  const scope = await getSalesAccessScope(user);
+  if (!scope.enabled) return res.status(403).json({ error: 'sales_access_denied' });
+  const record = await getSalesRecordById(Number(req.params.id));
+  if (!record) return res.status(404).json({ error: 'not_found' });
+  if (!scope.canViewAll && Number(record.user_id || 0) !== Number(user.id || user.sub)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const history = await getSalesRecordHistory(Number(req.params.id));
+  res.json({ record: serializeSalesRecord(record), history });
+});
+
+app.patch('/api/intranet/sales/records/:id', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const updated = await updateSalesRecord(Number(req.params.id), req.body || {}, user);
+    const history = await getSalesRecordHistory(Number(req.params.id));
+    res.json({ ok: true, record: updated, history });
+  } catch (err) {
+    if (err?.message === 'not_found') return res.status(404).json({ error: 'not_found' });
+    if (err?.message === 'forbidden') return res.status(403).json({ error: 'forbidden' });
+    res.status(400).json({ error: err?.message || 'sales_record_update_failed' });
+  }
+});
 app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
   const payload = await buildIntranetPayload(req.user.sub);
   res.json(payload || { user: null, intranet: null, department_catalog: [] });
@@ -2593,6 +3601,18 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

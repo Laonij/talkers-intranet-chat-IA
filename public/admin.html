@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="pt-br">
 <head>
   <meta charset="utf-8" />
@@ -171,6 +171,74 @@
               <button class="btn primary" id="btnUploadRag" disabled>Enviar arquivos</button>
             </div>
           </div>
+
+          <div class="admin-side-card">
+            <div class="admin-side-head">
+              <div class="admin-side-title">Importar vendas</div>
+              <span class="badge">MATRICULAS NOVAS</span>
+            </div>
+            <div class="small muted" style="margin-bottom:12px;">Importe a planilha principal de vendas e, opcionalmente, a planilha de pos-venda para sincronizar closers e aliases sem depender de hardcode.</div>
+            <input id="salesWorkbookInput" type="file" accept=".xlsx,.xls,.csv" hidden />
+            <input id="postSaleWorkbookInput" type="file" accept=".xlsx,.xls,.csv" hidden />
+            <div class="admin-upload-actions">
+              <button class="btn" type="button" id="btnPickSalesWorkbook">Planilha de vendas</button>
+              <button class="btn" type="button" id="btnPickPostSaleWorkbook">Planilha de pos-venda</button>
+            </div>
+            <div id="salesWorkbookLabel" class="small muted admin-upload-file">Nenhuma planilha de vendas selecionada.</div>
+            <div id="postSaleWorkbookLabel" class="small muted admin-upload-file">Nenhuma planilha de pos-venda selecionada.</div>
+            <div id="salesImportState" class="small admin-state-box">Pronto para importar matriculas e vincular por closer.</div>
+            <div class="admin-form-actions" style="margin-top:14px;">
+              <button class="btn primary" id="btnImportSales" type="button">Importar planilhas</button>
+            </div>
+          </div>
+
+          <div class="admin-side-card">
+            <div class="admin-panel-head" style="margin-bottom:0;">
+              <div>
+                <div class="admin-side-title" id="closerFormTitle">Cadastrar closer</div>
+                <div class="small muted">Mapeie nome oficial, alias e usuaria vinculada para manter a operacao comercial consistente.</div>
+              </div>
+            </div>
+            <input type="hidden" id="editingCloserId" value="" />
+            <div class="row admin-form-grid">
+              <div>
+                <label>Nome oficial</label>
+                <input id="closerOfficialName" placeholder="Ex.: Bruna Rafaela" />
+              </div>
+              <div>
+                <label>Nome de exibicao</label>
+                <input id="closerDisplayName" placeholder="Ex.: Bruna Rafaela" />
+              </div>
+            </div>
+            <div class="row admin-form-grid">
+              <div>
+                <label>Usuaria vinculada</label>
+                <select id="closerUserId">
+                  <option value="">Sem vinculo direto</option>
+                </select>
+              </div>
+              <div>
+                <label>Status</label>
+                <select id="closerStatus">
+                  <option value="active">Ativa</option>
+                  <option value="inactive">Inativa</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label>Aliases</label>
+              <textarea id="closerAliases" rows="3" placeholder="Ex.: Bruna, B. Rafaela"></textarea>
+              <div class="small muted">Separe por virgula, ponto e virgula ou quebra de linha.</div>
+            </div>
+            <div>
+              <label>Observacoes</label>
+              <textarea id="closerNotes" rows="3" placeholder="Anotacoes internas opcionais"></textarea>
+            </div>
+            <div class="admin-form-actions" style="margin-top:14px;">
+              <button class="btn" id="btnCancelCloserEdit" type="button" style="display:none;">Cancelar edicao</button>
+              <button class="btn primary" id="btnSaveCloser" type="button">Salvar closer</button>
+            </div>
+          </div>
         </aside>
       </div>
 
@@ -227,6 +295,133 @@
           </div>
         </section>
 
+        <section class="admin-panel admin-collapsible" data-section="closers">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Closers</div>
+              <div class="small muted" id="closerCountLabel">Carregando closers...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="closers">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="closers">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Nome oficial</th>
+                  <th>Exibicao</th>
+                  <th>Usuaria</th>
+                  <th>Aliases</th>
+                  <th>Status</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody id="closersBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible" data-section="sales">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Painel comercial</div>
+              <div class="small muted" id="salesCountLabel">Carregando dados comerciais...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="sales">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="sales">
+            <div id="salesOverviewCards" class="admin-summary-grid"></div>
+            <div id="salesCloserSummary" class="admin-chip-grid"></div>
+
+            <div class="admin-filter-grid" style="margin-top:16px;">
+              <div>
+                <label>Closer</label>
+                <select id="salesFilterCloser">
+                  <option value="">Todas</option>
+                </select>
+              </div>
+              <div>
+                <label>Status</label>
+                <select id="salesFilterStatus">
+                  <option value="">Todos</option>
+                </select>
+              </div>
+              <div>
+                <label>Busca</label>
+                <input id="salesFilterSearch" placeholder="Aluno, curso, closer ou midia" />
+              </div>
+              <div class="admin-filter-actions">
+                <button class="btn" id="btnRefreshSales" type="button">Atualizar</button>
+              </div>
+            </div>
+
+            <div class="admin-subsection-head">
+              <div>
+                <div class="admin-subsection-title">Ultimas importacoes</div>
+                <div class="small muted">Historico recente de sincronizacao das planilhas.</div>
+              </div>
+            </div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Planilha</th>
+                  <th>Total</th>
+                  <th>Inseridas</th>
+                  <th>Atualizadas</th>
+                  <th>Duplicadas</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="salesRunsBody"></tbody>
+            </table>
+
+            <div class="admin-subsection-head">
+              <div>
+                <div class="admin-subsection-title">Matriculas importadas</div>
+                <div class="small muted">Base operacional para evolucao do CRM comercial e pos-venda.</div>
+              </div>
+            </div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Aluno</th>
+                  <th>Curso</th>
+                  <th>Closer</th>
+                  <th>Data</th>
+                  <th>Status</th>
+                  <th>Origem</th>
+                </tr>
+              </thead>
+              <tbody id="salesRecordsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible" data-section="sales-logs">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Logs comerciais</div>
+              <div class="small muted" id="salesLogsCountLabel">Carregando logs...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="sales-logs">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="sales-logs">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Usuario</th>
+                  <th>Acao</th>
+                  <th>Registro</th>
+                  <th>Campo</th>
+                  <th>Detalhe</th>
+                </tr>
+              </thead>
+              <tbody id="salesLogsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="admin-panel admin-collapsible" data-section="knowledge">
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
@@ -259,12 +454,16 @@
 <script>
 const RAG_BATCH_SIZE = 1;
 const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
-const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json"]);`r`nconst SECTION_STORAGE_KEY = "talkers-admin-sections";
+const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json"]);
+const SECTION_STORAGE_KEY = "talkers-admin-sections";
 
 let pendingRagFiles = [];
 let ragUploadInProgress = false;
 let departmentCatalog = [];
 let cachedUsers = [];
+let closerCatalog = [];
+let salesOverview = null;
+let collapsedSections = new Set();
 
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
@@ -282,6 +481,24 @@ async function api(path, opts = {}) {
   try { json = txt ? JSON.parse(txt) : null; } catch {}
   if (!res.ok) throw new Error(json?.error || txt || `HTTP ${res.status}`);
   return json;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString('pt-BR');
+  } catch {
+    return String(value || '-');
+  }
 }
 
 function setMsg(text, isError = false) {
@@ -780,6 +997,8 @@ async function loadUsers() {
     tr.appendChild(tdActions);
     body.appendChild(tr);
   }
+
+  renderCloserUserOptions();
 }
 
 async function loadRagStatus() {
@@ -810,14 +1029,295 @@ async function loadRagFiles() {
   for (const file of files) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${file.original_name}</td>
-      <td class="small muted">${file.department_name || 'Geral'}</td>
-      <td class="small muted">${file.language || '-'}</td>
-      <td class="small muted">${file.vector_store_file_id ? 'Sincronizado' : (file.sync_status || 'Local')}</td>
-      <td class="small muted">${new Date(file.created_at).toLocaleString('pt-BR')}</td>
+      <td>${escapeHtml(file.original_name)}</td>
+      <td class="small muted">${escapeHtml(file.department_name || 'Geral')}</td>
+      <td class="small muted">${escapeHtml(file.language || '-')}</td>
+      <td class="small muted">${escapeHtml(file.vector_store_file_id ? 'Sincronizado' : (file.sync_status || 'Local'))}</td>
+      <td class="small muted">${escapeHtml(formatDateTime(file.created_at))}</td>
     `;
     body.appendChild(tr);
   }
+}
+
+function renderCloserUserOptions() {
+  const closerSelect = document.getElementById('closerUserId');
+  const previousCloserValue = closerSelect.value;
+  closerSelect.innerHTML = '<option value="">Sem vinculo direto</option>';
+  cachedUsers.forEach((user) => {
+    const option = document.createElement('option');
+    option.value = String(user.id);
+    option.textContent = `${user.name} - ${user.email}`;
+    closerSelect.appendChild(option);
+  });
+  if (Array.from(closerSelect.options).some((option) => option.value === previousCloserValue)) {
+    closerSelect.value = previousCloserValue;
+  }
+
+  const closerFilter = document.getElementById('salesFilterCloser');
+  const previousFilterValue = closerFilter.value;
+  closerFilter.innerHTML = '<option value="">Todas</option>';
+  closerCatalog.forEach((closer) => {
+    const option = document.createElement('option');
+    option.value = String(closer.id);
+    option.textContent = closer.display_name || closer.official_name;
+    closerFilter.appendChild(option);
+  });
+  if (Array.from(closerFilter.options).some((option) => option.value === previousFilterValue)) {
+    closerFilter.value = previousFilterValue;
+  }
+}
+
+function resetCloserForm() {
+  document.getElementById('editingCloserId').value = '';
+  document.getElementById('closerFormTitle').textContent = 'Cadastrar closer';
+  document.getElementById('btnSaveCloser').textContent = 'Salvar closer';
+  document.getElementById('btnCancelCloserEdit').style.display = 'none';
+  document.getElementById('closerOfficialName').value = '';
+  document.getElementById('closerDisplayName').value = '';
+  document.getElementById('closerUserId').value = '';
+  document.getElementById('closerStatus').value = 'active';
+  document.getElementById('closerAliases').value = '';
+  document.getElementById('closerNotes').value = '';
+}
+
+function populateCloserForm(closer) {
+  document.getElementById('editingCloserId').value = String(closer.id);
+  document.getElementById('closerFormTitle').textContent = `Editar closer #${closer.id}`;
+  document.getElementById('btnCancelCloserEdit').style.display = '';
+  document.getElementById('closerOfficialName').value = closer.official_name || '';
+  document.getElementById('closerDisplayName').value = closer.display_name || '';
+  document.getElementById('closerUserId').value = closer.user_id ? String(closer.user_id) : '';
+  document.getElementById('closerStatus').value = closer.status || 'active';
+  document.getElementById('closerAliases').value = (closer.aliases || []).map((item) => item.alias_name || item).join(', ');
+  document.getElementById('closerNotes').value = closer.notes || '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderCloserTable() {
+  const body = document.getElementById('closersBody');
+  body.innerHTML = '';
+  document.getElementById('closerCountLabel').textContent = closerCatalog.length === 1
+    ? '1 closer cadastrada'
+    : `${closerCatalog.length} closers cadastradas`;
+
+  if (!closerCatalog.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma closer cadastrada ainda.</td></tr>';
+    return;
+  }
+
+  closerCatalog.forEach((closer) => {
+    const aliases = (closer.aliases || []).map((item) => item.alias_name || item).filter(Boolean);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(closer.official_name)}</td>
+      <td class="small muted">${escapeHtml(closer.display_name || closer.official_name)}</td>
+      <td class="small muted">${escapeHtml(closer.user_name || closer.user_email || 'Sem vinculo')}</td>
+      <td class="small muted">${escapeHtml(aliases.join(', ') || '-')}</td>
+      <td><span class="badge ${closer.status !== 'inactive' ? 'admin' : ''}">${closer.status === 'inactive' ? 'Inativa' : 'Ativa'}</span></td>
+      <td><button class="btn" type="button" data-edit-closer="${closer.id}">Editar</button></td>
+    `;
+    body.appendChild(tr);
+  });
+
+  body.querySelectorAll('[data-edit-closer]').forEach((button) => {
+    button.onclick = () => {
+      const closer = closerCatalog.find((item) => Number(item.id) === Number(button.getAttribute('data-edit-closer')));
+      if (closer) populateCloserForm(closer);
+    };
+  });
+}
+
+function renderSalesStatusOptions(summary = {}) {
+  const select = document.getElementById('salesFilterStatus');
+  const previousValue = select.value;
+  select.innerHTML = '<option value="">Todos</option>';
+  Object.entries(summary || {}).forEach(([status, total]) => {
+    const option = document.createElement('option');
+    option.value = status;
+    option.textContent = `${status} (${total})`;
+    select.appendChild(option);
+  });
+  if (Array.from(select.options).some((option) => option.value === previousValue)) {
+    select.value = previousValue;
+  }
+}
+
+function renderSalesOverviewCards(summary = {}, recentRuns = []) {
+  const wrap = document.getElementById('salesOverviewCards');
+  wrap.innerHTML = '';
+  const cards = [
+    { label: 'Matriculas', value: Number(summary.total || 0), tone: 'primary' },
+    { label: 'Closers', value: Array.isArray(summary.by_closer) ? summary.by_closer.length : 0, tone: 'neutral' },
+    { label: 'Importacoes', value: Array.isArray(recentRuns) ? recentRuns.length : 0, tone: 'neutral' },
+  ];
+  Object.entries(summary.statuses || {}).slice(0, 3).forEach(([status, total]) => {
+    cards.push({ label: status, value: Number(total || 0), tone: 'success' });
+  });
+  cards.forEach((card) => {
+    const article = document.createElement('article');
+    article.className = `admin-metric-card ${card.tone || 'neutral'}`;
+    article.innerHTML = `<div class="admin-metric-value">${escapeHtml(card.value)}</div><div class="admin-metric-label">${escapeHtml(card.label)}</div>`;
+    wrap.appendChild(article);
+  });
+}
+
+function renderSalesCloserSummary(byCloser = []) {
+  const wrap = document.getElementById('salesCloserSummary');
+  wrap.innerHTML = '';
+  if (!Array.isArray(byCloser) || !byCloser.length) {
+    wrap.innerHTML = '<div class="small muted">Nenhuma distribuicao por closer disponivel ainda.</div>';
+    return;
+  }
+  byCloser.slice(0, 8).forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'admin-chip-card';
+    button.innerHTML = `<strong>${escapeHtml(item.closer_name || 'Sem closer')}</strong><span>${Number(item.total || 0)} matricula(s)</span>`;
+    button.onclick = () => {
+      document.getElementById('salesFilterCloser').value = item.closer_id ? String(item.closer_id) : '';
+      loadSalesRecords();
+    };
+    wrap.appendChild(button);
+  });
+}
+
+function renderSalesRuns(runs = []) {
+  const body = document.getElementById('salesRunsBody');
+  body.innerHTML = '';
+  if (!Array.isArray(runs) || !runs.length) {
+    body.innerHTML = '<tr><td colspan="7" class="small muted">Nenhuma importacao registrada ainda.</td></tr>';
+    return;
+  }
+  runs.forEach((run) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="small muted">${escapeHtml(formatDateTime(run.created_at))}</td>
+      <td>${escapeHtml(run.source_workbook || '-')}</td>
+      <td class="small muted">${Number(run.total_rows || 0)}</td>
+      <td class="small muted">${Number(run.inserted_rows || 0)}</td>
+      <td class="small muted">${Number(run.updated_rows || 0)}</td>
+      <td class="small muted">${Number(run.duplicate_rows || 0)}</td>
+      <td><span class="badge ${run.status === 'completed' ? 'admin' : ''}">${escapeHtml(run.status || 'unknown')}</span></td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function renderSalesRecords(records = []) {
+  const body = document.getElementById('salesRecordsBody');
+  body.innerHTML = '';
+  document.getElementById('salesCountLabel').textContent = records.length === 1
+    ? '1 matricula exibida nos filtros atuais'
+    : `${records.length} matriculas exibidas nos filtros atuais`;
+
+  if (!Array.isArray(records) || !records.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma matricula encontrada para os filtros atuais.</td></tr>';
+    return;
+  }
+
+  records.forEach((record) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(record.student_name || '-')}</td>
+      <td class="small muted">${escapeHtml(record.course_name || '-')}</td>
+      <td class="small muted">${escapeHtml(record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer')}</td>
+      <td class="small muted">${escapeHtml(record.sale_date || '-')}</td>
+      <td><span class="badge ${record.operational_status === 'Concluido' ? 'admin' : ''}">${escapeHtml(record.operational_status || 'Novo')}</span></td>
+      <td class="small muted">${escapeHtml(record.media_source || record.source_workbook || '-')}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function renderSalesLogs(logs = []) {
+  const body = document.getElementById('salesLogsBody');
+  body.innerHTML = '';
+  document.getElementById('salesLogsCountLabel').textContent = logs.length === 1
+    ? '1 log comercial recente'
+    : `${logs.length} logs comerciais recentes`;
+
+  if (!Array.isArray(logs) || !logs.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma alteracao comercial registrada ainda.</td></tr>';
+    return;
+  }
+
+  logs.forEach((log) => {
+    const detail = [];
+    if (log.field_name) detail.push(`Campo: ${log.field_name}`);
+    if (log.old_value || log.new_value) detail.push(`${log.old_value || '-'} -> ${log.new_value || '-'}`);
+    if (log.origin) detail.push(`Origem: ${log.origin}`);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="small muted">${escapeHtml(formatDateTime(log.created_at))}</td>
+      <td class="small muted">${escapeHtml(log.actor_name || 'Sistema')}</td>
+      <td>${escapeHtml(log.action || '-')}</td>
+      <td class="small muted">${escapeHtml(log.entity_type || '-')} ${log.entity_id ? `#${log.entity_id}` : ''}</td>
+      <td class="small muted">${escapeHtml(log.field_name || '-')}</td>
+      <td class="small muted">${escapeHtml(detail.join(' | ') || '-')}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function updateSalesWorkbookLabels() {
+  const salesFile = document.getElementById('salesWorkbookInput').files[0];
+  const postSaleFile = document.getElementById('postSaleWorkbookInput').files[0];
+  document.getElementById('salesWorkbookLabel').textContent = salesFile ? `${salesFile.name} (${formatBytes(salesFile.size)})` : 'Nenhuma planilha de vendas selecionada.';
+  document.getElementById('postSaleWorkbookLabel').textContent = postSaleFile ? `${postSaleFile.name} (${formatBytes(postSaleFile.size)})` : 'Nenhuma planilha de pos-venda selecionada.';
+}
+
+function setSalesImportState(text, tone = 'neutral') {
+  const el = document.getElementById('salesImportState');
+  const palette = {
+    neutral: { background: '#fff', border: 'var(--border)', color: '#475467' },
+    loading: { background: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+    success: { background: '#ecfdf3', border: '#abefc6', color: '#067647' },
+    error: { background: '#fef3f2', border: '#fecdca', color: '#b42318' },
+  };
+  const style = palette[tone] || palette.neutral;
+  el.textContent = text;
+  el.style.background = style.background;
+  el.style.borderColor = style.border;
+  el.style.color = style.color;
+}
+
+async function loadClosers() {
+  const { closers } = await api('/api/admin/closers');
+  closerCatalog = closers || [];
+  renderCloserUserOptions();
+  renderCloserTable();
+}
+
+async function loadSalesOverview() {
+  const data = await api('/api/admin/sales/overview');
+  salesOverview = data;
+  if (Array.isArray(data.closers)) {
+    closerCatalog = data.closers;
+    renderCloserUserOptions();
+    renderCloserTable();
+  }
+  renderSalesOverviewCards(data.summary || {}, data.recent_runs || []);
+  renderSalesCloserSummary((data.summary || {}).by_closer || []);
+  renderSalesRuns(data.recent_runs || []);
+  renderSalesStatusOptions((data.summary || {}).statuses || {});
+}
+
+async function loadSalesRecords() {
+  const params = new URLSearchParams();
+  const closerId = document.getElementById('salesFilterCloser').value;
+  const status = document.getElementById('salesFilterStatus').value;
+  const search = document.getElementById('salesFilterSearch').value.trim();
+  if (closerId) params.set('closer_id', closerId);
+  if (status) params.set('status', status);
+  if (search) params.set('search', search);
+  params.set('limit', '120');
+  const { records } = await api(`/api/admin/sales/records?${params.toString()}`);
+  renderSalesRecords(records || []);
+}
+
+async function loadSalesLogs() {
+  const { logs } = await api('/api/admin/sales/logs');
+  renderSalesLogs(logs || []);
 }
 
 document.getElementById('btnPickRagFiles').onclick = () => {
@@ -840,6 +1340,30 @@ document.getElementById('ragFolder').addEventListener('change', (event) => {
   setRagUploadProgress(0, pendingRagFiles.length, false);
 });
 
+document.getElementById('btnPickSalesWorkbook').onclick = () => {
+  document.getElementById('salesWorkbookInput').click();
+};
+
+document.getElementById('btnPickPostSaleWorkbook').onclick = () => {
+  document.getElementById('postSaleWorkbookInput').click();
+};
+
+document.getElementById('salesWorkbookInput').addEventListener('change', updateSalesWorkbookLabels);
+document.getElementById('postSaleWorkbookInput').addEventListener('change', updateSalesWorkbookLabels);
+document.getElementById('salesFilterCloser').addEventListener('change', loadSalesRecords);
+document.getElementById('salesFilterStatus').addEventListener('change', loadSalesRecords);
+document.getElementById('salesFilterSearch').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    loadSalesRecords();
+  }
+});
+
+document.getElementById('btnRefreshSales').onclick = async () => {
+  await Promise.all([loadSalesOverview(), loadSalesRecords(), loadSalesLogs()]);
+  setMsg('Painel comercial atualizado.');
+};
+
 document.getElementById('btnCancelEdit').onclick = () => {
   resetUserForm();
   setMsg('Edicao cancelada.');
@@ -848,6 +1372,11 @@ document.getElementById('btnCancelEdit').onclick = () => {
 document.getElementById('btnCancelDepartmentEdit').onclick = () => {
   resetDepartmentForm();
   setMsg('Edicao do departamento cancelada.');
+};
+
+document.getElementById('btnCancelCloserEdit').onclick = () => {
+  resetCloserForm();
+  setMsg('Edicao da closer cancelada.');
 };
 
 document.getElementById('btnSaveUser').onclick = async () => {
@@ -884,7 +1413,7 @@ document.getElementById('btnSaveUser').onclick = async () => {
     }
 
     resetUserForm();
-    await Promise.all([loadUsers(), loadDepartments()]);
+    await Promise.all([loadUsers(), loadDepartments(), loadClosers(), loadSalesOverview()]);
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
   }
@@ -921,9 +1450,88 @@ document.getElementById('btnSaveDepartment').onclick = async () => {
     }
 
     resetDepartmentForm();
-    await loadDepartments();
+    await Promise.all([loadDepartments(), loadUsers()]);
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnSaveCloser').onclick = async () => {
+  const closerId = document.getElementById('editingCloserId').value;
+  const payload = {
+    official_name: document.getElementById('closerOfficialName').value.trim(),
+    display_name: document.getElementById('closerDisplayName').value.trim(),
+    user_id: document.getElementById('closerUserId').value || '',
+    status: document.getElementById('closerStatus').value,
+    aliases: document.getElementById('closerAliases').value,
+    notes: document.getElementById('closerNotes').value.trim(),
+  };
+
+  if (!payload.official_name) {
+    setMsg('Informe o nome oficial da closer.', true);
+    return;
+  }
+
+  try {
+    if (closerId) {
+      await api(`/api/admin/closers/${closerId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Closer atualizada com sucesso.');
+    } else {
+      await api('/api/admin/closers', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Closer criada com sucesso.');
+    }
+
+    resetCloserForm();
+    await Promise.all([loadClosers(), loadSalesOverview(), loadSalesRecords(), loadSalesLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnImportSales').onclick = async () => {
+  const salesWorkbook = document.getElementById('salesWorkbookInput').files[0];
+  const postSaleWorkbook = document.getElementById('postSaleWorkbookInput').files[0];
+
+  if (!salesWorkbook) {
+    setMsg('Selecione a planilha principal de vendas antes de importar.', true);
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append('sales_workbook', salesWorkbook, salesWorkbook.name);
+  if (postSaleWorkbook) {
+    fd.append('post_sale_workbook', postSaleWorkbook, postSaleWorkbook.name);
+  }
+
+  const button = document.getElementById('btnImportSales');
+  button.disabled = true;
+  button.textContent = 'Importando...';
+  setSalesImportState('Processando planilhas e vinculando closers...', 'loading');
+
+  try {
+    const result = await api('/api/admin/sales/import', {
+      method: 'POST',
+      body: fd,
+    });
+    const summary = result.summary || {};
+    setSalesImportState(`${Number(summary.inserted_rows || 0)} nova(s), ${Number(summary.updated_rows || 0)} atualizada(s) e ${Number(summary.duplicate_rows || 0)} duplicada(s) ignorada(s).`, 'success');
+    setMsg('Importacao comercial concluida com sucesso.');
+    document.getElementById('salesWorkbookInput').value = '';
+    document.getElementById('postSaleWorkbookInput').value = '';
+    updateSalesWorkbookLabels();
+    await Promise.all([loadClosers(), loadSalesOverview(), loadSalesRecords(), loadSalesLogs()]);
+  } catch (err) {
+    setSalesImportState('Falha na importacao: ' + err.message, 'error');
+    setMsg('Erro: ' + err.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Importar planilhas';
   }
 };
 
@@ -1036,10 +1644,13 @@ syncSectionToggles();
 renderRagSelection();
 setRagUploadState('Pronto para novos envios.');
 setRagUploadProgress(0, 0, false);
+setSalesImportState('Pronto para importar matriculas e vincular por closer.');
 resetUserForm();
 resetDepartmentForm();
+resetCloserForm();
+updateSalesWorkbookLabels();
 
-Promise.all([loadDepartments(), loadUsers(), loadRagStatus(), loadRagFiles()])
+Promise.all([loadDepartments(), loadUsers(), loadRagStatus(), loadRagFiles(), loadClosers(), loadSalesOverview(), loadSalesRecords(), loadSalesLogs()])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
 </script>
 </body>

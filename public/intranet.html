@@ -22,6 +22,7 @@
         <a href="#modules" class="intranet-nav-link">Modulos</a>
         <a href="#departments" class="intranet-nav-link">Departamentos</a>
         <a href="#documents" class="intranet-nav-link">Documentos</a>
+        <a href="#sales" class="intranet-nav-link sales-nav-link" id="salesNavLink" hidden>Comercial</a>
         <a href="#communication" class="intranet-nav-link">Comunicacao</a>
       </nav>
 
@@ -110,6 +111,79 @@
           <input id="documentSearch" class="intranet-search" placeholder="Filtrar documentos e modulos" />
         </div>
         <div class="intranet-document-grid" id="documentGrid"></div>
+      </section>
+
+      <section class="intranet-section sales-section" id="sales" hidden>
+        <div class="intranet-section-head intranet-section-head-stack">
+          <div>
+            <div class="intranet-section-eyebrow">Comercial e pos-venda</div>
+            <h3 class="intranet-section-title">Operacao de matriculas por closer</h3>
+          </div>
+        </div>
+
+        <div class="intranet-sales-summary" id="salesSummaryCards"></div>
+        <div class="intranet-sales-closers" id="salesCloserCards"></div>
+
+        <div class="intranet-sales-filter-grid">
+          <div>
+            <label for="salesCloserFilter">Closer</label>
+            <select id="salesCloserFilter">
+              <option value="">Todas</option>
+            </select>
+          </div>
+          <div>
+            <label for="salesStatusFilter">Status</label>
+            <select id="salesStatusFilter">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label for="salesSearchInput">Busca</label>
+            <input id="salesSearchInput" class="intranet-search" placeholder="Aluno, curso, closer ou midia" />
+          </div>
+          <div class="intranet-topbar-actions">
+            <button class="btn" id="btnRefreshSales" type="button">Atualizar</button>
+          </div>
+        </div>
+
+        <div class="intranet-sales-layout">
+          <div class="intranet-sales-records" id="salesRecordGrid"></div>
+          <aside class="intranet-sales-detail" id="salesDetailPanel">
+            <div class="intranet-sales-detail-head">
+              <div>
+                <div class="intranet-section-eyebrow">Historico do registro</div>
+                <h4 id="salesDetailTitle">Selecione uma matricula</h4>
+              </div>
+            </div>
+            <div class="intranet-sales-meta" id="salesDetailMeta"></div>
+            <form class="intranet-sales-detail-form" id="salesDetailForm">
+              <div>
+                <label for="salesOperationalStatus">Status operacional</label>
+                <input id="salesOperationalStatus" placeholder="Ex.: Em andamento" />
+              </div>
+              <div>
+                <label for="salesNextAction">Proxima acao</label>
+                <input id="salesNextAction" placeholder="Ex.: Ligar amanha" />
+              </div>
+              <div>
+                <label for="salesNextActionDate">Data da proxima acao</label>
+                <input id="salesNextActionDate" type="date" />
+              </div>
+              <div>
+                <label for="salesFollowUpNotes">Notas de follow-up</label>
+                <textarea id="salesFollowUpNotes" placeholder="Registre o andamento comercial ou de pos-venda"></textarea>
+              </div>
+              <div>
+                <label for="salesObservations">Observacoes</label>
+                <textarea id="salesObservations" placeholder="Informacoes complementares do caso"></textarea>
+              </div>
+              <div class="intranet-topbar-actions">
+                <button class="btn" id="btnSaveSalesRecord" type="submit">Salvar atualizacao</button>
+              </div>
+            </form>
+            <div class="intranet-sales-history" id="salesHistoryList"></div>
+          </aside>
+        </div>
       </section>
 
       <section class="intranet-section" id="communication">

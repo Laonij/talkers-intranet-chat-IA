@@ -2169,6 +2169,15 @@ body.app-shell .intranet-btn:hover {
   gap: 18px;
 }
 
+.admin-side-head,
+.admin-panel-head-collapsible {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .admin-form-grid {
   margin-bottom: 14px;
 }
@@ -2270,6 +2279,121 @@ body.app-shell .intranet-btn:hover {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: #fff;
+}
+
+.admin-upload-file {
+  margin-top: 10px;
+}
+
+.admin-collapse-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #334155;
+  font-weight: 700;
+}
+
+.admin-collapsible-body[hidden] {
+  display: none;
+}
+
+.admin-summary-grid,
+.admin-chip-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin-bottom: 14px;
+}
+
+.admin-chip-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 14px;
+}
+
+.admin-metric-card,
+.admin-chip-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #fff;
+}
+
+.admin-metric-card {
+  padding: 14px 16px;
+  box-shadow: 0 12px 26px rgba(15,23,42,.05);
+}
+
+.admin-metric-card.primary {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.admin-metric-card.success {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.admin-metric-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.admin-metric-label {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.admin-chip-card {
+  padding: 14px 16px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.admin-chip-card strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.admin-chip-card span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.admin-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+.admin-filter-actions {
+  display: flex;
+  align-items: center;
+}
+
+.admin-subsection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 10px;
+}
+
+.admin-subsection-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0f172a;
 }
 
 .intranet-shell {
@@ -2581,6 +2705,124 @@ body.app-shell .intranet-btn:hover {
   max-width: 320px;
 }
 
+.sales-section[hidden],
+.sales-nav-link[hidden] {
+  display: none !important;
+}
+
+.intranet-sales-summary,
+.intranet-sales-closers {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.intranet-sales-summary {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.intranet-sales-closers {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.intranet-sales-card,
+.intranet-sales-closer,
+.intranet-sales-record,
+.intranet-sales-detail {
+  border: 1px solid #e5e7eb;
+  border-radius: 22px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 20px 45px rgba(15,23,42,.05);
+}
+
+.intranet-sales-card,
+.intranet-sales-closer,
+.intranet-sales-record,
+.intranet-sales-detail {
+  padding: 16px;
+}
+
+.intranet-sales-card strong,
+.intranet-sales-closer strong {
+  display: block;
+  font-size: 28px;
+  color: #0f172a;
+}
+
+.intranet-sales-card span,
+.intranet-sales-closer span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.intranet-sales-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+  gap: 18px;
+}
+
+.intranet-sales-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.intranet-sales-records {
+  display: grid;
+  gap: 12px;
+}
+
+.intranet-sales-record {
+  cursor: pointer;
+}
+
+.intranet-sales-record-head,
+.intranet-sales-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.intranet-sales-record h4,
+.intranet-sales-detail h4 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.intranet-sales-meta,
+.intranet-sales-history {
+  display: grid;
+  gap: 10px;
+}
+
+.intranet-sales-meta-item,
+.intranet-sales-history-item {
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.intranet-sales-history-item strong,
+.intranet-sales-meta-item strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.intranet-sales-detail-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.intranet-sales-detail textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
 .intranet-empty-card {
   grid-column: 1 / -1;
   color: #6b7280;
@@ -2600,6 +2842,10 @@ body.app-shell .intranet-btn:hover {
 @media (max-width: 960px) {
   .admin-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-filter-grid {
+    grid-template-columns: 1fr 1fr;
   }
 
   .departments-grid {
@@ -2655,6 +2901,14 @@ body.app-shell .intranet-btn:hover {
   .intranet-search {
     max-width: none;
   }
+
+  .intranet-sales-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .intranet-sales-filter-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 
@@ -2691,6 +2945,8 @@ body.app-shell .intranet-btn:hover {
 
   .admin-form-grid,
   .admin-content-grid,
+  .admin-summary-grid,
+  .admin-chip-grid,
   .intranet-stats,
   .intranet-highlight-list,
   .intranet-quick-grid,
@@ -2732,6 +2988,11 @@ body.app-shell .intranet-btn:hover {
 
   .intranet-search {
     width: 100%;
+  }
+
+  .admin-filter-grid,
+  .intranet-sales-filter-grid {
+    grid-template-columns: 1fr;
   }
 }
 

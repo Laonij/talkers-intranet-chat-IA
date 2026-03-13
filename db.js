@@ -1,4 +1,4 @@
-﻿const fs = require("fs");
+const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 const { Pool } = require("pg");
@@ -398,6 +398,128 @@ async function migrateSqlite() {
   `);
 
   await execSqlite(`
+    CREATE TABLE IF NOT EXISTS closers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      official_name TEXT NOT NULL UNIQUE,
+      display_name TEXT,
+      user_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS closer_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      closer_id INTEGER NOT NULL,
+      alias_name TEXT NOT NULL UNIQUE,
+      origin TEXT NOT NULL DEFAULT 'manual',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS sales_import_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_key TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT 'manual_upload',
+      sheet_name TEXT NOT NULL DEFAULT 'MATRICULAS NOVAS',
+      post_sale_sheet_pattern TEXT,
+      config_json TEXT,
+      last_imported_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS sales_import_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id INTEGER,
+      origin_type TEXT NOT NULL DEFAULT 'manual_upload',
+      source_workbook TEXT,
+      post_sale_workbook TEXT,
+      source_sheet TEXT NOT NULL DEFAULT 'MATRICULAS NOVAS',
+      total_rows INTEGER NOT NULL DEFAULT 0,
+      inserted_rows INTEGER NOT NULL DEFAULT 0,
+      updated_rows INTEGER NOT NULL DEFAULT 0,
+      duplicate_rows INTEGER NOT NULL DEFAULT 0,
+      ignored_rows INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'completed',
+      triggered_by INTEGER,
+      summary_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS sales_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id INTEGER,
+      import_run_id INTEGER,
+      origin_type TEXT NOT NULL DEFAULT 'spreadsheet_import',
+      source_workbook TEXT,
+      source_sheet TEXT,
+      source_row_number INTEGER,
+      source_row_identifier TEXT,
+      dedupe_hash TEXT NOT NULL UNIQUE,
+      row_hash TEXT,
+      student_name TEXT NOT NULL,
+      course_name TEXT,
+      sale_month TEXT,
+      sale_date TEXT,
+      semester_label TEXT,
+      availability TEXT,
+      modality TEXT,
+      class_type TEXT,
+      system_name TEXT,
+      contract_status TEXT,
+      language TEXT,
+      closer_original TEXT,
+      closer_normalized TEXT,
+      closer_id INTEGER,
+      user_id INTEGER,
+      media_source TEXT,
+      profession TEXT,
+      indication TEXT,
+      source_payload_json TEXT,
+      operational_status TEXT NOT NULL DEFAULT 'Novo',
+      follow_up_notes TEXT,
+      next_action TEXT,
+      next_action_date TEXT,
+      observations TEXT,
+      custom_fields_json TEXT,
+      last_synced_at TEXT,
+      last_modified_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS entity_change_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      field_name TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      actor_user_id INTEGER,
+      closer_id INTEGER,
+      origin TEXT NOT NULL DEFAULT 'system',
+      detail_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
     CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
     USING fts5(extracted_text, translated_text, rel_path, keywords, language, content='documents', content_rowid='id');
   `);
@@ -424,6 +546,16 @@ async function migrateSqlite() {
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_department ON knowledge_sources(department_name, created_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_semantic_cache_scope_updated ON semantic_cache(scope_key, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_closers_status ON closers(status, official_name);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_closers_user ON closers(user_id);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_closer_aliases_closer ON closer_aliases(closer_id);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_sales_import_runs_created ON sales_import_runs(created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_sales_records_closer ON sales_records(closer_id, sale_date);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_sales_records_user ON sales_records(user_id, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_sales_records_status ON sales_records(operational_status, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_sales_records_workbook ON sales_records(source_workbook, source_sheet);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_entity_change_log_entity ON entity_change_log(entity_type, entity_id, created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_entity_change_log_actor ON entity_change_log(actor_user_id, created_at);");
 
   await execSqlite(`
     CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
@@ -653,6 +785,128 @@ async function migratePostgres() {
     );
   `);
 
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS closers (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      official_name TEXT NOT NULL UNIQUE,
+      display_name TEXT,
+      user_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS closer_aliases (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      closer_id INTEGER NOT NULL,
+      alias_name TEXT NOT NULL UNIQUE,
+      origin TEXT NOT NULL DEFAULT 'manual',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS sales_import_sources (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      source_key TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT 'manual_upload',
+      sheet_name TEXT NOT NULL DEFAULT 'MATRICULAS NOVAS',
+      post_sale_sheet_pattern TEXT,
+      config_json TEXT,
+      last_imported_at TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS sales_import_runs (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      source_id INTEGER,
+      origin_type TEXT NOT NULL DEFAULT 'manual_upload',
+      source_workbook TEXT,
+      post_sale_workbook TEXT,
+      source_sheet TEXT NOT NULL DEFAULT 'MATRICULAS NOVAS',
+      total_rows INTEGER NOT NULL DEFAULT 0,
+      inserted_rows INTEGER NOT NULL DEFAULT 0,
+      updated_rows INTEGER NOT NULL DEFAULT 0,
+      duplicate_rows INTEGER NOT NULL DEFAULT 0,
+      ignored_rows INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'completed',
+      triggered_by INTEGER,
+      summary_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS sales_records (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      source_id INTEGER,
+      import_run_id INTEGER,
+      origin_type TEXT NOT NULL DEFAULT 'spreadsheet_import',
+      source_workbook TEXT,
+      source_sheet TEXT,
+      source_row_number INTEGER,
+      source_row_identifier TEXT,
+      dedupe_hash TEXT NOT NULL UNIQUE,
+      row_hash TEXT,
+      student_name TEXT NOT NULL,
+      course_name TEXT,
+      sale_month TEXT,
+      sale_date TEXT,
+      semester_label TEXT,
+      availability TEXT,
+      modality TEXT,
+      class_type TEXT,
+      system_name TEXT,
+      contract_status TEXT,
+      language TEXT,
+      closer_original TEXT,
+      closer_normalized TEXT,
+      closer_id INTEGER,
+      user_id INTEGER,
+      media_source TEXT,
+      profession TEXT,
+      indication TEXT,
+      source_payload_json TEXT,
+      operational_status TEXT NOT NULL DEFAULT 'Novo',
+      follow_up_notes TEXT,
+      next_action TEXT,
+      next_action_date TEXT,
+      observations TEXT,
+      custom_fields_json TEXT,
+      last_synced_at TIMESTAMPTZ,
+      last_modified_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS entity_change_log (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      field_name TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      actor_user_id INTEGER,
+      closer_id INTEGER,
+      origin TEXT NOT NULL DEFAULT 'system',
+      detail_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS can_access_intranet BOOLEAN NOT NULL DEFAULT FALSE;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT;");
@@ -711,6 +965,16 @@ async function migratePostgres() {
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_created ON knowledge_sources(created_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_knowledge_sources_department ON knowledge_sources(department_name, created_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_semantic_cache_scope_updated ON semantic_cache(scope_key, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_closers_status ON closers(status, official_name);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_closers_user ON closers(user_id);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_closer_aliases_closer ON closer_aliases(closer_id);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_sales_import_runs_created ON sales_import_runs(created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_sales_records_closer ON sales_records(closer_id, sale_date);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_sales_records_user ON sales_records(user_id, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_sales_records_status ON sales_records(operational_status, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_sales_records_workbook ON sales_records(source_workbook, source_sheet);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_entity_change_log_entity ON entity_change_log(entity_type, entity_id, created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_entity_change_log_actor ON entity_change_log(actor_user_id, created_at);");
 }
 async function postgresHasData() {
   const tables = [
@@ -749,7 +1013,7 @@ async function importLegacySqliteIntoPostgres() {
     legacyDb = await openLegacySqlite(sqlitePath);
     const tableRows = await sqliteAllFrom(
       legacyDb,
-      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','semantic_cache')"
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log')"
     );
 
     if (!Array.isArray(tableRows) || !tableRows.length) {
@@ -775,6 +1039,12 @@ async function importLegacySqliteIntoPostgres() {
         { name: "user_memories", pk: "user_id", orderBy: "user_id" },
         { name: "knowledge_sources", pk: "id", orderBy: "id" },
         { name: "semantic_cache", pk: "id", orderBy: "id" },
+        { name: "closers", pk: "id", orderBy: "id" },
+        { name: "closer_aliases", pk: "id", orderBy: "id" },
+        { name: "sales_import_sources", pk: "id", orderBy: "id" },
+        { name: "sales_import_runs", pk: "id", orderBy: "id" },
+        { name: "sales_records", pk: "id", orderBy: "id" },
+        { name: "entity_change_log", pk: "id", orderBy: "id" },
       ];
 
       const availableTables = new Set(tableRows.map((row) => row.name));
@@ -808,6 +1078,12 @@ async function importLegacySqliteIntoPostgres() {
       await setPostgresSequence(client, "document_chunks", "id");
       await setPostgresSequence(client, "knowledge_sources", "id");
       await setPostgresSequence(client, "semantic_cache", "id");
+      await setPostgresSequence(client, "closers", "id");
+      await setPostgresSequence(client, "closer_aliases", "id");
+      await setPostgresSequence(client, "sales_import_sources", "id");
+      await setPostgresSequence(client, "sales_import_runs", "id");
+      await setPostgresSequence(client, "sales_records", "id");
+      await setPostgresSequence(client, "entity_change_log", "id");
 
       await client.query("COMMIT");
       console.log(`Migracao automatica SQLite -> Postgres concluida a partir de ${sqlitePath}.`);
@@ -1017,6 +1293,11 @@ module.exports = {
   sqlitePath,
   uploadsDir,
 };
+
+
+
+
+
 
 
 

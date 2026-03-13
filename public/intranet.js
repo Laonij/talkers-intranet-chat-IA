@@ -24,6 +24,14 @@ const ICONS = {
 let bootstrapData = null;
 let allDocumentItems = [];
 let allModuleItems = [];
+let salesState = {
+  enabled: false,
+  summary: null,
+  records: [],
+  closers: [],
+  selectedRecordId: null,
+  canEditAll: false,
+};
 
 function renderIcon(name) {
   return ICONS[name] || ICONS.general;
@@ -250,6 +258,227 @@ function renderDocuments(intranet, query = '') {
   });
 }
 
+function setSalesSectionVisible(isVisible) {
+  const section = el('sales');
+  const navLink = el('salesNavLink');
+  if (section) section.hidden = !isVisible;
+  if (navLink) navLink.hidden = !isVisible;
+}
+
+function renderSalesSummary(sales) {
+  const summaryWrap = el('salesSummaryCards');
+  const closerWrap = el('salesCloserCards');
+  summaryWrap.innerHTML = '';
+  closerWrap.innerHTML = '';
+
+  if (!sales?.enabled) {
+    summaryWrap.innerHTML = '<div class="intranet-empty-card">Nenhuma operacao comercial liberada para este perfil.</div>';
+    return;
+  }
+
+  const statusEntries = Object.entries(sales.summary?.statuses || {});
+  const cards = [
+    { label: 'Matriculas', value: Number(sales.summary?.total || 0) },
+    { label: 'Closers ativas', value: Array.isArray(sales.closers) ? sales.closers.length : 0 },
+    { label: 'Escopo atual', value: sales.can_view_all ? 'Geral' : 'Minha carteira' },
+  ];
+  statusEntries.slice(0, 3).forEach(([status, total]) => {
+    cards.push({ label: status, value: Number(total || 0) });
+  });
+
+  cards.forEach((card) => {
+    const item = document.createElement('article');
+    item.className = 'intranet-sales-card';
+    item.innerHTML = `<strong>${escapeHtml(card.value)}</strong><span>${escapeHtml(card.label)}</span>`;
+    summaryWrap.appendChild(item);
+  });
+
+  (sales.summary?.by_closer || []).slice(0, 8).forEach((closer) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'intranet-sales-closer';
+    card.innerHTML = `<strong>${escapeHtml(closer.closer_name || 'Sem closer')}</strong><span>${Number(closer.total || 0)} matricula(s)</span>`;
+    card.onclick = () => {
+      el('salesCloserFilter').value = closer.closer_id ? String(closer.closer_id) : '';
+      fetchSalesRecords();
+    };
+    closerWrap.appendChild(card);
+  });
+}
+
+function renderSalesFilterOptions(sales) {
+  const closerSelect = el('salesCloserFilter');
+  const statusSelect = el('salesStatusFilter');
+  const previousCloser = closerSelect.value;
+  const previousStatus = statusSelect.value;
+
+  closerSelect.innerHTML = '<option value="">Todas</option>';
+  (sales.closers || []).forEach((closer) => {
+    const option = document.createElement('option');
+    option.value = String(closer.id);
+    option.textContent = closer.display_name || closer.official_name;
+    closerSelect.appendChild(option);
+  });
+  if (Array.from(closerSelect.options).some((option) => option.value === previousCloser)) {
+    closerSelect.value = previousCloser;
+  }
+
+  statusSelect.innerHTML = '<option value="">Todos</option>';
+  Object.entries(sales.summary?.statuses || {}).forEach(([status, total]) => {
+    const option = document.createElement('option');
+    option.value = status;
+    option.textContent = `${status} (${total})`;
+    statusSelect.appendChild(option);
+  });
+  if (Array.from(statusSelect.options).some((option) => option.value === previousStatus)) {
+    statusSelect.value = previousStatus;
+  }
+}
+
+function getEditableSalesRecord(record) {
+  const userId = Number(bootstrapData?.user?.id || 0);
+  if (!record) return false;
+  return Boolean(salesState.canEditAll || Number(record.user_id || 0) === userId);
+}
+
+function renderSalesDetail(record, history = []) {
+  const title = el('salesDetailTitle');
+  const meta = el('salesDetailMeta');
+  const historyWrap = el('salesHistoryList');
+  const form = el('salesDetailForm');
+
+  if (!record) {
+    title.textContent = 'Selecione uma matricula';
+    meta.innerHTML = '<div class="intranet-empty-card">Clique em um registro para ver detalhes, historico e editar os campos permitidos.</div>';
+    historyWrap.innerHTML = '';
+    form.reset();
+    Array.from(form.elements).forEach((field) => {
+      if (field.tagName === 'BUTTON') return;
+      field.disabled = true;
+    });
+    return;
+  }
+
+  title.textContent = record.student_name || 'Matricula';
+  meta.innerHTML = [
+    ['Curso', record.course_name || '-'],
+    ['Closer', record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer'],
+    ['Data', record.sale_date || '-'],
+    ['Status', record.operational_status || 'Novo'],
+    ['Origem', record.media_source || record.source_workbook || '-'],
+    ['Idioma', record.language || '-'],
+  ].map(([label, value]) => `<div class="intranet-sales-meta-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`).join('');
+
+  el('salesOperationalStatus').value = record.operational_status || '';
+  el('salesNextAction').value = record.next_action || '';
+  el('salesNextActionDate').value = record.next_action_date || '';
+  el('salesFollowUpNotes').value = record.follow_up_notes || '';
+  el('salesObservations').value = record.observations || '';
+
+  const canEdit = getEditableSalesRecord(record);
+  Array.from(form.elements).forEach((field) => {
+    if (field.tagName === 'BUTTON') return;
+    field.disabled = !canEdit;
+  });
+  el('btnSaveSalesRecord').disabled = !canEdit;
+
+  if (!history.length) {
+    historyWrap.innerHTML = '<div class="intranet-empty-card">Nenhum historico registrado ainda.</div>';
+    return;
+  }
+
+  historyWrap.innerHTML = history.map((item) => `
+    <div class="intranet-sales-history-item">
+      <strong>${escapeHtml(item.action || 'Atualizacao')}</strong>
+      <div class="small muted">${escapeHtml(formatDate(item.created_at))} - ${escapeHtml(item.actor_name || 'Sistema')}</div>
+      <div>${escapeHtml(item.field_name || '')}${item.old_value || item.new_value ? `: ${escapeHtml(item.old_value || '-')} -> ${escapeHtml(item.new_value || '-')}` : ''}</div>
+    </div>
+  `).join('');
+}
+
+function renderSalesRecordsGrid() {
+  const wrap = el('salesRecordGrid');
+  wrap.innerHTML = '';
+
+  if (!salesState.records.length) {
+    wrap.innerHTML = '<div class="intranet-empty-card">Nenhuma matricula encontrada para os filtros atuais.</div>';
+    renderSalesDetail(null, []);
+    return;
+  }
+
+  salesState.records.forEach((record) => {
+    const card = document.createElement('article');
+    card.className = 'intranet-sales-record';
+    if (Number(record.id) === Number(salesState.selectedRecordId || 0)) {
+      card.style.borderColor = '#bbf7d0';
+      card.style.boxShadow = '0 18px 32px rgba(15,23,42,.08)';
+    }
+    card.innerHTML = `
+      <div class="intranet-sales-record-head">
+        <div>
+          <h4>${escapeHtml(record.student_name || 'Sem nome')}</h4>
+          <div class="small muted">${escapeHtml(record.course_name || '-')}</div>
+        </div>
+        <span class="intranet-chip">${escapeHtml(record.operational_status || 'Novo')}</span>
+      </div>
+      <div class="small muted">${escapeHtml(record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer')}</div>
+      <div class="small muted">${escapeHtml(record.sale_date || '-')} - ${escapeHtml(record.media_source || record.source_workbook || '-')}</div>
+    `;
+    card.onclick = () => selectSalesRecord(record.id);
+    wrap.appendChild(card);
+  });
+}
+
+async function selectSalesRecord(recordId) {
+  salesState.selectedRecordId = Number(recordId);
+  renderSalesRecordsGrid();
+  try {
+    const { record, history } = await api(`/api/intranet/sales/records/${recordId}/history`);
+    renderSalesDetail(record, history || []);
+  } catch (err) {
+    renderSalesDetail(salesState.records.find((item) => Number(item.id) === Number(recordId)), []);
+  }
+}
+
+async function fetchSalesRecords() {
+  const params = new URLSearchParams();
+  const closerId = el('salesCloserFilter').value;
+  const status = el('salesStatusFilter').value;
+  const search = el('salesSearchInput').value.trim();
+  if (closerId) params.set('closer_id', closerId);
+  if (status) params.set('status', status);
+  if (search) params.set('search', search);
+  params.set('limit', '80');
+
+  const { records } = await api(`/api/intranet/sales/records?${params.toString()}`);
+  salesState.records = records || [];
+  if (!salesState.records.some((item) => Number(item.id) === Number(salesState.selectedRecordId || 0))) {
+    salesState.selectedRecordId = salesState.records[0]?.id || null;
+  }
+  renderSalesRecordsGrid();
+  if (salesState.selectedRecordId) {
+    await selectSalesRecord(salesState.selectedRecordId);
+  }
+}
+
+function hydrateSalesWorkspace(intranet) {
+  const sales = intranet.sales || { enabled: false };
+  salesState = {
+    enabled: Boolean(sales.enabled),
+    summary: sales.summary || null,
+    records: Array.isArray(sales.records) ? sales.records : [],
+    closers: Array.isArray(sales.closers) ? sales.closers : [],
+    selectedRecordId: sales.records?.[0]?.id || null,
+    canEditAll: Boolean(sales.can_edit_all),
+  };
+
+  setSalesSectionVisible(salesState.enabled);
+  if (!salesState.enabled) return;
+  renderSalesSummary(sales);
+  renderSalesFilterOptions(sales);
+  renderSalesRecordsGrid();
+}
+
 function renderCommunication(intranet) {
   const grid = el('communicationGrid');
   grid.innerHTML = '';
@@ -305,9 +534,43 @@ async function init() {
   renderModules(intranet);
   renderDepartments(intranet);
   renderDocuments(intranet);
+  hydrateSalesWorkspace(intranet);
   renderCommunication(intranet);
 
   el('documentSearch').addEventListener('input', applyDocumentFilter);
+  el('btnRefreshSales')?.addEventListener('click', fetchSalesRecords);
+  el('salesCloserFilter')?.addEventListener('change', fetchSalesRecords);
+  el('salesStatusFilter')?.addEventListener('change', fetchSalesRecords);
+  el('salesSearchInput')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      fetchSalesRecords();
+    }
+  });
+  el('salesDetailForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!salesState.selectedRecordId) return;
+    const payload = {
+      operational_status: el('salesOperationalStatus').value.trim(),
+      next_action: el('salesNextAction').value.trim(),
+      next_action_date: el('salesNextActionDate').value,
+      follow_up_notes: el('salesFollowUpNotes').value.trim(),
+      observations: el('salesObservations').value.trim(),
+    };
+
+    try {
+      const { record, history } = await api(`/api/intranet/sales/records/${salesState.selectedRecordId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      const index = salesState.records.findIndex((item) => Number(item.id) === Number(record.id));
+      if (index >= 0) salesState.records[index] = record;
+      renderSalesRecordsGrid();
+      renderSalesDetail(record, history || []);
+    } catch (err) {
+      alert('Nao foi possivel salvar a atualizacao: ' + err.message);
+    }
+  });
   el('btnIntranetMenu').addEventListener('click', () => setSidebarOpen(true));
   document.addEventListener('click', (event) => {
     if (window.innerWidth > 960) return;
@@ -319,6 +582,10 @@ async function init() {
   window.addEventListener('resize', () => {
     if (window.innerWidth > 960) setSidebarOpen(false);
   });
+
+  if (salesState.enabled && salesState.selectedRecordId) {
+    selectSalesRecord(salesState.selectedRecordId);
+  }
 }
 
 window.addEventListener('DOMContentLoaded', init);

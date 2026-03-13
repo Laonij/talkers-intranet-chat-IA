@@ -738,12 +738,26 @@ async function listIntranetAnnouncements(options = {}) {
   const includeInactive = Boolean(options.includeInactive);
   const limit = Math.max(1, Math.min(200, Number(options.limit || 40)));
   const rows = await all(
-    `SELECT id, title, content_text, summary_text, audience_scope, department_ids_json, announcement_type, priority, is_pinned, is_active,
-            starts_at, ends_at, author_user_id, created_at, updated_at, users.name AS author_name
+    `SELECT intranet_announcements.id,
+            intranet_announcements.title,
+            intranet_announcements.content_text,
+            intranet_announcements.summary_text,
+            intranet_announcements.audience_scope,
+            intranet_announcements.department_ids_json,
+            intranet_announcements.announcement_type,
+            intranet_announcements.priority,
+            intranet_announcements.is_pinned,
+            intranet_announcements.is_active,
+            intranet_announcements.starts_at,
+            intranet_announcements.ends_at,
+            intranet_announcements.author_user_id,
+            intranet_announcements.created_at,
+            intranet_announcements.updated_at,
+            users.name AS author_name
        FROM intranet_announcements
   LEFT JOIN users ON users.id = intranet_announcements.author_user_id
-      ${includeInactive ? '' : 'WHERE COALESCE(is_active, 1) = 1'}
-      ORDER BY COALESCE(is_pinned, 0) DESC, datetime(created_at) DESC, id DESC
+      ${includeInactive ? '' : 'WHERE COALESCE(intranet_announcements.is_active, 1) = 1'}
+      ORDER BY COALESCE(intranet_announcements.is_pinned, 0) DESC, datetime(intranet_announcements.created_at) DESC, intranet_announcements.id DESC
       LIMIT ?`,
     [limit]
   );
@@ -5251,8 +5265,22 @@ app.post("/api/admin/intranet/announcements", requireAuth(JWT_SECRET), requireRo
   );
   await logEvent(req.user.sub, 'admin_create_intranet_announcement', { announcement_id: created.lastID, title, audience_scope: audienceScope });
   const announcement = await all(
-    `SELECT id, title, content_text, summary_text, audience_scope, department_ids_json, announcement_type, priority, is_pinned, is_active,
-            starts_at, ends_at, author_user_id, created_at, updated_at, users.name AS author_name
+    `SELECT intranet_announcements.id,
+            intranet_announcements.title,
+            intranet_announcements.content_text,
+            intranet_announcements.summary_text,
+            intranet_announcements.audience_scope,
+            intranet_announcements.department_ids_json,
+            intranet_announcements.announcement_type,
+            intranet_announcements.priority,
+            intranet_announcements.is_pinned,
+            intranet_announcements.is_active,
+            intranet_announcements.starts_at,
+            intranet_announcements.ends_at,
+            intranet_announcements.author_user_id,
+            intranet_announcements.created_at,
+            intranet_announcements.updated_at,
+            users.name AS author_name
        FROM intranet_announcements
   LEFT JOIN users ON users.id = intranet_announcements.author_user_id
       WHERE intranet_announcements.id=?`,
@@ -5295,8 +5323,22 @@ app.patch("/api/admin/intranet/announcements/:id", requireAuth(JWT_SECRET), requ
   );
   await logEvent(req.user.sub, 'admin_update_intranet_announcement', { announcement_id: announcementId, title, audience_scope: audienceScope });
   const announcement = await all(
-    `SELECT id, title, content_text, summary_text, audience_scope, department_ids_json, announcement_type, priority, is_pinned, is_active,
-            starts_at, ends_at, author_user_id, created_at, updated_at, users.name AS author_name
+    `SELECT intranet_announcements.id,
+            intranet_announcements.title,
+            intranet_announcements.content_text,
+            intranet_announcements.summary_text,
+            intranet_announcements.audience_scope,
+            intranet_announcements.department_ids_json,
+            intranet_announcements.announcement_type,
+            intranet_announcements.priority,
+            intranet_announcements.is_pinned,
+            intranet_announcements.is_active,
+            intranet_announcements.starts_at,
+            intranet_announcements.ends_at,
+            intranet_announcements.author_user_id,
+            intranet_announcements.created_at,
+            intranet_announcements.updated_at,
+            users.name AS author_name
        FROM intranet_announcements
   LEFT JOIN users ON users.id = intranet_announcements.author_user_id
       WHERE intranet_announcements.id=?`,

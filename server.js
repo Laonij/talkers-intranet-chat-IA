@@ -19,6 +19,11 @@ const {
   sanitizeDepartment,
   sanitizeDepartmentList,
 } = require("./lib/intranet");
+const {
+  CALENDAR_MEETING_MODES,
+  buildCalendarEventTypeSeedRows,
+  sanitizeMeetingMode,
+} = require("./lib/calendar");
 const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact } = require("./lib/generate");
@@ -60,6 +65,9 @@ const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
 const MAX_CONVERSATION_MEMORY = 6000;
 const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
 const OPENAI_EMBEDDING_MODEL = String(process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small").trim();
+const OPENAI_PROMPT_ID = String(process.env.OPENAI_PROMPT_ID || "").trim();
+const OPENAI_PROMPT_VERSION = String(process.env.OPENAI_PROMPT_VERSION || "").trim();
+const OPENAI_PROMPT_VARIABLES_JSON = String(process.env.OPENAI_PROMPT_VARIABLES_JSON || "").trim();
 const SEMANTIC_CACHE_MIN_SIMILARITY = 0.93;
 const SEARCH_CANDIDATE_LIMIT = 16;
 const STRUCTURED_REQUEST_RE = /\b(como|explique|instru|passo a passo|melhore|reescreva|reorganize|organize|estrutura|estruture|resuma|traduza|sugest|modelo|mensagem|texto pronto|texto profissional|formate|formatar|resposta|compare|analise|analisar)\b/i;
@@ -149,6 +157,7 @@ const RAG_LOCAL_EXTRACTION_LIMITS = {
 const MEDIA_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".wma", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg"]);
 const MEMORY_ENTRY_MIN_SIMILARITY = 0.43;
 const MAX_MEMORY_CANDIDATES = 120;
+const CALENDAR_EVENT_STATUSES = new Set(["scheduled", "cancelled"]);
 
 validateConfig();
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -753,6 +762,33 @@ async function ensureDepartmentCatalog() {
          metadata_json=excluded.metadata_json,
          updated_at=datetime('now')`,
       [row.slug, row.name, row.description, row.icon, row.isActive ? 1 : 0, row.sortOrder, row.metadataJson]
+    );
+  }
+}
+
+async function ensureCalendarEventTypes() {
+  const rows = buildCalendarEventTypeSeedRows();
+  for (const row of rows) {
+    await run(
+      `INSERT INTO calendar_event_types (event_key, name, description, color, icon, is_active, sort_order, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(event_key) DO UPDATE SET
+         name=excluded.name,
+         description=excluded.description,
+         color=excluded.color,
+         icon=excluded.icon,
+         is_active=excluded.is_active,
+         sort_order=excluded.sort_order,
+         updated_at=datetime('now')`,
+      [
+        row.key,
+        row.name,
+        row.description || null,
+        row.color || null,
+        row.icon || "calendar",
+        row.isActive ? 1 : 0,
+        Number(row.sortOrder || 0),
+      ]
     );
   }
 }
@@ -1521,6 +1557,635 @@ async function buildSalesIntranetPayload(user) {
     })),
   };
 }
+
+function normalizeCalendarUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return /^https?:$/i.test(parsed.protocol) ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function mapCalendarEventTypeRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id || 0),
+    key: row.event_key,
+    name: row.name,
+    description: row.description || "",
+    color: row.color || "#2563eb",
+    icon: row.icon || "calendar",
+    is_active: coerceDbBoolean(row.is_active),
+    sort_order: Number(row.sort_order || 0),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function listCalendarEventTypes({ includeInactive = false } = {}) {
+  const rows = await all(
+    `SELECT id, event_key, name, description, color, icon, is_active, sort_order, created_at, updated_at
+       FROM calendar_event_types
+       ${includeInactive ? "" : "WHERE is_active=?"}
+      ORDER BY sort_order ASC, name ASC`,
+    includeInactive ? [] : [true]
+  );
+  return rows.map(mapCalendarEventTypeRow).filter(Boolean);
+}
+
+function normalizeCalendarParticipantIds(value) {
+  const source = Array.isArray(value)
+    ? value
+    : value == null
+      ? []
+      : [value];
+  const out = [];
+  const seen = new Set();
+  for (const item of source) {
+    const id = Number(item);
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function buildCalendarTimestamp(dateValue = "", timeValue = "", fallbackTime = "09:00") {
+  const safeDate = String(dateValue || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) return "";
+  const safeTime = /^\d{2}:\d{2}$/.test(String(timeValue || "").trim())
+    ? String(timeValue || "").trim()
+    : fallbackTime;
+  return `${safeDate}T${safeTime}:00-03:00`;
+}
+
+function splitCalendarDateTime(value = "") {
+  if (!value) return { date: "", time: "" };
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { date: "", time: "" };
+  const formatterDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const formatterTime = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  return {
+    date: formatterDate.format(date),
+    time: formatterTime.format(date),
+  };
+}
+
+function getCalendarRangeFromQuery(query = {}) {
+  const today = brazilDateKey();
+  const baseDate = String(query.base_date || today).trim();
+  const view = ["month", "week", "day", "list"].includes(String(query.view || "").trim())
+    ? String(query.view || "").trim()
+    : "month";
+
+  let from = String(query.from || "").trim();
+  let to = String(query.to || "").trim();
+
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(baseDate) ? new Date(`${baseDate}T12:00:00-03:00`) : new Date(`${today}T12:00:00-03:00`);
+  if (!from || !to) {
+    const start = new Date(base);
+    const end = new Date(base);
+    if (view === "month") {
+      start.setDate(1);
+      start.setDate(start.getDate() - start.getDay());
+      end.setMonth(end.getMonth() + 1, 0);
+      end.setDate(end.getDate() + (6 - end.getDay()));
+    } else if (view === "week") {
+      start.setDate(start.getDate() - start.getDay());
+      end.setDate(start.getDate() + 6);
+    } else if (view === "day") {
+      end.setDate(end.getDate());
+    } else {
+      end.setDate(end.getDate() + 14);
+    }
+    from = brazilDateKey(start);
+    to = brazilDateKey(end);
+  }
+
+  return { view, from, to, base_date: baseDate };
+}
+
+async function listCalendarUsersForPicker() {
+  const rows = await all(
+    `SELECT id, name, email, role, department, can_access_intranet
+       FROM users
+      WHERE can_access_intranet=?
+      ORDER BY lower(name) ASC, id ASC`,
+    [true]
+  );
+  return rows.map((row) => ({
+    id: Number(row.id || 0),
+    name: row.name || "",
+    email: row.email || "",
+    role: row.role || "user",
+    department: row.department || "",
+    can_access_intranet: coerceDbBoolean(row.can_access_intranet),
+  }));
+}
+
+function buildCalendarAccessWhere(user, filters = {}) {
+  const actorId = Number(user?.id || user?.sub || 0);
+  const clauses = [];
+  const params = [];
+
+  if (user?.role !== "admin") {
+    clauses.push("(ce.created_by=? OR EXISTS (SELECT 1 FROM calendar_event_participants cep_scope WHERE cep_scope.event_id=ce.id AND cep_scope.user_id=?))");
+    params.push(actorId, actorId);
+  }
+
+  if (filters.participantId) {
+    clauses.push("EXISTS (SELECT 1 FROM calendar_event_participants cep_filter WHERE cep_filter.event_id=ce.id AND cep_filter.user_id=?)");
+    params.push(Number(filters.participantId));
+  }
+
+  if (filters.typeId) {
+    clauses.push("ce.event_type_id=?");
+    params.push(Number(filters.typeId));
+  }
+
+  if (filters.mode) {
+    clauses.push("ce.meeting_mode=?");
+    params.push(sanitizeMeetingMode(filters.mode));
+  }
+
+  if (filters.status) {
+    clauses.push("lower(coalesce(ce.status, 'scheduled'))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+
+  if (filters.from) {
+    clauses.push("date(ce.end_at) >= date(?)");
+    params.push(String(filters.from).trim());
+  }
+
+  if (filters.to) {
+    clauses.push("date(ce.start_at) <= date(?)");
+    params.push(String(filters.to).trim());
+  }
+
+  if (filters.search) {
+    const search = `%${String(filters.search).trim()}%`;
+    clauses.push("(lower(coalesce(ce.title, '')) LIKE lower(?) OR lower(coalesce(ce.description, '')) LIKE lower(?) OR lower(coalesce(ce.location, '')) LIKE lower(?) OR lower(coalesce(cet.name, '')) LIKE lower(?))");
+    params.push(search, search, search, search);
+  }
+
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+async function getCalendarParticipantsByEventIds(eventIds = []) {
+  const ids = [...new Set((eventIds || []).map((item) => Number(item)).filter((item) => item > 0))];
+  if (!ids.length) return new Map();
+
+  const rows = await all(
+    `SELECT cep.event_id, cep.user_id, cep.participant_role, cep.response_status, cep.created_at, cep.updated_at,
+            u.name AS user_name, u.email AS user_email, u.role AS user_role
+       FROM calendar_event_participants cep
+       JOIN users u ON u.id = cep.user_id
+      WHERE cep.event_id IN (${ids.map(() => "?").join(", ")})
+      ORDER BY lower(u.name) ASC, cep.id ASC`,
+    ids
+  );
+
+  const out = new Map();
+  for (const row of rows) {
+    const key = Number(row.event_id || 0);
+    if (!out.has(key)) out.set(key, []);
+    out.get(key).push({
+      user_id: Number(row.user_id || 0),
+      name: row.user_name || "",
+      email: row.user_email || "",
+      role: row.user_role || "user",
+      participant_role: row.participant_role || "participant",
+      response_status: row.response_status || "invited",
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+
+  return out;
+}
+
+function serializeCalendarEvent(row, participants = []) {
+  if (!row) return null;
+  const startParts = splitCalendarDateTime(row.start_at);
+  const endParts = splitCalendarDateTime(row.end_at);
+  return {
+    id: Number(row.id || 0),
+    title: row.title || "",
+    description: row.description || "",
+    event_type_id: row.event_type_id ? Number(row.event_type_id) : null,
+    event_type_name: row.event_type_name || "",
+    event_type_color: row.event_type_color || "#2563eb",
+    event_type_icon: row.event_type_icon || "calendar",
+    meeting_mode: sanitizeMeetingMode(row.meeting_mode || "online"),
+    start_at: row.start_at,
+    end_at: row.end_at,
+    start_date: startParts.date,
+    start_time: startParts.time,
+    end_date: endParts.date,
+    end_time: endParts.time,
+    all_day: coerceDbBoolean(row.all_day),
+    location: row.location || "",
+    meeting_link: row.meeting_link || "",
+    notes: row.notes || "",
+    reminder_settings: safeJsonParse(row.reminder_settings_json || "[]") || [],
+    status: row.status || "scheduled",
+    created_by: Number(row.created_by || 0),
+    created_by_name: row.created_by_name || "",
+    last_updated_by: row.last_updated_by ? Number(row.last_updated_by) : null,
+    last_updated_by_name: row.last_updated_by_name || "",
+    cancelled_at: row.cancelled_at || null,
+    cancel_reason: row.cancel_reason || "",
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+    participants,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function listCalendarEventsForUser(user, filters = {}) {
+  const where = buildCalendarAccessWhere(user, filters);
+  const limit = Math.min(250, Math.max(1, Number(filters.limit || 120)));
+  const rows = await all(
+    `SELECT ce.*, cet.name AS event_type_name, cet.color AS event_type_color, cet.icon AS event_type_icon,
+            creator.name AS created_by_name, updater.name AS last_updated_by_name
+       FROM calendar_events ce
+       LEFT JOIN calendar_event_types cet ON cet.id = ce.event_type_id
+       LEFT JOIN users creator ON creator.id = ce.created_by
+       LEFT JOIN users updater ON updater.id = ce.last_updated_by
+       ${where.sql}
+      ORDER BY ce.start_at ASC, ce.id ASC
+      LIMIT ?`,
+    [...where.params, limit]
+  );
+
+  const participantsByEvent = await getCalendarParticipantsByEventIds(rows.map((row) => row.id));
+  return rows.map((row) => serializeCalendarEvent(row, participantsByEvent.get(Number(row.id || 0)) || []));
+}
+
+async function getCalendarEventById(eventId) {
+  return get(
+    `SELECT ce.*, cet.name AS event_type_name, cet.color AS event_type_color, cet.icon AS event_type_icon,
+            creator.name AS created_by_name, updater.name AS last_updated_by_name
+       FROM calendar_events ce
+       LEFT JOIN calendar_event_types cet ON cet.id = ce.event_type_id
+       LEFT JOIN users creator ON creator.id = ce.created_by
+       LEFT JOIN users updater ON updater.id = ce.last_updated_by
+      WHERE ce.id=?`,
+    [eventId]
+  );
+}
+
+function canAccessCalendarEvent(user, event, participants = []) {
+  if (!user || !event) return false;
+  const actorId = Number(user.id || user.sub || 0);
+  if (user.role === "admin") return true;
+  if (Number(event.created_by || 0) === actorId) return true;
+  return (participants || []).some((item) => Number(item.user_id || 0) === actorId);
+}
+
+async function getCalendarEventParticipants(eventId) {
+  const map = await getCalendarParticipantsByEventIds([eventId]);
+  return map.get(Number(eventId || 0)) || [];
+}
+
+async function getCalendarEventHistory(eventId) {
+  const rows = await all(
+    `SELECT cel.id, cel.event_id, cel.action, cel.field_name, cel.old_value, cel.new_value, cel.detail_json, cel.created_at,
+            cel.actor_user_id, u.name AS actor_name
+       FROM calendar_event_logs cel
+       LEFT JOIN users u ON u.id = cel.actor_user_id
+      WHERE cel.event_id=?
+      ORDER BY datetime(cel.created_at) DESC, cel.id DESC`,
+    [eventId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    detail: safeJsonParse(row.detail_json || "{}") || {},
+  }));
+}
+
+async function logCalendarEventChange({
+  eventId,
+  actorUserId = null,
+  action,
+  fieldName = null,
+  oldValue = null,
+  newValue = null,
+  detail = null,
+}) {
+  if (!eventId || !action) return null;
+  const created = await run(
+    "INSERT INTO calendar_event_logs (event_id, actor_user_id, action, field_name, old_value, new_value, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [
+      eventId,
+      actorUserId || null,
+      action,
+      fieldName || null,
+      oldValue == null ? null : String(oldValue),
+      newValue == null ? null : String(newValue),
+      detail ? safeJsonStringify(detail) : null,
+    ]
+  );
+  if (actorUserId) {
+    await logEvent(actorUserId, `calendar_${action}`, {
+      event_id: eventId,
+      field_name: fieldName || null,
+      detail: detail || null,
+    });
+  }
+  return created?.lastID || null;
+}
+
+async function syncCalendarParticipants(eventId, participantIds = [], actorUserId = null) {
+  const desired = [...new Set((participantIds || []).map((item) => Number(item)).filter((item) => item > 0))];
+  const existing = await all(
+    "SELECT id, user_id, participant_role, response_status FROM calendar_event_participants WHERE event_id=?",
+    [eventId]
+  );
+  const existingIds = new Set(existing.map((row) => Number(row.user_id || 0)));
+
+  for (const row of existing) {
+    const userId = Number(row.user_id || 0);
+    if (!desired.includes(userId)) {
+      await run("DELETE FROM calendar_event_participants WHERE id=?", [row.id]);
+      await logCalendarEventChange({
+        eventId,
+        actorUserId,
+        action: "participant_removed",
+        fieldName: "participants",
+        oldValue: userId,
+        newValue: null,
+        detail: { user_id: userId },
+      });
+    }
+  }
+
+  for (const userId of desired) {
+    if (existingIds.has(userId)) continue;
+    await run(
+      "INSERT INTO calendar_event_participants (event_id, user_id, participant_role, response_status) VALUES (?, ?, 'participant', 'invited')",
+      [eventId, userId]
+    );
+    await logCalendarEventChange({
+      eventId,
+      actorUserId,
+      action: "participant_added",
+      fieldName: "participants",
+      oldValue: null,
+      newValue: userId,
+      detail: { user_id: userId },
+    });
+  }
+}
+
+function normalizeCalendarPayload(payload = {}, existing = null) {
+  const merged = { ...(existing || {}), ...(payload || {}) };
+  const allDay = Object.prototype.hasOwnProperty.call(payload || {}, "all_day")
+    ? parseBooleanInput(payload?.all_day)
+    : coerceDbBoolean(existing?.all_day);
+  const startDate = String(payload?.start_date || payload?.date || splitCalendarDateTime(existing?.start_at).date || "").trim();
+  const endDate = String(payload?.end_date || startDate || splitCalendarDateTime(existing?.end_at).date || "").trim();
+  const startTime = allDay ? "00:00" : String(payload?.start_time || splitCalendarDateTime(existing?.start_at).time || "09:00").trim();
+  const endTime = allDay ? "23:59" : String(payload?.end_time || splitCalendarDateTime(existing?.end_at).time || "10:00").trim();
+
+  const participantIds = normalizeCalendarParticipantIds(
+    payload?.participant_ids ??
+    payload?.participants ??
+    payload?.participantIds ??
+    []
+  );
+
+  return {
+    title: String(merged.title || "").trim(),
+    description: String(merged.description || "").trim(),
+    event_type_id: merged.event_type_id ? Number(merged.event_type_id) : null,
+    meeting_mode: sanitizeMeetingMode(merged.meeting_mode || "online"),
+    start_at: buildCalendarTimestamp(startDate, startTime, "09:00"),
+    end_at: buildCalendarTimestamp(endDate || startDate, endTime, "10:00"),
+    all_day: Boolean(allDay),
+    location: String(merged.location || "").trim(),
+    meeting_link: normalizeCalendarUrl(merged.meeting_link || ""),
+    notes: String(merged.notes || merged.observations || "").trim(),
+    reminder_settings_json: safeJsonStringify(Array.isArray(merged.reminder_settings) ? merged.reminder_settings : []),
+    status: CALENDAR_EVENT_STATUSES.has(String(merged.status || "").trim().toLowerCase())
+      ? String(merged.status || "").trim().toLowerCase()
+      : (existing?.status || "scheduled"),
+    cancel_reason: String(merged.cancel_reason || "").trim(),
+    participant_ids: participantIds,
+  };
+}
+
+async function createCalendarEvent(payload = {}, actorUser) {
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0);
+  const normalized = normalizeCalendarPayload(payload);
+
+  if (!normalized.title || !normalized.start_at || !normalized.end_at) {
+    throw new Error("missing_calendar_fields");
+  }
+  if (new Date(normalized.end_at).getTime() < new Date(normalized.start_at).getTime()) {
+    throw new Error("calendar_end_before_start");
+  }
+
+  const participantIds = [...new Set([actorId, ...normalized.participant_ids])];
+  const created = await run(
+    "INSERT INTO calendar_events (title, description, event_type_id, meeting_mode, start_at, end_at, all_day, location, meeting_link, notes, reminder_settings_json, status, created_by, last_updated_by, metadata_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+    [
+      normalized.title,
+      normalized.description || null,
+      normalized.event_type_id || null,
+      normalized.meeting_mode,
+      normalized.start_at,
+      normalized.end_at,
+      normalized.all_day,
+      normalized.location || null,
+      normalized.meeting_link || null,
+      normalized.notes || null,
+      normalized.reminder_settings_json,
+      normalized.status,
+      actorId,
+      actorId,
+      safeJsonStringify({ origin: "intranet_calendar" }),
+    ]
+  );
+
+  await syncCalendarParticipants(created.lastID, participantIds, actorId);
+  await logCalendarEventChange({
+    eventId: created.lastID,
+    actorUserId: actorId,
+    action: "created",
+    detail: {
+      title: normalized.title,
+      participant_ids: participantIds,
+      meeting_mode: normalized.meeting_mode,
+    },
+  });
+
+  const event = await getCalendarEventById(created.lastID);
+  const participants = await getCalendarEventParticipants(created.lastID);
+  return serializeCalendarEvent(event, participants);
+}
+
+async function updateCalendarEvent(eventId, payload = {}, actorUser) {
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0);
+  const existing = await getCalendarEventById(eventId);
+  if (!existing) throw new Error("not_found");
+
+  const existingParticipants = await getCalendarEventParticipants(eventId);
+  if (!(actorUser?.role === "admin" || Number(existing.created_by || 0) === actorId)) {
+    throw new Error("forbidden");
+  }
+
+  const normalized = normalizeCalendarPayload(payload, existing);
+  if (!normalized.title || !normalized.start_at || !normalized.end_at) {
+    throw new Error("missing_calendar_fields");
+  }
+  if (new Date(normalized.end_at).getTime() < new Date(normalized.start_at).getTime()) {
+    throw new Error("calendar_end_before_start");
+  }
+
+  await run(
+    "UPDATE calendar_events SET title=?, description=?, event_type_id=?, meeting_mode=?, start_at=?, end_at=?, all_day=?, location=?, meeting_link=?, notes=?, reminder_settings_json=?, status=?, last_updated_by=?, cancel_reason=?, updated_at=datetime('now') WHERE id=?",
+    [
+      normalized.title,
+      normalized.description || null,
+      normalized.event_type_id || null,
+      normalized.meeting_mode,
+      normalized.start_at,
+      normalized.end_at,
+      normalized.all_day,
+      normalized.location || null,
+      normalized.meeting_link || null,
+      normalized.notes || null,
+      normalized.reminder_settings_json,
+      normalized.status,
+      actorId,
+      normalized.cancel_reason || null,
+      eventId,
+    ]
+  );
+
+  const fieldsToTrack = [
+    ["title", existing.title, normalized.title],
+    ["description", existing.description, normalized.description],
+    ["event_type_id", existing.event_type_id, normalized.event_type_id],
+    ["meeting_mode", existing.meeting_mode, normalized.meeting_mode],
+    ["start_at", existing.start_at, normalized.start_at],
+    ["end_at", existing.end_at, normalized.end_at],
+    ["all_day", coerceDbBoolean(existing.all_day), normalized.all_day],
+    ["location", existing.location, normalized.location],
+    ["meeting_link", existing.meeting_link, normalized.meeting_link],
+    ["notes", existing.notes, normalized.notes],
+    ["status", existing.status, normalized.status],
+  ];
+
+  for (const [fieldName, previousValue, nextValue] of fieldsToTrack) {
+    if (normalizeSqlTextValue(previousValue) === normalizeSqlTextValue(nextValue)) continue;
+    await logCalendarEventChange({
+      eventId,
+      actorUserId: actorId,
+      action: "updated",
+      fieldName,
+      oldValue: previousValue,
+      newValue: nextValue,
+    });
+  }
+
+  const participantIds = [...new Set([Number(existing.created_by || 0), ...normalized.participant_ids])].filter(Boolean);
+  await syncCalendarParticipants(eventId, participantIds, actorId);
+
+  const event = await getCalendarEventById(eventId);
+  const participants = await getCalendarEventParticipants(eventId);
+  const history = await getCalendarEventHistory(eventId);
+
+  return {
+    event: serializeCalendarEvent(event, participants),
+    history,
+    previous_participants: existingParticipants,
+  };
+}
+
+async function cancelCalendarEvent(eventId, payload = {}, actorUser) {
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0);
+  const existing = await getCalendarEventById(eventId);
+  if (!existing) throw new Error("not_found");
+  if (!(actorUser?.role === "admin" || Number(existing.created_by || 0) === actorId)) {
+    throw new Error("forbidden");
+  }
+
+  const reason = String(payload?.cancel_reason || payload?.reason || "").trim();
+  await run(
+    "UPDATE calendar_events SET status='cancelled', cancel_reason=?, cancelled_at=datetime('now'), last_updated_by=?, updated_at=datetime('now') WHERE id=?",
+    [reason || null, actorId, eventId]
+  );
+  await logCalendarEventChange({
+    eventId,
+    actorUserId: actorId,
+    action: "cancelled",
+    fieldName: "status",
+    oldValue: existing.status || "scheduled",
+    newValue: "cancelled",
+    detail: { cancel_reason: reason || null },
+  });
+
+  const event = await getCalendarEventById(eventId);
+  const participants = await getCalendarEventParticipants(eventId);
+  const history = await getCalendarEventHistory(eventId);
+  return {
+    event: serializeCalendarEvent(event, participants),
+    history,
+  };
+}
+
+async function buildCalendarBootstrap(user) {
+  const [eventTypes, users, upcomingEvents] = await Promise.all([
+    listCalendarEventTypes(),
+    listCalendarUsersForPicker(),
+    listCalendarEventsForUser(user, {
+      from: brazilDateKey(),
+      to: brazilDateKey(new Date(Date.now() + 1000 * 60 * 60 * 24 * 30)),
+      status: "scheduled",
+      limit: 12,
+    }),
+  ]);
+
+  const actorId = Number(user?.id || user?.sub || 0);
+  const today = brazilDateKey();
+  const weekLimit = brazilDateKey(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7));
+  const summary = {
+    total_upcoming: upcomingEvents.length,
+    today: upcomingEvents.filter((item) => item.start_date === today).length,
+    this_week: upcomingEvents.filter((item) => item.start_date >= today && item.start_date <= weekLimit).length,
+    mine: upcomingEvents.filter((item) => (item.participants || []).some((participant) => Number(participant.user_id || 0) === actorId)).length,
+  };
+
+  return {
+    enabled: true,
+    views: ["month", "week", "day", "list"],
+    meeting_modes: CALENDAR_MEETING_MODES,
+    event_types: eventTypes,
+    users,
+    summary,
+    upcoming_events: upcomingEvents,
+  };
+}
+
 function brazilDateKey(value = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
@@ -2963,6 +3628,45 @@ function buildOpenAITools() {
   tools.push({ type: "web_search_preview" });
   return tools;
 }
+
+function parsePromptVariablesConfig() {
+  if (!OPENAI_PROMPT_VARIABLES_JSON) return {};
+  try {
+    const parsed = JSON.parse(OPENAI_PROMPT_VARIABLES_JSON);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (err) {
+    console.log("OPENAI_PROMPT_VARIABLES_JSON invalido:", err?.message || err);
+    return {};
+  }
+}
+
+function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
+  if (!OPENAI_PROMPT_ID) return null;
+
+  const variables = {
+    company_name: "Talkers",
+    user_name: user?.name || "",
+    user_role: user?.role || "user",
+    user_departments: Array.isArray(user?.departments) ? user.departments.join(", ") : "",
+    conversation_language: getLanguageLabel(language || "pt"),
+    business_area: intent?.businessIntent?.businessAreaLabel || "",
+    intent_type: intent?.businessIntent?.intentTypeLabel || "",
+    current_datetime_br: nowBrazil(),
+    ...parsePromptVariablesConfig(),
+  };
+
+  const prompt = {
+    id: OPENAI_PROMPT_ID,
+    variables,
+  };
+
+  if (OPENAI_PROMPT_VERSION) {
+    prompt.version = OPENAI_PROMPT_VERSION;
+  }
+
+  return prompt;
+}
+
 async function buildOpenAIInput({
   conversationId,
   userId,
@@ -3150,19 +3854,40 @@ async function openaiReply({ conversationId, userId, userText, contextText, base
   }
 
   const input = await buildOpenAIInput({ conversationId, userId, userText, contextText, topicSnapshot, responseProfile });
-  const resp = await fetch("https://api.openai.com/v1/responses", {
+  const currentUser = await getUserById(userId).catch(() => null);
+  const prompt = buildOpenAIPromptConfig(currentUser, responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)), responseProfile?.language);
+
+  const requestBody = {
+    model,
+    input,
+    tools: buildOpenAITools(),
+    include: ["file_search_call.results", "web_search_call.action.sources"],
+  };
+  if (prompt) requestBody.prompt = prompt;
+
+  let resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      input,
-      tools: buildOpenAITools(),
-      include: ["file_search_call.results", "web_search_call.action.sources"],
-    }),
+    body: JSON.stringify(requestBody),
   });
+
+  if (!resp.ok && prompt) {
+    const body = await resp.text();
+    console.log("OpenAI prompt fallback:", resp.status, body);
+    const fallbackBody = { ...requestBody };
+    delete fallbackBody.prompt;
+    resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(fallbackBody),
+    });
+  }
 
   if (!resp.ok) {
     const body = await resp.text();
@@ -3193,37 +3918,60 @@ async function getUserByEmail(email) {
   return hydrateUserRecord(user);
 }
 
+function hasIntranetAccess(user) {
+  if (!user) return false;
+  return user.role === 'admin' || coerceDbBoolean(user.can_access_intranet);
+}
+
 async function buildIntranetPayload(userId) {
   const user = await getUserById(userId);
   if (!user) return null;
 
-  const visibleDepartments = Array.isArray(user.departments) ? user.departments.filter(Boolean) : [];
+  const isAdmin = user.role === 'admin';
+  const departmentCatalog = await listDepartmentCatalog();
+  const visibleDepartmentDetails = isAdmin
+    ? departmentCatalog.map((department) => ({
+        ...department,
+        access_level: 'administrador',
+      }))
+    : (user.department_details || []).filter((department) => department.is_active !== false);
+  const visibleDepartments = visibleDepartmentDetails.map((item) => item.name).filter(Boolean);
   const documentWhere = [];
   const documentParams = [];
-  if (visibleDepartments.length) {
+  if (!isAdmin && visibleDepartments.length) {
     documentWhere.push(`(department_name IS NULL OR department_name='' OR department_name IN (${visibleDepartments.map(() => '?').join(', ')}))`);
     documentParams.push(...visibleDepartments);
+  } else if (!isAdmin) {
+    documentWhere.push("(department_name IS NULL OR department_name='')");
   }
 
   const documentWhereSql = documentWhere.length ? `WHERE ${documentWhere.join(' AND ')}` : '';
 
-  const [departmentCatalog, recentDocuments, totalDocumentsRow, salesPayload] = await Promise.all([
-    listDepartmentCatalog(),
+  const [recentDocuments, totalDocumentsRow, salesPayload, documentCountRows] = await Promise.all([
     all(
       `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, vector_store_file_id, created_at
          FROM knowledge_sources
          ${documentWhereSql}
         ORDER BY datetime(created_at) DESC, id DESC
         LIMIT 12`,
-      documentParams
-    ),
-    get(`SELECT COUNT(*) AS total FROM knowledge_sources ${documentWhereSql}`, documentParams),
-    buildSalesIntranetPayload(user),
+        documentParams
+      ),
+      get(`SELECT COUNT(*) AS total FROM knowledge_sources ${documentWhereSql}`, documentParams),
+      buildSalesIntranetPayload(user),
+      all(
+        `SELECT COALESCE(NULLIF(department_name, ''), 'Geral') AS department_name, COUNT(*) AS total
+           FROM knowledge_sources
+           ${documentWhereSql}
+          GROUP BY COALESCE(NULLIF(department_name, ''), 'Geral')
+          ORDER BY COUNT(*) DESC, department_name ASC
+          LIMIT 16`,
+        documentParams
+      ),
   ]);
 
   const workspace = buildIntranetWorkspace({
     user,
-    departments: user.department_details || [],
+    departments: visibleDepartmentDetails,
     recentDocuments: recentDocuments.map((document) => {
       const adminRow = buildKnowledgeAdminRow(document);
       return {
@@ -3241,6 +3989,10 @@ async function buildIntranetPayload(userId) {
     }),
     totalDocuments: Number(totalDocumentsRow?.total || 0),
     salesWorkspace: salesPayload,
+    departmentDocumentTotals: (documentCountRows || []).map((row) => ({
+      name: row.department_name || 'Geral',
+      total: Number(row.total || 0),
+    })),
   });
 
   workspace.sales = salesPayload;
@@ -3255,7 +4007,7 @@ async function buildIntranetPayload(userId) {
 async function requireIntranetAccess(req, res, next) {
   const user = await getUserById(req.user.sub);
   if (!user) return res.status(401).json({ error: 'not_authenticated' });
-  if (!user.can_access_intranet) return res.status(403).json({ error: 'intranet_access_denied' });
+  if (!hasIntranetAccess(user)) return res.status(403).json({ error: 'intranet_access_denied' });
   req.currentUser = user;
   next();
 }
@@ -3302,7 +4054,12 @@ function salesImportUploadMiddleware(req, res, next) {
 }
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID), db_client: DB_CLIENT });
+  res.json({
+    ok: true,
+    vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
+    openai_prompt_configured: Boolean(OPENAI_PROMPT_ID),
+    db_client: DB_CLIENT,
+  });
 });
 
 app.post("/api/login", async (req, res) => {
@@ -4993,6 +5750,78 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
 });
 const publicDir = path.join(__dirname, "public");
 
+app.get("/api/intranet/calendar/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  const calendar = await buildCalendarBootstrap(user);
+  res.json({ calendar });
+});
+
+app.get("/api/intranet/calendar/events", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  const range = getCalendarRangeFromQuery(req.query || {});
+  const events = await listCalendarEventsForUser(user, {
+    from: range.from,
+    to: range.to,
+    participantId: req.query?.user_id,
+    typeId: req.query?.event_type_id,
+    mode: req.query?.meeting_mode,
+    status: req.query?.status,
+    search: req.query?.search,
+    limit: Math.min(250, Math.max(1, Number(req.query?.limit || 180))),
+  });
+  res.json({ events, range });
+});
+
+app.get("/api/intranet/calendar/events/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  const eventId = Number(req.params.id);
+  const eventRow = await getCalendarEventById(eventId);
+  if (!eventRow) return res.status(404).json({ error: "not_found" });
+  const participants = await getCalendarEventParticipants(eventId);
+  if (!canAccessCalendarEvent(user, eventRow, participants)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const history = await getCalendarEventHistory(eventId);
+  res.json({ event: serializeCalendarEvent(eventRow, participants), history });
+});
+
+app.post("/api/intranet/calendar/events", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const event = await createCalendarEvent(req.body || {}, user);
+    const history = await getCalendarEventHistory(event.id);
+    res.json({ ok: true, event, history });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "calendar_event_create_failed" });
+  }
+});
+
+app.patch("/api/intranet/calendar/events/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const eventId = Number(req.params.id);
+    const updated = await updateCalendarEvent(eventId, req.body || {}, user);
+    res.json({ ok: true, event: updated.event, history: updated.history });
+  } catch (err) {
+    if (err?.message === "not_found") return res.status(404).json({ error: "not_found" });
+    if (err?.message === "forbidden") return res.status(403).json({ error: "forbidden" });
+    res.status(400).json({ error: err?.message || "calendar_event_update_failed" });
+  }
+});
+
+app.post("/api/intranet/calendar/events/:id/cancel", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const eventId = Number(req.params.id);
+    const cancelled = await cancelCalendarEvent(eventId, req.body || {}, user);
+    res.json({ ok: true, event: cancelled.event, history: cancelled.history });
+  } catch (err) {
+    if (err?.message === "not_found") return res.status(404).json({ error: "not_found" });
+    if (err?.message === "forbidden") return res.status(403).json({ error: "forbidden" });
+    res.status(400).json({ error: err?.message || "calendar_event_cancel_failed" });
+  }
+});
+
 app.get('/api/intranet/sales/bootstrap', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
   const sales = await buildSalesIntranetPayload(req.currentUser || await getUserById(req.user.sub));
   if (!sales.enabled) return res.status(403).json({ error: 'sales_access_denied' });
@@ -5069,7 +5898,7 @@ app.get("/intranet.html", async (req, res) => {
   const session = tryDecodeSession(req);
   if (!session) return res.redirect("/login.html");
   const user = await getUserById(session.sub);
-  if (!user || !user.can_access_intranet) return res.redirect("/index.html");
+  if (!user || !hasIntranetAccess(user)) return res.redirect("/index.html");
   return res.sendFile(path.join(publicDir, "intranet.html"));
 });
 
@@ -5079,6 +5908,7 @@ async function startServer() {
   await migrate();
   await ensureAdmin();
   await ensureDepartmentCatalog();
+  await ensureCalendarEventTypes();
   await syncLegacyUserDepartmentData();
   await ensureFixedDepartments();
 

@@ -2456,7 +2456,19 @@ body.app-shell .intranet-btn:hover {
 .intranet-brand {
   flex-direction: row;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
+}
+
+.intranet-brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.intranet-sidebar-toggle {
+  flex: 0 0 auto;
 }
 
 .intranet-brand-title {
@@ -2485,12 +2497,26 @@ body.app-shell .intranet-btn:hover {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 10px;
   padding: 11px 12px;
   border-radius: 14px;
   background: #fff;
   border: 1px solid #e5e7eb;
   color: #1f2937;
   font-weight: 600;
+}
+
+.intranet-nav-link-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.intranet-nav-link-label {
+  min-width: 0;
 }
 
 .intranet-chip-list {
@@ -2523,6 +2549,35 @@ body.app-shell .intranet-btn:hover {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+body.intranet-sidebar-collapsed .intranet-app {
+  grid-template-columns: 92px 1fr;
+}
+
+body.intranet-sidebar-collapsed .intranet-sidebar {
+  padding-inline: 10px;
+}
+
+body.intranet-sidebar-collapsed .intranet-brand-copy,
+body.intranet-sidebar-collapsed .intranet-sidebar-block,
+body.intranet-sidebar-collapsed .intranet-sidebar-footer {
+  display: none;
+}
+
+body.intranet-sidebar-collapsed .intranet-nav {
+  align-items: center;
+}
+
+body.intranet-sidebar-collapsed .intranet-nav-link {
+  justify-content: center;
+  padding-inline: 0;
+  width: 48px;
+  height: 48px;
+}
+
+body.intranet-sidebar-collapsed .intranet-nav-link-label {
+  display: none;
 }
 
 .intranet-topbar,
@@ -2604,6 +2659,7 @@ body.app-shell .intranet-btn:hover {
 .intranet-stats,
 .intranet-quick-grid,
 .intranet-module-grid,
+.intranet-dashboard-stats,
 .intranet-department-grid,
 .intranet-document-grid,
 .intranet-training-summary,
@@ -2617,6 +2673,7 @@ body.app-shell .intranet-btn:hover {
 .intranet-stats,
 .intranet-quick-grid,
 .intranet-module-grid,
+.intranet-dashboard-stats,
 .intranet-document-grid,
 .intranet-training-summary,
 .intranet-communication-grid {
@@ -2709,6 +2766,79 @@ body.app-shell .intranet-btn:hover {
   flex-wrap: wrap;
 }
 
+.intranet-dashboard-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.intranet-dashboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intranet-dashboard-row,
+.intranet-dashboard-note {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  background: #fff;
+  padding: 14px;
+}
+
+.intranet-dashboard-row-head,
+.intranet-dashboard-row-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.intranet-dashboard-row-title {
+  justify-content: flex-start;
+}
+
+.intranet-dashboard-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: #111827;
+}
+
+.intranet-dashboard-row-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.intranet-dashboard-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e5edf7;
+  overflow: hidden;
+  margin: 10px 0;
+}
+
+.intranet-dashboard-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb 0%, #10b981 100%);
+}
+
+.intranet-dashboard-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .intranet-module-card h4,
 .intranet-department-card h4,
 .intranet-document-card h4,
@@ -2740,7 +2870,9 @@ body.app-shell .intranet-btn:hover {
 .intranet-module-icon svg,
 .intranet-department-icon svg,
 .intranet-document-icon svg,
-.intranet-menu-btn svg {
+.intranet-menu-btn svg,
+.intranet-nav-link-icon svg,
+.intranet-sidebar-toggle svg {
   width: 20px;
   height: 20px;
   stroke: currentColor;
@@ -2891,6 +3023,169 @@ body.app-shell .intranet-btn:hover {
   resize: vertical;
 }
 
+.intranet-calendar-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.intranet-calendar-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.intranet-calendar-actions {
+  display: flex;
+}
+
+.intranet-calendar-nav,
+.intranet-calendar-view-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.intranet-calendar-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.intranet-calendar-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, .9fr);
+  gap: 18px;
+}
+
+.intranet-calendar-panel,
+.intranet-calendar-sidebar {
+  border: 1px solid #e5e7eb;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05);
+}
+
+.intranet-calendar-panel {
+  padding: 18px;
+}
+
+.intranet-calendar-sidebar {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.intranet-calendar-month {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.intranet-calendar-weekdays,
+.intranet-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.intranet-calendar-weekdays div {
+  font-size: 12px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  padding: 0 4px;
+}
+
+.intranet-calendar-day {
+  min-height: 150px;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 10px;
+  background: #fcfdff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.intranet-calendar-day-number {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  font: inherit;
+  color: #0f172a;
+}
+
+.intranet-calendar-day-events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.intranet-calendar-event-chip,
+.intranet-calendar-list-item {
+  width: 100%;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  background: #fff;
+  color: #0f172a;
+  text-align: left;
+  font: inherit;
+  padding: 10px 12px;
+}
+
+.intranet-calendar-event-chip span {
+  display: inline-block;
+  margin-right: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.intranet-calendar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.intranet-calendar-list-day {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.intranet-calendar-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.intranet-calendar-form,
+.intranet-calendar-history {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.intranet-calendar-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.intranet-calendar-form textarea {
+  min-height: 96px;
+}
+
 .intranet-empty-card {
   grid-column: 1 / -1;
   color: #6b7280;
@@ -2901,11 +3196,13 @@ body.app-shell .intranet-btn:hover {
   .intranet-stats,
   .intranet-quick-grid,
   .intranet-module-grid,
+  .intranet-dashboard-stats,
   .intranet-training-summary,
   .intranet-document-grid,
   .intranet-communication-grid,
   .intranet-training-layout,
-  .intranet-training-grid {
+  .intranet-training-grid,
+  .intranet-calendar-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -2921,6 +3218,10 @@ body.app-shell .intranet-btn:hover {
 
   .departments-grid {
     grid-template-columns: 1fr;
+  }
+
+  .intranet-calendar-filter-grid {
+    grid-template-columns: 1fr 1fr;
   }
 
   .intranet-app {
@@ -2955,6 +3256,11 @@ body.app-shell .intranet-btn:hover {
     display: none;
   }
 
+  .intranet-calendar-actions {
+    display: flex;
+    width: 100%;
+  }
+
   .intranet-hero {
     grid-template-columns: 1fr;
   }
@@ -2963,6 +3269,7 @@ body.app-shell .intranet-btn:hover {
   .intranet-stats,
   .intranet-quick-grid,
   .intranet-module-grid,
+  .intranet-dashboard-stats,
   .intranet-training-summary,
   .intranet-document-grid,
   .intranet-communication-grid,
@@ -2982,6 +3289,19 @@ body.app-shell .intranet-btn:hover {
 
   .intranet-sales-filter-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .intranet-calendar-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .intranet-dashboard-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .intranet-calendar-weekdays,
+  .intranet-calendar-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -3025,12 +3345,15 @@ body.app-shell .intranet-btn:hover {
   .intranet-highlight-list,
   .intranet-quick-grid,
   .intranet-module-grid,
+  .intranet-dashboard-stats,
   .intranet-training-summary,
   .intranet-document-grid,
   .intranet-communication-grid,
   .intranet-department-grid,
   .intranet-training-layout,
-  .intranet-training-grid {
+  .intranet-training-grid,
+  .intranet-calendar-summary,
+  .intranet-calendar-form-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3068,8 +3391,20 @@ body.app-shell .intranet-btn:hover {
   }
 
   .admin-filter-grid,
-  .intranet-sales-filter-grid {
+  .intranet-sales-filter-grid,
+  .intranet-calendar-filter-grid {
     grid-template-columns: 1fr;
+  }
+
+  .intranet-calendar-list-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .intranet-dashboard-row-head,
+  .intranet-dashboard-row-title {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 

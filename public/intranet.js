@@ -14,6 +14,7 @@ const ICONS = {
   layers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>',
   sparkles: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3Z"/><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z"/><path d="m5 14 .9 2.1L8 17l-2.1.9L5 20l-.9-2.1L2 17l2.1-.9L5 14Z"/></svg>',
   message: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 3 21V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7Z"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4"/><path d="M16 2v4"/><path d="M3 10h18"/></svg>',
   document: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>',
   workspace: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8"/><path d="M12 18v2"/></svg>',
   assistant: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v4"/><path d="m8 6 4 2 4-2"/><rect x="5" y="8" width="14" height="10" rx="4"/><path d="M9 13h.01"/><path d="M15 13h.01"/><path d="M9 17c1 .7 2 .9 3 .9s2-.2 3-.9"/></svg>',
@@ -33,6 +34,19 @@ let salesState = {
   canEditAll: false,
 };
 let trainingState = null;
+let calendarState = {
+  enabled: false,
+  view: 'month',
+  baseDate: '',
+  range: null,
+  eventTypes: [],
+  users: [],
+  events: [],
+  selectedEventId: null,
+  history: [],
+  summary: null,
+};
+const SIDEBAR_STORAGE_KEY = 'talkers_intranet_sidebar_state_v1';
 
 function renderIcon(name) {
   return ICONS[name] || ICONS.general;
@@ -82,8 +96,87 @@ function getPeriodGreeting() {
   return 'Boa noite';
 }
 
+function isDesktopSidebarViewport() {
+  return window.innerWidth > 960;
+}
+
 function setSidebarOpen(isOpen) {
   document.body.classList.toggle('intranet-sidebar-open', Boolean(isOpen));
+  syncSidebarButtons();
+}
+
+function readSidebarPreference() {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return Boolean(parsed?.collapsed);
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarPreference(isCollapsed) {
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, JSON.stringify({ collapsed: Boolean(isCollapsed) }));
+  } catch {}
+}
+
+function setSidebarCollapsed(isCollapsed) {
+  const shouldCollapse = Boolean(isCollapsed) && isDesktopSidebarViewport();
+  document.body.classList.toggle('intranet-sidebar-collapsed', shouldCollapse);
+  syncSidebarButtons();
+}
+
+function applySidebarPreference() {
+  if (isDesktopSidebarViewport()) {
+    setSidebarOpen(false);
+    setSidebarCollapsed(readSidebarPreference());
+  } else {
+    document.body.classList.remove('intranet-sidebar-collapsed');
+  }
+  syncSidebarButtons();
+}
+
+function syncSidebarButtons() {
+  const desktopExpanded = !document.body.classList.contains('intranet-sidebar-collapsed');
+  const mobileOpen = document.body.classList.contains('intranet-sidebar-open');
+  const isDesktop = isDesktopSidebarViewport();
+  const expanded = isDesktop ? desktopExpanded : mobileOpen;
+  const label = isDesktop
+    ? (expanded ? 'Recolher menu lateral' : 'Expandir menu lateral')
+    : (expanded ? 'Fechar menu lateral' : 'Abrir menu lateral');
+
+  ['btnIntranetMenu', 'btnSidebarCollapse'].forEach((id) => {
+    const button = el(id);
+    if (!button) return;
+    button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  });
+}
+
+function toggleSidebar() {
+  if (isDesktopSidebarViewport()) {
+    const nextCollapsed = !document.body.classList.contains('intranet-sidebar-collapsed');
+    setSidebarCollapsed(nextCollapsed);
+    writeSidebarPreference(nextCollapsed);
+    return;
+  }
+
+  setSidebarOpen(!document.body.classList.contains('intranet-sidebar-open'));
+}
+
+function closeSidebarOnMobile() {
+  if (!isDesktopSidebarViewport()) setSidebarOpen(false);
+}
+
+function decorateSidebarNav() {
+  Array.from(document.querySelectorAll('.intranet-nav-link')).forEach((link) => {
+    const iconWrap = link.querySelector('.intranet-nav-link-icon');
+    if (!iconWrap) return;
+    const iconName = link.getAttribute('data-icon') || 'general';
+    iconWrap.innerHTML = renderIcon(iconName);
+  });
 }
 
 function renderSidebar(user, intranet) {
@@ -91,12 +184,16 @@ function renderSidebar(user, intranet) {
 
   const chips = el('sidebarDepartmentChips');
   chips.innerHTML = '';
-  (user.departments || []).forEach((department) => {
+  const visibleDepartments = Array.isArray(intranet.departments) ? intranet.departments : [];
+  visibleDepartments.forEach((department) => {
     const item = document.createElement('span');
     item.className = 'intranet-chip';
-    item.textContent = department;
+    item.textContent = department.name || department;
     chips.appendChild(item);
   });
+  if (!visibleDepartments.length) {
+    chips.innerHTML = '<span class="small muted">Nenhuma area setorial liberada para este perfil.</span>';
+  }
 
   const quickLinks = el('sidebarQuickLinks');
   quickLinks.innerHTML = '';
@@ -114,9 +211,13 @@ function renderSidebar(user, intranet) {
     item.textContent = link.title;
     if (link.href) {
       item.href = link.href;
+      item.target = link.href.startsWith('#') ? '' : '_self';
     } else if (link.anchor) {
       item.type = 'button';
-      item.onclick = () => document.querySelector(link.anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      item.onclick = () => {
+        document.querySelector(link.anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        closeSidebarOnMobile();
+      };
     }
     quickLinks.appendChild(item);
   });
@@ -222,6 +323,11 @@ function renderDepartments(intranet) {
   const grid = el('departmentGrid');
   grid.innerHTML = '';
 
+  if (!Array.isArray(intranet.departments) || !intranet.departments.length) {
+    grid.innerHTML = '<div class="intranet-empty-card">Nenhum departamento especifico foi liberado para este perfil.</div>';
+    return;
+  }
+
   (intranet.departments || []).forEach((department) => {
     const card = document.createElement('article');
     card.className = 'intranet-department-card';
@@ -239,6 +345,102 @@ function renderDepartments(intranet) {
     `;
     grid.appendChild(card);
   });
+}
+
+function setDashboardSectionVisible(isVisible) {
+  const section = el('dashboard');
+  const navLink = el('dashboardNavLink');
+  if (section) section.hidden = !isVisible;
+  if (navLink) navLink.hidden = !isVisible;
+}
+
+function renderDashboard(intranet) {
+  const dashboard = intranet.dashboard || { enabled: false };
+  setDashboardSectionVisible(Boolean(dashboard.enabled));
+  if (!dashboard.enabled) return;
+
+  const summaryWrap = el('dashboardSummaryCards');
+  const breakdownWrap = el('dashboardDepartmentBreakdown');
+  const highlightsWrap = el('dashboardHighlightsList');
+  const widgetsWrap = el('dashboardWidgetGrid');
+
+  if (summaryWrap) {
+    summaryWrap.innerHTML = '';
+    (dashboard.cards || []).forEach((card) => {
+      const item = document.createElement('article');
+      item.className = 'intranet-stat-card';
+      item.innerHTML = `
+        <div class="intranet-stat-value">${escapeHtml(card.value || '0')}</div>
+        <div class="intranet-stat-label">${escapeHtml(card.label || '')}</div>
+        <div class="small muted">${escapeHtml(card.description || '')}</div>
+      `;
+      summaryWrap.appendChild(item);
+    });
+  }
+
+  if (breakdownWrap) {
+    breakdownWrap.innerHTML = '';
+    const rows = dashboard.department_breakdown || [];
+    if (!rows.length) {
+      breakdownWrap.innerHTML = '<div class="intranet-empty-card">Nenhuma area disponivel para compor o dashboard deste perfil.</div>';
+    } else {
+      const maxDocuments = Math.max(...rows.map((item) => Number(item.documents_total || 0)), 1);
+      rows.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'intranet-dashboard-row';
+        row.innerHTML = `
+          <div class="intranet-dashboard-row-head">
+            <div class="intranet-dashboard-row-title">
+              <span class="intranet-dashboard-row-icon">${renderIcon(item.icon || 'layers')}</span>
+              <div>
+                <strong>${escapeHtml(item.name || 'Area')}</strong>
+                <div class="small muted">${escapeHtml(item.access_level || 'colaborador')}</div>
+              </div>
+            </div>
+            <div class="small muted">${escapeHtml(String(item.documents_total || 0))} doc(s) • ${escapeHtml(String(item.modules_total || 0))} modulo(s)</div>
+          </div>
+          <div class="intranet-dashboard-bar-track">
+            <span class="intranet-dashboard-bar-fill" style="width:${Math.max(12, Math.round((Number(item.documents_total || 0) / maxDocuments) * 100))}%"></span>
+          </div>
+          <div class="small muted">${escapeHtml(item.description || '')}</div>
+        `;
+        breakdownWrap.appendChild(row);
+      });
+    }
+  }
+
+  if (highlightsWrap) {
+    highlightsWrap.innerHTML = '';
+    (dashboard.highlights || []).forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'intranet-dashboard-note';
+      row.innerHTML = `<strong>${escapeHtml(item.title || '')}</strong><span>${escapeHtml(item.description || '')}</span>`;
+      highlightsWrap.appendChild(row);
+    });
+  }
+
+  if (widgetsWrap) {
+    widgetsWrap.innerHTML = '';
+    const docs = dashboard.recent_documents || [];
+    if (!docs.length) {
+      widgetsWrap.innerHTML = '<div class="intranet-empty-card">Nenhum documento recente para destacar no dashboard.</div>';
+    } else {
+      docs.forEach((document) => {
+        const card = document.createElement('article');
+        card.className = 'intranet-module-card';
+        card.innerHTML = `
+          <div class="intranet-module-top">
+            <span class="intranet-module-icon">${renderIcon('document')}</span>
+            <span class="intranet-chip">${escapeHtml(document.department_name || 'Geral')}</span>
+          </div>
+          <h4>${escapeHtml(document.name || 'Documento')}</h4>
+          <p>${escapeHtml(document.status || 'Processando')}</p>
+          <div class="intranet-module-type">${escapeHtml(formatDate(document.created_at || ''))}</div>
+        `;
+        widgetsWrap.appendChild(card);
+      });
+    }
+  }
 }
 
 function renderDocuments(intranet, query = '') {
@@ -391,6 +593,413 @@ async function fetchTrainingBootstrap() {
   } catch (err) {
     setTrainingSectionVisible(false);
   }
+}
+
+function getTodayDateKey() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function addDays(dateKey, amount) {
+  const base = new Date(`${dateKey}T12:00:00-03:00`);
+  base.setDate(base.getDate() + Number(amount || 0));
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(base);
+}
+
+function formatCalendarDateLabel(dateKey) {
+  try {
+    return new Date(`${dateKey}T12:00:00-03:00`).toLocaleDateString('pt-BR', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+    });
+  } catch {
+    return dateKey || '';
+  }
+}
+
+function formatCalendarRangeLabel(range = {}) {
+  const from = range.from ? formatCalendarDateLabel(range.from) : '';
+  const to = range.to ? formatCalendarDateLabel(range.to) : '';
+  if (!from && !to) return 'Agenda';
+  if (from === to) return from;
+  return `${from} - ${to}`;
+}
+
+function getCalendarModeLabel(mode = '') {
+  if (mode === 'presencial') return 'Presencial';
+  if (mode === 'hibrida') return 'Hibrida';
+  return 'Online';
+}
+
+function getEventTypeMeta(eventTypeId) {
+  return (calendarState.eventTypes || []).find((item) => Number(item.id) === Number(eventTypeId)) || null;
+}
+
+function renderCalendarSummary() {
+  const wrap = el('calendarSummaryCards');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const currentUserId = Number(bootstrapData?.user?.id || 0);
+  const today = getTodayDateKey();
+  const nextWeek = addDays(today, 7);
+  const events = Array.isArray(calendarState.events) ? calendarState.events : [];
+  const cards = [
+    { label: 'No periodo', value: events.length },
+    { label: 'Hoje', value: events.filter((item) => item.start_date === today).length },
+    { label: 'Esta semana', value: events.filter((item) => item.start_date >= today && item.start_date <= nextWeek).length },
+    { label: 'Meus compromissos', value: events.filter((item) => (item.participants || []).some((participant) => Number(participant.user_id || 0) === currentUserId)).length },
+  ];
+
+  cards.forEach((card) => {
+    const item = document.createElement('article');
+    item.className = 'intranet-sales-card';
+    item.innerHTML = `<strong>${escapeHtml(card.value)}</strong><span>${escapeHtml(card.label)}</span>`;
+    wrap.appendChild(item);
+  });
+}
+
+function renderCalendarTypeOptions() {
+  const typeSelect = el('calendarTypeFilter');
+  const eventTypeSelect = el('calendarEventType');
+  const previousFilter = typeSelect?.value || '';
+  const previousForm = eventTypeSelect?.value || '';
+
+  if (typeSelect) {
+    typeSelect.innerHTML = '<option value="">Todos</option>';
+    (calendarState.eventTypes || []).forEach((item) => {
+      const option = document.createElement('option');
+      option.value = String(item.id);
+      option.textContent = item.name;
+      typeSelect.appendChild(option);
+    });
+    if (Array.from(typeSelect.options).some((option) => option.value === previousFilter)) {
+      typeSelect.value = previousFilter;
+    }
+  }
+
+  if (eventTypeSelect) {
+    eventTypeSelect.innerHTML = '<option value="">Selecione</option>';
+    (calendarState.eventTypes || []).forEach((item) => {
+      const option = document.createElement('option');
+      option.value = String(item.id);
+      option.textContent = item.name;
+      eventTypeSelect.appendChild(option);
+    });
+    if (Array.from(eventTypeSelect.options).some((option) => option.value === previousForm)) {
+      eventTypeSelect.value = previousForm;
+    }
+  }
+}
+
+function renderCalendarUserOptions() {
+  const userSelect = el('calendarUserFilter');
+  if (!userSelect) return;
+  const previous = userSelect.value;
+  userSelect.innerHTML = '<option value="">Todos</option>';
+  (calendarState.users || []).forEach((item) => {
+    const option = document.createElement('option');
+    option.value = String(item.id);
+    option.textContent = `${item.name}${item.department ? ` - ${item.department}` : ''}`;
+    userSelect.appendChild(option);
+  });
+  if (Array.from(userSelect.options).some((option) => option.value === previous)) {
+    userSelect.value = previous;
+  }
+}
+
+function renderCalendarParticipants() {
+  const wrap = el('calendarParticipants');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  (calendarState.users || []).forEach((user) => {
+    const label = document.createElement('label');
+    label.className = 'department-check';
+    label.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(user.id)}" />
+      <span>
+        <strong>${escapeHtml(user.name)}</strong>
+        <small>${escapeHtml([user.email, user.department].filter(Boolean).join(' - '))}</small>
+      </span>
+    `;
+    wrap.appendChild(label);
+  });
+}
+
+function setCalendarModeFields() {
+  const mode = el('calendarMeetingMode')?.value || 'online';
+  const linkWrap = el('calendarMeetingLinkWrap');
+  if (linkWrap) {
+    linkWrap.style.display = mode === 'presencial' ? 'none' : '';
+  }
+}
+
+function setCalendarAllDayState() {
+  const allDay = Boolean(el('calendarAllDay')?.checked);
+  ['calendarStartTime', 'calendarEndTime'].forEach((id) => {
+    const field = el(id);
+    if (field) field.disabled = allDay;
+  });
+}
+
+function renderCalendarHistory(history = []) {
+  const wrap = el('calendarHistoryList');
+  if (!wrap) return;
+  if (!Array.isArray(history) || !history.length) {
+    wrap.innerHTML = '<div class="intranet-empty-card">Nenhum historico registrado ainda para este compromisso.</div>';
+    return;
+  }
+  wrap.innerHTML = history.map((item) => `
+    <div class="intranet-sales-history-item">
+      <strong>${escapeHtml(item.action || 'Atualizacao')}</strong>
+      <div class="small muted">${escapeHtml(formatDate(item.created_at))} - ${escapeHtml(item.actor_name || 'Sistema')}</div>
+      <div>${escapeHtml(item.field_name || '')}${item.old_value || item.new_value ? `: ${escapeHtml(item.old_value || '-')} -> ${escapeHtml(item.new_value || '-')}` : ''}</div>
+    </div>
+  `).join('');
+}
+
+function resetCalendarEditor(dateKey = '') {
+  const form = el('calendarForm');
+  if (!form) return;
+  form.reset();
+  el('calendarEventId').value = '';
+  el('calendarEditorTitle').textContent = 'Novo compromisso';
+  el('btnCalendarCancelEvent').style.display = 'none';
+  const baseDate = dateKey || calendarState.baseDate || getTodayDateKey();
+  el('calendarStartDate').value = baseDate;
+  el('calendarEndDate').value = baseDate;
+  el('calendarStartTime').value = '09:00';
+  el('calendarEndTime').value = '10:00';
+  Array.from(document.querySelectorAll('#calendarParticipants input[type="checkbox"]')).forEach((input) => {
+    input.checked = false;
+  });
+  setCalendarAllDayState();
+  setCalendarModeFields();
+  renderCalendarHistory([]);
+}
+
+function fillCalendarEditor(event = null, history = []) {
+  if (!event) {
+    resetCalendarEditor();
+    return;
+  }
+  el('calendarEventId').value = String(event.id || '');
+  el('calendarEditorTitle').textContent = event.title || 'Compromisso';
+  el('calendarTitle').value = event.title || '';
+  el('calendarDescription').value = event.description || '';
+  el('calendarEventType').value = event.event_type_id ? String(event.event_type_id) : '';
+  el('calendarMeetingMode').value = event.meeting_mode || 'online';
+  el('calendarAllDay').checked = Boolean(event.all_day);
+  el('calendarStartDate').value = event.start_date || '';
+  el('calendarStartTime').value = event.start_time || '09:00';
+  el('calendarEndDate').value = event.end_date || event.start_date || '';
+  el('calendarEndTime').value = event.end_time || '10:00';
+  el('calendarLocation').value = event.location || '';
+  el('calendarMeetingLink').value = event.meeting_link || '';
+  el('calendarNotes').value = event.notes || '';
+  const participants = new Set((event.participants || []).map((item) => String(item.user_id)));
+  Array.from(document.querySelectorAll('#calendarParticipants input[type="checkbox"]')).forEach((input) => {
+    input.checked = participants.has(String(input.value));
+  });
+  el('btnCalendarCancelEvent').style.display = event.status === 'cancelled' ? 'none' : '';
+  setCalendarAllDayState();
+  setCalendarModeFields();
+  renderCalendarHistory(history || []);
+}
+
+function renderCalendarViewButtons() {
+  Array.from(document.querySelectorAll('#calendarViewSwitch [data-view]')).forEach((button) => {
+    const active = button.getAttribute('data-view') === calendarState.view;
+    button.classList.toggle('primary', active);
+  });
+}
+
+function buildCalendarMonthGrid(events = []) {
+  const range = calendarState.range || {};
+  const start = new Date(`${range.from}T12:00:00-03:00`);
+  const end = new Date(`${range.to}T12:00:00-03:00`);
+  const byDate = new Map();
+  events.forEach((event) => {
+    const key = event.start_date || '';
+    if (!byDate.has(key)) byDate.set(key, []);
+    byDate.get(key).push(event);
+  });
+
+  const days = [];
+  const cursor = new Date(start);
+  while (cursor.getTime() <= end.getTime()) {
+    const dateKey = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(cursor);
+    days.push(dateKey);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return `
+    <div class="intranet-calendar-month">
+      <div class="intranet-calendar-weekdays">
+        ${['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'].map((label) => `<div>${label}</div>`).join('')}
+      </div>
+      <div class="intranet-calendar-grid">
+        ${days.map((dateKey) => {
+          const items = byDate.get(dateKey) || [];
+          return `
+            <div class="intranet-calendar-day">
+              <button class="intranet-calendar-day-number" type="button" data-date="${escapeHtml(dateKey)}">${escapeHtml(dateKey.slice(-2))}</button>
+              <div class="intranet-calendar-day-events">
+                ${items.slice(0, 4).map((item) => `
+                  <button class="intranet-calendar-event-chip" type="button" data-event-id="${escapeHtml(item.id)}">
+                    <span>${escapeHtml(item.start_time || '')}</span>${escapeHtml(item.title || 'Compromisso')}
+                  </button>
+                `).join('')}
+                ${items.length > 4 ? `<div class="small muted">+ ${items.length - 4} compromisso(s)</div>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function buildCalendarListView(events = []) {
+  if (!events.length) {
+    return '<div class="intranet-empty-card">Nenhum compromisso encontrado para este periodo.</div>';
+  }
+  const grouped = new Map();
+  events.forEach((event) => {
+    const key = event.start_date || '';
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(event);
+  });
+
+  return `
+    <div class="intranet-calendar-list">
+      ${Array.from(grouped.entries()).map(([dateKey, items]) => `
+        <div class="intranet-calendar-list-day">
+          <div class="intranet-block-title">${escapeHtml(formatCalendarDateLabel(dateKey))}</div>
+          ${items.map((item) => `
+            <button class="intranet-calendar-list-item" type="button" data-event-id="${escapeHtml(item.id)}">
+              <div>
+                <strong>${escapeHtml(item.title || 'Compromisso')}</strong>
+                <div class="small muted">${escapeHtml(item.event_type_name || 'Agenda')} - ${escapeHtml(getCalendarModeLabel(item.meeting_mode))}</div>
+              </div>
+              <span>${escapeHtml(item.all_day ? 'Dia inteiro' : `${item.start_time || ''} - ${item.end_time || ''}`)}</span>
+            </button>
+          `).join('')}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderCalendarView() {
+  const wrap = el('calendarView');
+  if (!wrap) return;
+  wrap.innerHTML = calendarState.view === 'month'
+    ? buildCalendarMonthGrid(calendarState.events || [])
+    : buildCalendarListView(calendarState.events || []);
+
+  Array.from(wrap.querySelectorAll('[data-event-id]')).forEach((button) => {
+    button.addEventListener('click', () => selectCalendarEvent(Number(button.getAttribute('data-event-id'))));
+  });
+  Array.from(wrap.querySelectorAll('[data-date]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      const dateKey = button.getAttribute('data-date');
+      resetCalendarEditor(dateKey);
+    });
+  });
+}
+
+async function selectCalendarEvent(eventId) {
+  calendarState.selectedEventId = Number(eventId || 0);
+  try {
+    const { event, history } = await api(`/api/intranet/calendar/events/${eventId}`);
+    fillCalendarEditor(event, history || []);
+  } catch (err) {
+    alert('Nao foi possivel carregar o compromisso: ' + err.message);
+  }
+}
+
+function collectCalendarPayload() {
+  return {
+    title: el('calendarTitle').value.trim(),
+    description: el('calendarDescription').value.trim(),
+    event_type_id: el('calendarEventType').value || null,
+    meeting_mode: el('calendarMeetingMode').value,
+    all_day: el('calendarAllDay').checked,
+    start_date: el('calendarStartDate').value,
+    start_time: el('calendarStartTime').value,
+    end_date: el('calendarEndDate').value,
+    end_time: el('calendarEndTime').value,
+    location: el('calendarLocation').value.trim(),
+    meeting_link: el('calendarMeetingLink').value.trim(),
+    notes: el('calendarNotes').value.trim(),
+    participant_ids: Array.from(document.querySelectorAll('#calendarParticipants input[type="checkbox"]:checked')).map((input) => Number(input.value)),
+  };
+}
+
+async function fetchCalendarEvents() {
+  const params = new URLSearchParams();
+  if (calendarState.baseDate) params.set('base_date', calendarState.baseDate);
+  params.set('view', calendarState.view);
+  if (el('calendarUserFilter')?.value) params.set('user_id', el('calendarUserFilter').value);
+  if (el('calendarTypeFilter')?.value) params.set('event_type_id', el('calendarTypeFilter').value);
+  if (el('calendarModeFilter')?.value) params.set('meeting_mode', el('calendarModeFilter').value);
+  if (el('calendarStatusFilter')?.value) params.set('status', el('calendarStatusFilter').value);
+  if (el('calendarSearchInput')?.value.trim()) params.set('search', el('calendarSearchInput').value.trim());
+  params.set('limit', '180');
+
+  const { events, range: resolvedRange } = await api(`/api/intranet/calendar/events?${params.toString()}`);
+  calendarState.events = Array.isArray(events) ? events : [];
+  calendarState.range = resolvedRange || calendarState.range;
+  el('calendarRangeLabel').textContent = formatCalendarRangeLabel(calendarState.range || {});
+  renderCalendarSummary();
+  renderCalendarViewButtons();
+  renderCalendarView();
+
+  if (calendarState.selectedEventId && calendarState.events.some((item) => Number(item.id) === Number(calendarState.selectedEventId))) {
+    await selectCalendarEvent(calendarState.selectedEventId);
+  } else {
+    calendarState.selectedEventId = null;
+    resetCalendarEditor(calendarState.baseDate || getTodayDateKey());
+  }
+}
+
+async function fetchCalendarBootstrap() {
+  const { calendar } = await api('/api/intranet/calendar/bootstrap');
+  calendarState.enabled = Boolean(calendar?.enabled);
+  calendarState.eventTypes = calendar?.event_types || [];
+  calendarState.users = calendar?.users || [];
+  calendarState.summary = calendar?.summary || null;
+  calendarState.baseDate = getTodayDateKey();
+  calendarState.range = null;
+
+  renderCalendarTypeOptions();
+  renderCalendarUserOptions();
+  renderCalendarParticipants();
+
+  const modeSelect = el('calendarModeFilter');
+  if (modeSelect) {
+    modeSelect.innerHTML = '<option value="">Todos</option>' + (calendar?.meeting_modes || []).map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`).join('');
+  }
+
+  resetCalendarEditor(calendarState.baseDate);
+  await fetchCalendarEvents();
 }
 
 function setSalesSectionVisible(isVisible) {
@@ -661,12 +1270,16 @@ async function init() {
   }
 
   await fetchTrainingBootstrap();
+  await fetchCalendarBootstrap().catch(() => {});
   const { user, intranet } = bootstrapData;
   allModuleItems = intranet.modules || [];
   allDocumentItems = intranet.document_center?.recent_documents || [];
 
+  decorateSidebarNav();
+  applySidebarPreference();
   renderSidebar(user, intranet);
   renderHero(user, intranet);
+  renderDashboard(intranet);
   renderModules(intranet);
   renderDepartments(intranet);
   renderDocuments(intranet);
@@ -674,6 +1287,78 @@ async function init() {
   renderCommunication(intranet);
 
   el('documentSearch').addEventListener('input', applyDocumentFilter);
+  el('btnNewCalendarEvent')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
+  el('btnCalendarReset')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
+  el('btnCalendarPrev')?.addEventListener('click', async () => {
+    const step = calendarState.view === 'month' ? -30 : calendarState.view === 'week' ? -7 : -1;
+    calendarState.baseDate = addDays(calendarState.baseDate || getTodayDateKey(), step);
+    await fetchCalendarEvents();
+  });
+  el('btnCalendarToday')?.addEventListener('click', async () => {
+    calendarState.baseDate = getTodayDateKey();
+    await fetchCalendarEvents();
+  });
+  el('btnCalendarNext')?.addEventListener('click', async () => {
+    const step = calendarState.view === 'month' ? 30 : calendarState.view === 'week' ? 7 : 1;
+    calendarState.baseDate = addDays(calendarState.baseDate || getTodayDateKey(), step);
+    await fetchCalendarEvents();
+  });
+  Array.from(document.querySelectorAll('#calendarViewSwitch [data-view]')).forEach((button) => {
+    button.addEventListener('click', async () => {
+      calendarState.view = button.getAttribute('data-view') || 'month';
+      await fetchCalendarEvents();
+    });
+  });
+  el('calendarMeetingMode')?.addEventListener('change', setCalendarModeFields);
+  el('calendarAllDay')?.addEventListener('change', setCalendarAllDayState);
+  el('calendarUserFilter')?.addEventListener('change', fetchCalendarEvents);
+  el('calendarTypeFilter')?.addEventListener('change', fetchCalendarEvents);
+  el('calendarModeFilter')?.addEventListener('change', fetchCalendarEvents);
+  el('calendarStatusFilter')?.addEventListener('change', fetchCalendarEvents);
+  el('calendarSearchInput')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      fetchCalendarEvents();
+    }
+  });
+  el('calendarForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const eventId = Number(el('calendarEventId').value || 0);
+      const payload = collectCalendarPayload();
+      const response = eventId
+        ? await api(`/api/intranet/calendar/events/${eventId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+          })
+        : await api('/api/intranet/calendar/events', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+      calendarState.selectedEventId = response?.event?.id || eventId || null;
+      await fetchCalendarEvents();
+      if (calendarState.selectedEventId) {
+        await selectCalendarEvent(calendarState.selectedEventId);
+      }
+    } catch (err) {
+      alert('Nao foi possivel salvar o compromisso: ' + err.message);
+    }
+  });
+  el('btnCalendarCancelEvent')?.addEventListener('click', async () => {
+    const eventId = Number(el('calendarEventId').value || 0);
+    if (!eventId) return;
+    const reason = window.prompt('Motivo do cancelamento (opcional):', '');
+    try {
+      await api(`/api/intranet/calendar/events/${eventId}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ cancel_reason: reason || '' }),
+      });
+      await fetchCalendarEvents();
+      await selectCalendarEvent(eventId);
+    } catch (err) {
+      alert('Nao foi possivel cancelar o compromisso: ' + err.message);
+    }
+  });
   el('btnRefreshSales')?.addEventListener('click', fetchSalesRecords);
   el('salesCloserFilter')?.addEventListener('change', fetchSalesRecords);
   el('salesStatusFilter')?.addEventListener('change', fetchSalesRecords);
@@ -707,7 +1392,11 @@ async function init() {
       alert('Nao foi possivel salvar a atualizacao: ' + err.message);
     }
   });
-  el('btnIntranetMenu').addEventListener('click', () => setSidebarOpen(true));
+  el('btnIntranetMenu')?.addEventListener('click', toggleSidebar);
+  el('btnSidebarCollapse')?.addEventListener('click', toggleSidebar);
+  Array.from(document.querySelectorAll('.intranet-nav-link')).forEach((link) => {
+    link.addEventListener('click', () => closeSidebarOnMobile());
+  });
   document.addEventListener('click', (event) => {
     if (window.innerWidth > 960) return;
     const sidebar = el('intranetSidebar');
@@ -716,8 +1405,9 @@ async function init() {
     setSidebarOpen(false);
   });
   window.addEventListener('resize', () => {
-    if (window.innerWidth > 960) setSidebarOpen(false);
+    applySidebarPreference();
   });
+  syncSidebarButtons();
 
   if (salesState.enabled && salesState.selectedRecordId) {
     selectSalesRecord(salesState.selectedRecordId);

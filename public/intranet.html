@@ -11,20 +11,27 @@
     <aside class="intranet-sidebar" id="intranetSidebar">
       <div class="intranet-brand">
         <img class="logo-sm" src="/logo.png" alt="Logo" />
-        <div>
+        <div class="intranet-brand-copy">
           <div class="intranet-brand-title">Intranet Talkers</div>
           <div class="intranet-brand-sub" id="intranetBrandSub">Ambiente corporativo interno</div>
         </div>
+        <button class="icon-btn intranet-sidebar-toggle" id="btnSidebarCollapse" type="button" aria-label="Recolher menu lateral">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 6l-6 6 6 6" />
+          </svg>
+        </button>
       </div>
 
       <nav class="intranet-nav">
-        <a href="#home" class="intranet-nav-link">Home</a>
-        <a href="#modules" class="intranet-nav-link">Modulos</a>
-        <a href="#departments" class="intranet-nav-link">Departamentos</a>
-        <a href="#documents" class="intranet-nav-link">Documentos</a>
-        <a href="#sales" class="intranet-nav-link sales-nav-link" id="salesNavLink" hidden>Comercial</a>
-        <a href="#training" class="intranet-nav-link" id="trainingNavLink" hidden>Treinamento IA</a>
-        <a href="#communication" class="intranet-nav-link">Comunicacao</a>
+        <a href="#home" class="intranet-nav-link" id="homeNavLink" data-icon="workspace"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Home</span></a>
+        <a href="#dashboard" class="intranet-nav-link" id="dashboardNavLink" data-icon="chart" hidden><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Dashboard</span></a>
+        <a href="#modules" class="intranet-nav-link" id="modulesNavLink" data-icon="layers"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Modulos</span></a>
+        <a href="#calendar" class="intranet-nav-link" id="calendarNavLink" data-icon="calendar"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Agenda</span></a>
+        <a href="#departments" class="intranet-nav-link" id="departmentsNavLink" data-icon="briefcase"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Departamentos</span></a>
+        <a href="#documents" class="intranet-nav-link" id="documentsNavLink" data-icon="document"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Documentos</span></a>
+        <a href="#sales" class="intranet-nav-link sales-nav-link" id="salesNavLink" data-icon="target" hidden><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Comercial</span></a>
+        <a href="#training" class="intranet-nav-link" id="trainingNavLink" data-icon="assistant" hidden><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Treinamento IA</span></a>
+        <a href="#communication" class="intranet-nav-link" id="communicationNavLink" data-icon="message"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Comunicacao</span></a>
       </nav>
 
       <div class="intranet-sidebar-block">
@@ -73,6 +80,30 @@
 
       <section class="intranet-stats" id="homeStats"></section>
 
+      <section class="intranet-section" id="dashboard" hidden>
+        <div class="intranet-section-head intranet-section-head-stack">
+          <div>
+            <div class="intranet-section-eyebrow">Dashboard / BI</div>
+            <h3 class="intranet-section-title">Leitura consolidada da operacao e das areas liberadas</h3>
+          </div>
+        </div>
+
+        <div class="intranet-stats intranet-dashboard-stats" id="dashboardSummaryCards"></div>
+
+        <div class="intranet-dashboard-layout">
+          <div class="intranet-training-panel">
+            <div class="intranet-block-title">Visao por area</div>
+            <div class="intranet-dashboard-list" id="dashboardDepartmentBreakdown"></div>
+          </div>
+          <div class="intranet-training-panel">
+            <div class="intranet-block-title">Leituras e alertas</div>
+            <div class="intranet-dashboard-list" id="dashboardHighlightsList"></div>
+          </div>
+        </div>
+
+        <div class="intranet-module-grid" id="dashboardWidgetGrid"></div>
+      </section>
+
       <section class="intranet-section">
         <div class="intranet-section-head">
           <div>
@@ -91,6 +122,173 @@
           </div>
         </div>
         <div class="intranet-module-grid" id="moduleGrid"></div>
+      </section>
+
+      <section class="intranet-section" id="calendar">
+        <div class="intranet-section-head intranet-section-head-stack">
+          <div>
+            <div class="intranet-section-eyebrow">Agenda corporativa</div>
+            <h3 class="intranet-section-title">Reunioes, compromissos e alinhamentos internos</h3>
+          </div>
+          <div class="intranet-topbar-actions intranet-calendar-actions">
+            <button class="btn primary" id="btnNewCalendarEvent" type="button">Novo compromisso</button>
+          </div>
+        </div>
+
+        <div class="intranet-calendar-summary" id="calendarSummaryCards"></div>
+
+        <div class="intranet-calendar-toolbar">
+          <div class="intranet-calendar-nav">
+            <button class="btn" id="btnCalendarPrev" type="button">Anterior</button>
+            <button class="btn" id="btnCalendarToday" type="button">Hoje</button>
+            <button class="btn" id="btnCalendarNext" type="button">Proximo</button>
+            <div class="small muted" id="calendarRangeLabel">Carregando agenda...</div>
+          </div>
+          <div class="intranet-calendar-view-switch" id="calendarViewSwitch">
+            <button class="btn" type="button" data-view="month">Mes</button>
+            <button class="btn" type="button" data-view="week">Semana</button>
+            <button class="btn" type="button" data-view="day">Dia</button>
+            <button class="btn" type="button" data-view="list">Lista</button>
+          </div>
+        </div>
+
+        <div class="intranet-calendar-filter-grid">
+          <div>
+            <label for="calendarUserFilter">Usuario</label>
+            <select id="calendarUserFilter">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label for="calendarTypeFilter">Tipo</label>
+            <select id="calendarTypeFilter">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label for="calendarModeFilter">Formato</label>
+            <select id="calendarModeFilter">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label for="calendarStatusFilter">Status</label>
+            <select id="calendarStatusFilter">
+              <option value="">Todos</option>
+              <option value="scheduled">Agendado</option>
+              <option value="cancelled">Cancelado</option>
+            </select>
+          </div>
+          <div>
+            <label for="calendarSearchInput">Busca</label>
+            <input id="calendarSearchInput" class="intranet-search" placeholder="Titulo, descricao, local ou tipo" />
+          </div>
+        </div>
+
+        <div class="intranet-calendar-layout">
+          <section class="intranet-calendar-panel">
+            <div id="calendarView" class="intranet-calendar-view"></div>
+          </section>
+          <aside class="intranet-calendar-sidebar">
+            <div class="intranet-sales-detail-head">
+              <div>
+                <div class="intranet-section-eyebrow">Detalhes do compromisso</div>
+                <h4 id="calendarEditorTitle">Novo compromisso</h4>
+              </div>
+            </div>
+
+            <form class="intranet-calendar-form" id="calendarForm">
+              <input type="hidden" id="calendarEventId" value="" />
+
+              <div>
+                <label for="calendarTitle">Titulo</label>
+                <input id="calendarTitle" placeholder="Ex.: Reuniao de alinhamento comercial" />
+              </div>
+
+              <div>
+                <label for="calendarDescription">Descricao</label>
+                <textarea id="calendarDescription" rows="3" placeholder="Contexto principal do compromisso"></textarea>
+              </div>
+
+              <div class="intranet-calendar-form-grid">
+                <div>
+                  <label for="calendarEventType">Tipo</label>
+                  <select id="calendarEventType">
+                    <option value="">Selecione</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="calendarMeetingMode">Modo</label>
+                  <select id="calendarMeetingMode">
+                    <option value="online">Online</option>
+                    <option value="presencial">Presencial</option>
+                    <option value="hibrida">Hibrida</option>
+                  </select>
+                </div>
+              </div>
+
+              <label class="admin-check-row">
+                <input id="calendarAllDay" type="checkbox" />
+                <span>
+                  <strong>Dia inteiro</strong>
+                  <small>Use para eventos sem horario fixo.</small>
+                </span>
+              </label>
+
+              <div class="intranet-calendar-form-grid">
+                <div>
+                  <label for="calendarStartDate">Data inicial</label>
+                  <input id="calendarStartDate" type="date" />
+                </div>
+                <div>
+                  <label for="calendarStartTime">Hora inicial</label>
+                  <input id="calendarStartTime" type="time" />
+                </div>
+              </div>
+
+              <div class="intranet-calendar-form-grid">
+                <div>
+                  <label for="calendarEndDate">Data final</label>
+                  <input id="calendarEndDate" type="date" />
+                </div>
+                <div>
+                  <label for="calendarEndTime">Hora final</label>
+                  <input id="calendarEndTime" type="time" />
+                </div>
+              </div>
+
+              <div class="intranet-calendar-form-grid">
+                <div>
+                  <label for="calendarLocation">Local</label>
+                  <input id="calendarLocation" placeholder="Ex.: Sala pedagogica / Unidade Centro" />
+                </div>
+                <div id="calendarMeetingLinkWrap">
+                  <label for="calendarMeetingLink">Link da reuniao</label>
+                  <input id="calendarMeetingLink" placeholder="https://..." />
+                </div>
+              </div>
+
+              <div>
+                <label for="calendarNotes">Observacoes</label>
+                <textarea id="calendarNotes" rows="3" placeholder="Pontos importantes, pauta ou combinados"></textarea>
+              </div>
+
+              <div>
+                <label>Participantes</label>
+                <div class="small muted" style="margin-bottom:8px;">Selecione uma ou mais pessoas. O compromisso aparecera na agenda de todos os participantes.</div>
+                <div id="calendarParticipants" class="departments-grid"></div>
+              </div>
+
+              <div class="admin-form-actions">
+                <button class="btn" id="btnCalendarReset" type="button">Limpar</button>
+                <button class="btn" id="btnCalendarCancelEvent" type="button" style="display:none;">Cancelar evento</button>
+                <button class="btn primary" id="btnCalendarSave" type="submit">Salvar compromisso</button>
+              </div>
+            </form>
+
+            <div class="intranet-calendar-history" id="calendarHistoryList"></div>
+          </aside>
+        </div>
       </section>
 
       <section class="intranet-section" id="departments">

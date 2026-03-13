@@ -23,6 +23,7 @@
         <a href="#departments" class="intranet-nav-link">Departamentos</a>
         <a href="#documents" class="intranet-nav-link">Documentos</a>
         <a href="#sales" class="intranet-nav-link sales-nav-link" id="salesNavLink" hidden>Comercial</a>
+        <a href="#training" class="intranet-nav-link" id="trainingNavLink" hidden>Treinamento IA</a>
         <a href="#communication" class="intranet-nav-link">Comunicacao</a>
       </nav>
 
@@ -183,6 +184,41 @@
             </form>
             <div class="intranet-sales-history" id="salesHistoryList"></div>
           </aside>
+        </div>
+      </section>
+
+      <section class="intranet-section" id="training" hidden>
+        <div class="intranet-section-head intranet-section-head-stack">
+          <div>
+            <div class="intranet-section-eyebrow">Treinamento da IA</div>
+            <h3 class="intranet-section-title">Saude da base de conhecimento e memoria operacional</h3>
+          </div>
+        </div>
+
+        <div class="intranet-training-grid">
+          <div class="intranet-training-summary" id="trainingSummaryCards"></div>
+          <div class="intranet-training-panel">
+            <div class="intranet-block-title">Documentos mais usados</div>
+            <div id="trainingTopDocuments" class="intranet-chip-list"></div>
+            <div class="intranet-block-title" style="margin-top:14px;">Temas recorrentes</div>
+            <div id="trainingTopTopics" class="intranet-chip-list"></div>
+          </div>
+        </div>
+
+        <div class="intranet-training-layout">
+          <div class="intranet-training-panel">
+            <div class="intranet-block-title">Arquivos com atencao</div>
+            <div id="trainingFailuresList" class="intranet-training-list"></div>
+          </div>
+          <div class="intranet-training-panel">
+            <div class="intranet-block-title">Memorias recentes</div>
+            <div id="trainingMemoriesList" class="intranet-training-list"></div>
+          </div>
+        </div>
+
+        <div class="intranet-training-panel">
+          <div class="intranet-block-title">Eventos recentes</div>
+          <div id="trainingEventsList" class="intranet-training-list"></div>
         </div>
       </section>
 

@@ -32,6 +32,7 @@ let salesState = {
   selectedRecordId: null,
   canEditAll: false,
 };
+let trainingState = null;
 
 function renderIcon(name) {
   return ICONS[name] || ICONS.general;
@@ -99,7 +100,15 @@ function renderSidebar(user, intranet) {
 
   const quickLinks = el('sidebarQuickLinks');
   quickLinks.innerHTML = '';
-  (intranet.home.quickLinks || []).forEach((link) => {
+  const links = [...(intranet.home.quickLinks || [])];
+  if (trainingState) {
+    links.unshift({
+      title: 'Treinamento da IA',
+      description: 'Saude da base documental, memoria e reprocessamento.',
+      anchor: '#training',
+    });
+  }
+  links.forEach((link) => {
     const item = document.createElement(link.href ? 'a' : 'button');
     item.className = 'intranet-side-link';
     item.textContent = link.title;
@@ -141,7 +150,16 @@ function renderHero(user, intranet) {
 
   const quick = el('intranetQuickGrid');
   quick.innerHTML = '';
-  (intranet.home.quickLinks || []).forEach((link) => {
+  const links = [...(intranet.home.quickLinks || [])];
+  if (trainingState) {
+    links.unshift({
+      title: 'Treinamento da IA',
+      description: 'Saude da base documental, memoria e reprocessamento.',
+      anchor: '#training',
+      style: 'primary',
+    });
+  }
+  links.forEach((link) => {
     const card = document.createElement(link.href ? 'a' : 'button');
     card.className = `intranet-quick-card${link.style === 'primary' ? ' is-primary' : ''}`;
     card.innerHTML = `
@@ -256,6 +274,123 @@ function renderDocuments(intranet, query = '') {
     `;
     grid.appendChild(card);
   });
+}
+
+function setTrainingSectionVisible(isVisible) {
+  const section = el('training');
+  const navLink = el('trainingNavLink');
+  if (section) section.hidden = !isVisible;
+  if (navLink) navLink.hidden = !isVisible;
+}
+
+function renderTrainingCards(training = {}) {
+  const wrap = el('trainingSummaryCards');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const knowledgeCounts = training.knowledge?.counts || {};
+  const pendingReprocess = Math.max(Number(knowledgeCounts.total || 0) - Number(knowledgeCounts.available || 0), 0);
+  const cards = [
+    { label: 'Arquivos', value: Number(knowledgeCounts.total || 0) },
+    { label: 'Disponiveis para IA', value: Number(knowledgeCounts.available || 0) },
+    { label: 'Para reprocessar', value: pendingReprocess },
+    { label: 'Memorias', value: Number(training.memories?.total || 0) },
+  ];
+
+  cards.forEach((card) => {
+    const item = document.createElement('article');
+    item.className = 'intranet-sales-card';
+    item.innerHTML = `<strong>${escapeHtml(card.value)}</strong><span>${escapeHtml(card.label)}</span>`;
+    wrap.appendChild(item);
+  });
+}
+
+function renderTrainingList(containerId, items = [], formatter) {
+  const wrap = el(containerId);
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    wrap.innerHTML = '<div class="intranet-empty-card">Nenhum item recente nesta categoria.</div>';
+    return;
+  }
+  items.slice(0, 16).forEach((item) => {
+    const block = document.createElement('div');
+    block.className = 'intranet-training-item';
+    block.innerHTML = formatter(item);
+    wrap.appendChild(block);
+  });
+}
+
+function renderTrainingPanel(training = {}) {
+  renderTrainingCards(training);
+  const failureItems = Array.isArray(training.knowledge?.needs_reprocess) && training.knowledge.needs_reprocess.length
+    ? training.knowledge.needs_reprocess
+    : (training.knowledge?.recent_failures || []);
+
+  const docsWrap = el('trainingTopDocuments');
+  const topicsWrap = el('trainingTopTopics');
+  if (docsWrap) {
+    docsWrap.innerHTML = '';
+    const topDocs = training.knowledge?.top_documents || [];
+    if (!topDocs.length) {
+      docsWrap.innerHTML = '<span class="small muted">Nenhum documento usado recentemente.</span>';
+    } else {
+      topDocs.slice(0, 10).forEach((item) => {
+        const chip = document.createElement('span');
+        chip.className = 'intranet-chip';
+        chip.textContent = `${item.name || `Documento #${item.knowledge_source_id || '-'}`} (${Number(item.total || 0)})`;
+        docsWrap.appendChild(chip);
+      });
+    }
+  }
+
+  if (topicsWrap) {
+    topicsWrap.innerHTML = '';
+    const topics = training.memories?.top_topics || [];
+    if (!topics.length) {
+      topicsWrap.innerHTML = '<span class="small muted">Nenhum tema recorrente ainda.</span>';
+    } else {
+      topics.slice(0, 12).forEach((item) => {
+        const chip = document.createElement('span');
+        chip.className = 'intranet-chip';
+        chip.textContent = `${item.topic || '-'} (${Number(item.total || 0)})`;
+        topicsWrap.appendChild(chip);
+      });
+    }
+  }
+
+  renderTrainingList('trainingFailuresList', failureItems, (item) => `
+    <strong>${escapeHtml(item.original_name || '-')}</strong>
+    <div class="small muted">${escapeHtml(item.availability_status || '-')}</div>
+    <div>${escapeHtml(item.last_error || item.health_issues?.join(', ') || 'Sem detalhe adicional')}</div>
+  `);
+
+  renderTrainingList('trainingMemoriesList', training.memories?.recent || [], (item) => `
+    <strong>${escapeHtml(item.title || '-')}</strong>
+    <div class="small muted">${escapeHtml(item.memory_scope || '-')} - ${escapeHtml(item.language || '-')}</div>
+    <div class="small muted">${escapeHtml(formatDate(item.updated_at || item.created_at))}</div>
+  `);
+
+  renderTrainingList('trainingEventsList', training.training_events?.recent || [], (item) => `
+    <strong>${escapeHtml(item.title || item.event_type || '-')}</strong>
+    <div class="small muted">${escapeHtml(item.event_status || '-')} - ${escapeHtml(formatDate(item.created_at))}</div>
+    <div>${escapeHtml(item.detail_text || '-')}</div>
+  `);
+}
+
+async function fetchTrainingBootstrap() {
+  if (bootstrapData?.user?.role !== 'admin') {
+    setTrainingSectionVisible(false);
+    return;
+  }
+  try {
+    const data = await api('/api/intranet/training/bootstrap');
+    trainingState = data.training || null;
+    setTrainingSectionVisible(Boolean(trainingState));
+    if (trainingState) renderTrainingPanel(trainingState);
+  } catch (err) {
+    setTrainingSectionVisible(false);
+  }
 }
 
 function setSalesSectionVisible(isVisible) {
@@ -525,6 +660,7 @@ async function init() {
     return;
   }
 
+  await fetchTrainingBootstrap();
   const { user, intranet } = bootstrapData;
   allModuleItems = intranet.modules || [];
   allDocumentItems = intranet.document_center?.recent_documents || [];

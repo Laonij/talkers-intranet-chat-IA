@@ -435,13 +435,103 @@
               <thead>
                 <tr>
                   <th>Arquivo</th>
+                  <th>Tipo</th>
                   <th>Departamento</th>
                   <th>Idioma</th>
-                  <th>Status</th>
+                  <th>Parsing</th>
+                  <th>Transcricao</th>
+                  <th>Chunking</th>
+                  <th>Embedding</th>
+                  <th>Vector Store</th>
+                  <th>IA</th>
                   <th>Criado em</th>
+                  <th>Acoes</th>
                 </tr>
               </thead>
               <tbody id="ragFilesBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible" data-section="training">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Treinamento da IA</div>
+              <div id="trainingCountLabel" class="small muted">Carregando painel de treinamento...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="training">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="training">
+            <div id="trainingOverviewCards" class="admin-summary-grid"></div>
+
+            <div class="admin-subsection-head">
+              <div>
+                <div class="admin-subsection-title">Documentos mais usados</div>
+                <div class="small muted">Arquivos que mais influenciaram respostas recentes da IA.</div>
+              </div>
+            </div>
+            <div id="trainingTopDocuments" class="admin-chip-grid"></div>
+
+            <div class="admin-subsection-head">
+              <div>
+                <div class="admin-subsection-title">Temas recorrentes</div>
+                <div class="small muted">Assuntos que a memoria conversacional vem consolidando com mais frequencia.</div>
+              </div>
+            </div>
+            <div id="trainingTopTopics" class="admin-chip-grid"></div>
+
+            <div class="admin-subsection-head">
+              <div>
+                <div class="admin-subsection-title">Falhas e itens para reprocessar</div>
+                <div class="small muted">Arquivos com erro, warnings de ingestao ou indisponibilidade para a IA.</div>
+              </div>
+            </div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Arquivo</th>
+                  <th>Status</th>
+                  <th>Erro</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody id="trainingFailuresBody"></tbody>
+            </table>
+
+            <div class="admin-subsection-head">
+              <div>
+                <div class="admin-subsection-title">Memoria conversacional recente</div>
+                <div class="small muted">Memorias persistidas por conversa e memoria global do usuario.</div>
+              </div>
+            </div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Titulo</th>
+                  <th>Escopo</th>
+                  <th>Idioma</th>
+                  <th>Atualizado em</th>
+                </tr>
+              </thead>
+              <tbody id="trainingMemoriesBody"></tbody>
+            </table>
+
+            <div class="admin-subsection-head">
+              <div>
+                <div class="admin-subsection-title">Eventos recentes de treinamento</div>
+                <div class="small muted">Hits de memoria, uso de documentos e respostas fracas registradas.</div>
+              </div>
+            </div>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Evento</th>
+                  <th>Status</th>
+                  <th>Detalhe</th>
+                </tr>
+              </thead>
+              <tbody id="trainingEventsBody"></tbody>
             </table>
           </div>
         </section>
@@ -454,7 +544,7 @@
 <script>
 const RAG_BATCH_SIZE = 1;
 const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
-const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json"]);
+const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json", ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".wma", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg"]);
 const SECTION_STORAGE_KEY = "talkers-admin-sections";
 
 let pendingRagFiles = [];
@@ -463,6 +553,7 @@ let departmentCatalog = [];
 let cachedUsers = [];
 let closerCatalog = [];
 let salesOverview = null;
+let trainingOverview = null;
 let collapsedSections = new Set();
 
 async function api(path, opts = {}) {
@@ -499,6 +590,34 @@ function formatDateTime(value) {
   } catch {
     return String(value || '-');
   }
+}
+
+function formatStageLabel(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  const labels = {
+    pending: 'Pendente',
+    processing: 'Processando',
+    completed: 'Concluido',
+    skipped: 'Ignorado',
+    failed: 'Falha',
+    available: 'Disponivel',
+    local: 'Local',
+    synced: 'Sincronizado',
+    warning: 'Atencao',
+    info: 'Informativo',
+    success: 'Sucesso',
+    healthy: 'Saudavel',
+  };
+  return labels[normalized] || (value || '-');
+}
+
+function getStatusBadgeClass(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['completed', 'available', 'synced', 'success', 'healthy'].includes(normalized)) return 'badge admin';
+  if (['processing', 'pending'].includes(normalized)) return 'badge';
+  if (['warning'].includes(normalized)) return 'badge warning';
+  if (['failed', 'error'].includes(normalized)) return 'badge danger';
+  return 'badge';
 }
 
 function setMsg(text, isError = false) {
@@ -1004,9 +1123,13 @@ async function loadUsers() {
 async function loadRagStatus() {
   const status = await api('/api/admin/rag/status');
   const el = document.getElementById('ragStatus');
+  const counts = status.counts || {};
+  const available = Number(status.available_to_ai || counts.available || 0);
+  const failed = Number(status.recent_failures || counts.failed || 0);
+  const processing = Number(counts.processing || 0);
   el.textContent = status.vector_store_configured
-    ? `Vector Store ativa (${status.vector_store_id}). Upload vai para o indice local e para a OpenAI.`
-    : 'Vector Store nao configurada. Upload vai alimentar somente o indice local.';
+    ? `Vector Store ativa (${status.vector_store_id}). ${available} arquivo(s) ja estao disponiveis para a IA, ${processing} em processamento e ${failed} precisa(m) de atencao.`
+    : `Vector Store nao configurada. O indice local segue ativo com ${available} arquivo(s) disponiveis para a IA, ${processing} em processamento e ${failed} com falha.`;
 }
 
 async function loadRagFiles() {
@@ -1018,7 +1141,7 @@ async function loadRagFiles() {
   if (!files.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 5;
+    td.colSpan = 12;
     td.className = 'small muted';
     td.textContent = 'Nenhum documento carregado na base ainda.';
     tr.appendChild(td);
@@ -1028,15 +1151,215 @@ async function loadRagFiles() {
 
   for (const file of files) {
     const tr = document.createElement('tr');
+    const lastError = file.last_error ? escapeHtml(file.last_error) : '-';
     tr.innerHTML = `
       <td>${escapeHtml(file.original_name)}</td>
+      <td class="small muted">${escapeHtml(file.mime_type || '-')}</td>
       <td class="small muted">${escapeHtml(file.department_name || 'Geral')}</td>
       <td class="small muted">${escapeHtml(file.language || '-')}</td>
-      <td class="small muted">${escapeHtml(file.vector_store_file_id ? 'Sincronizado' : (file.sync_status || 'Local'))}</td>
+      <td><span class="${getStatusBadgeClass(file.parsing_status)}">${escapeHtml(formatStageLabel(file.parsing_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.transcript_status)}">${escapeHtml(formatStageLabel(file.transcript_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.chunking_status)}">${escapeHtml(formatStageLabel(file.chunking_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.embedding_status)}">${escapeHtml(formatStageLabel(file.embedding_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.vector_store_status)}">${escapeHtml(formatStageLabel(file.vector_store_status))}</span></td>
+      <td title="${lastError}"><span class="${getStatusBadgeClass(file.availability_status)}">${escapeHtml(formatStageLabel(file.availability_status))}</span></td>
       <td class="small muted">${escapeHtml(formatDateTime(file.created_at))}</td>
+      <td class="admin-inline-actions"></td>
     `;
+    const actionsCell = tr.lastElementChild;
+    const reprocessBtn = document.createElement('button');
+    reprocessBtn.type = 'button';
+    reprocessBtn.className = 'btn';
+    reprocessBtn.textContent = 'Reprocessar';
+    reprocessBtn.onclick = async () => {
+      reprocessBtn.disabled = true;
+      reprocessBtn.textContent = 'Reprocessando...';
+      try {
+        await api(`/api/admin/rag/files/${file.id}/reprocess`, { method: 'POST' });
+        setMsg(`Reprocessamento iniciado para ${file.original_name}.`);
+        await Promise.all([loadRagStatus(), loadRagFiles(), loadAiTrainingOverview()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      } finally {
+        reprocessBtn.disabled = false;
+        reprocessBtn.textContent = 'Reprocessar';
+      }
+    };
+    actionsCell.appendChild(reprocessBtn);
+
+    const logsBtn = document.createElement('button');
+    logsBtn.type = 'button';
+    logsBtn.className = 'btn';
+    logsBtn.textContent = 'Logs';
+    logsBtn.onclick = async () => {
+      try {
+        const result = await api(`/api/admin/rag/files/${file.id}/logs`);
+        const logLines = (result.logs || []).slice(0, 5).map((item) => `${formatDateTime(item.created_at)} - ${item.stage_key} [${item.stage_status}] ${item.message || ''}`);
+        const eventLines = (result.training_events || []).slice(0, 3).map((item) => `${formatDateTime(item.created_at)} - ${item.event_type} [${item.event_status}] ${item.detail_text || ''}`);
+        const lines = [...logLines, ...eventLines];
+        setMsg(lines.length ? lines.join(' | ') : 'Nenhum log recente para este arquivo.');
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actionsCell.appendChild(logsBtn);
     body.appendChild(tr);
   }
+}
+
+function renderTrainingOverviewCards(overview = {}) {
+  const wrap = document.getElementById('trainingOverviewCards');
+  wrap.innerHTML = '';
+
+  const knowledgeCounts = overview.knowledge?.counts || {};
+  const memories = overview.memories || {};
+  const events = overview.training_events || {};
+  const pendingReprocess = Math.max(Number(knowledgeCounts.total || 0) - Number(knowledgeCounts.available || 0), 0);
+  const cards = [
+    { label: 'Arquivos na base', value: Number(knowledgeCounts.total || 0), tone: 'primary' },
+    { label: 'Disponiveis para IA', value: Number(knowledgeCounts.available || 0), tone: 'success' },
+    { label: 'Para reprocessar', value: pendingReprocess, tone: 'warning' },
+    { label: 'Memorias', value: Number(memories.total || 0), tone: 'neutral' },
+    { label: 'Respostas fracas', value: Array.isArray(events.weak_responses) ? events.weak_responses.length : 0, tone: 'danger' },
+  ];
+
+  cards.forEach((card) => {
+    const article = document.createElement('article');
+    article.className = `admin-metric-card ${card.tone || 'neutral'}`;
+    article.innerHTML = `<div class="admin-metric-value">${escapeHtml(card.value)}</div><div class="admin-metric-label">${escapeHtml(card.label)}</div>`;
+    wrap.appendChild(article);
+  });
+}
+
+function renderTrainingTopDocuments(items = []) {
+  const wrap = document.getElementById('trainingTopDocuments');
+  wrap.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    wrap.innerHTML = '<div class="small muted">Nenhum documento usado recentemente pela IA.</div>';
+    return;
+  }
+
+  items.slice(0, 10).forEach((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'admin-chip-card';
+    chip.innerHTML = `<strong>${escapeHtml(item.name || `Documento #${item.knowledge_source_id || '-'}`)}</strong><span>${Number(item.total || 0)} uso(s)</span>`;
+    wrap.appendChild(chip);
+  });
+}
+
+function renderTrainingTopTopics(items = []) {
+  const wrap = document.getElementById('trainingTopTopics');
+  wrap.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    wrap.innerHTML = '<div class="small muted">Nenhum tema recorrente consolidado ainda.</div>';
+    return;
+  }
+
+  items.slice(0, 12).forEach((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'admin-chip-card';
+    chip.innerHTML = `<strong>${escapeHtml(item.topic || '-')}</strong><span>${Number(item.total || 0)} ocorrencia(s)</span>`;
+    wrap.appendChild(chip);
+  });
+}
+
+function renderTrainingFailures(items = []) {
+  const body = document.getElementById('trainingFailuresBody');
+  body.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhum arquivo com falha ou indisponibilidade no momento.</td></tr>';
+    return;
+  }
+
+  items.slice(0, 20).forEach((item) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(item.original_name || '-')}</td>
+      <td><span class="${getStatusBadgeClass(item.availability_status)}">${escapeHtml(formatStageLabel(item.availability_status))}</span></td>
+      <td class="small muted">${escapeHtml(item.last_error || item.health_issues?.join(', ') || '-')}</td>
+      <td class="admin-inline-actions"></td>
+    `;
+    const actionsCell = tr.lastElementChild;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.textContent = 'Reprocessar';
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/admin/rag/files/${item.id}/reprocess`, { method: 'POST' });
+        setMsg(`Reprocessamento solicitado para ${item.original_name}.`);
+        await Promise.all([loadRagStatus(), loadRagFiles(), loadAiTrainingOverview()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    actionsCell.appendChild(btn);
+    body.appendChild(tr);
+  });
+}
+
+function renderTrainingMemories(memories = []) {
+  const body = document.getElementById('trainingMemoriesBody');
+  body.innerHTML = '';
+  if (!Array.isArray(memories) || !memories.length) {
+    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhuma memoria persistida ainda.</td></tr>';
+    return;
+  }
+
+  memories.slice(0, 20).forEach((memory) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(memory.title || '-')}</td>
+      <td class="small muted">${escapeHtml(memory.memory_scope || '-')}</td>
+      <td class="small muted">${escapeHtml(memory.language || '-')}</td>
+      <td class="small muted">${escapeHtml(formatDateTime(memory.updated_at || memory.created_at))}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function renderTrainingEvents(events = []) {
+  const body = document.getElementById('trainingEventsBody');
+  body.innerHTML = '';
+  if (!Array.isArray(events) || !events.length) {
+    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhum evento recente de treinamento foi registrado ainda.</td></tr>';
+    return;
+  }
+
+  events.slice(0, 20).forEach((event) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="small muted">${escapeHtml(formatDateTime(event.created_at))}</td>
+      <td>${escapeHtml(event.title || event.event_type || '-')}</td>
+      <td><span class="${getStatusBadgeClass(event.event_status)}">${escapeHtml(formatStageLabel(event.event_status || 'info'))}</span></td>
+      <td class="small muted">${escapeHtml(event.detail_text || '-')}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+async function loadAiTrainingOverview() {
+  const overview = await api('/api/admin/ai-training/overview');
+  trainingOverview = overview;
+
+  const knowledgeTotal = Number(overview.knowledge?.counts?.total || 0);
+  const knowledgeAvailable = Number(overview.knowledge?.counts?.available || 0);
+  const memoryTotal = Number(overview.memories?.total || 0);
+  const failureItems = Array.isArray(overview.knowledge?.needs_reprocess) && overview.knowledge.needs_reprocess.length
+    ? overview.knowledge.needs_reprocess
+    : (overview.knowledge?.recent_failures || []);
+  const failureTotal = Math.max(knowledgeTotal - knowledgeAvailable, failureItems.length);
+  document.getElementById('trainingCountLabel').textContent = `${knowledgeTotal} arquivo(s), ${memoryTotal} memoria(s) e ${failureTotal} falha(s) monitoradas`;
+
+  renderTrainingOverviewCards(overview);
+  renderTrainingTopDocuments(overview.knowledge?.top_documents || []);
+  renderTrainingTopTopics(overview.memories?.top_topics || []);
+  renderTrainingFailures(failureItems);
+  renderTrainingMemories(overview.memories?.recent || []);
+  renderTrainingEvents(overview.training_events?.recent || []);
 }
 
 function renderCloserUserOptions() {
@@ -1619,7 +1942,7 @@ document.getElementById('btnUploadRag').onclick = async () => {
       failedCount > 0 ? 'error' : 'success'
     );
 
-    await Promise.all([loadRagStatus(), loadRagFiles()]);
+    await Promise.all([loadRagStatus(), loadRagFiles(), loadAiTrainingOverview()]);
   } catch (err) {
     const remainingQueue = queue.slice(completedFileCount);
     pendingRagFiles = [...failedFiles, ...remainingQueue];
@@ -1650,7 +1973,20 @@ resetDepartmentForm();
 resetCloserForm();
 updateSalesWorkbookLabels();
 
-Promise.all([loadDepartments(), loadUsers(), loadRagStatus(), loadRagFiles(), loadClosers(), loadSalesOverview(), loadSalesRecords(), loadSalesLogs()])
+Promise.all([
+  loadDepartments(),
+  loadUsers(),
+  loadRagStatus(),
+  loadRagFiles(),
+  loadAiTrainingOverview().catch((err) => {
+    document.getElementById('trainingCountLabel').textContent = 'Painel de treinamento indisponivel no momento';
+    setMsg('Aviso: nao foi possivel carregar o painel de treinamento: ' + err.message, true);
+  }),
+  loadClosers(),
+  loadSalesOverview(),
+  loadSalesRecords(),
+  loadSalesLogs(),
+])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
 </script>
 </body>

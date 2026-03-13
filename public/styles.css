@@ -463,6 +463,16 @@ body.app-shell .chat{
   color:#155e75;
 }
 
+.badge.warning{
+  background:#fff7ed;
+  color:#c2410c;
+}
+
+.badge.danger{
+  background:#fef2f2;
+  color:#b42318;
+}
+
 .error{
   color:#b91c1c;
   background:#fef2f2;
@@ -2337,6 +2347,16 @@ body.app-shell .intranet-btn:hover {
   border-color: #bfdbfe;
 }
 
+.admin-metric-card.warning {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.admin-metric-card.danger {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
 .admin-metric-value {
   font-size: 28px;
   font-weight: 700;
@@ -2367,6 +2387,12 @@ body.app-shell .intranet-btn:hover {
 .admin-chip-card span {
   color: #64748b;
   font-size: 13px;
+}
+
+.admin-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .admin-filter-grid {
@@ -2580,6 +2606,7 @@ body.app-shell .intranet-btn:hover {
 .intranet-module-grid,
 .intranet-department-grid,
 .intranet-document-grid,
+.intranet-training-summary,
 .intranet-communication-grid,
 .intranet-future-list {
   display: grid;
@@ -2591,12 +2618,53 @@ body.app-shell .intranet-btn:hover {
 .intranet-quick-grid,
 .intranet-module-grid,
 .intranet-document-grid,
+.intranet-training-summary,
 .intranet-communication-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .intranet-department-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.intranet-training-grid,
+.intranet-training-layout {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.intranet-training-grid {
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr);
+}
+
+.intranet-training-layout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.intranet-training-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 24px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 20px 45px rgba(15,23,42,.05);
+  padding: 16px;
+}
+
+.intranet-training-list {
+  display: grid;
+  gap: 12px;
+}
+
+.intranet-training-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  background: #fff;
+  padding: 14px;
+}
+
+.intranet-training-item strong {
+  display: block;
+  margin-bottom: 6px;
 }
 
 .intranet-highlight-card,
@@ -2833,8 +2901,11 @@ body.app-shell .intranet-btn:hover {
   .intranet-stats,
   .intranet-quick-grid,
   .intranet-module-grid,
+  .intranet-training-summary,
   .intranet-document-grid,
-  .intranet-communication-grid {
+  .intranet-communication-grid,
+  .intranet-training-layout,
+  .intranet-training-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -2892,9 +2963,12 @@ body.app-shell .intranet-btn:hover {
   .intranet-stats,
   .intranet-quick-grid,
   .intranet-module-grid,
+  .intranet-training-summary,
   .intranet-document-grid,
   .intranet-communication-grid,
-  .intranet-department-grid {
+  .intranet-department-grid,
+  .intranet-training-layout,
+  .intranet-training-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2951,9 +3025,12 @@ body.app-shell .intranet-btn:hover {
   .intranet-highlight-list,
   .intranet-quick-grid,
   .intranet-module-grid,
+  .intranet-training-summary,
   .intranet-document-grid,
   .intranet-communication-grid,
-  .intranet-department-grid {
+  .intranet-department-grid,
+  .intranet-training-layout,
+  .intranet-training-grid {
     grid-template-columns: 1fr;
   }
 

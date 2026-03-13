@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
@@ -23,10 +23,12 @@ const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact } = require("./lib/generate");
 const { ocrImage } = require("./lib/ocr");
-const { isAudioFile, transcribeAudio } = require("./lib/audio");
+const { isAudioFile, isMediaFile, isVideoFile, transcribeAudio, transcribeMedia } = require("./lib/audio");
 const {
   attachFileToVectorStore,
   buildOpenAIInputFilePart,
+  getOpenAIFileStatus,
+  getVectorStoreFileStatus,
   isSupportedOpenAIInputFile,
   uploadFileToOpenAI,
 } = require("./lib/rag");
@@ -99,6 +101,21 @@ const RAG_ALLOWED_EXTS = new Set([
   ".txt",
   ".md",
   ".json",
+  ".mp3",
+  ".wav",
+  ".m4a",
+  ".aac",
+  ".ogg",
+  ".webm",
+  ".flac",
+  ".wma",
+  ".mp4",
+  ".mov",
+  ".avi",
+  ".mkv",
+  ".m4v",
+  ".mpeg",
+  ".mpg",
 ]);
 const RAG_TEXT_COMPARE_EXTS = new Set([".txt", ".md", ".csv", ".json"]);
 const RAG_LOCAL_EXTRACTION_LIMITS = {
@@ -113,7 +130,25 @@ const RAG_LOCAL_EXTRACTION_LIMITS = {
   ".txt": 5 * 1024 * 1024,
   ".md": 5 * 1024 * 1024,
   ".json": 5 * 1024 * 1024,
+  ".mp3": 25 * 1024 * 1024,
+  ".wav": 25 * 1024 * 1024,
+  ".m4a": 25 * 1024 * 1024,
+  ".aac": 25 * 1024 * 1024,
+  ".ogg": 25 * 1024 * 1024,
+  ".webm": 25 * 1024 * 1024,
+  ".flac": 25 * 1024 * 1024,
+  ".wma": 25 * 1024 * 1024,
+  ".mp4": 25 * 1024 * 1024,
+  ".mov": 25 * 1024 * 1024,
+  ".avi": 25 * 1024 * 1024,
+  ".mkv": 25 * 1024 * 1024,
+  ".m4v": 25 * 1024 * 1024,
+  ".mpeg": 25 * 1024 * 1024,
+  ".mpg": 25 * 1024 * 1024,
 };
+const MEDIA_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".wma", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg"]);
+const MEMORY_ENTRY_MIN_SIMILARITY = 0.43;
+const MAX_MEMORY_CANDIDATES = 120;
 
 validateConfig();
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -298,6 +333,218 @@ function safeJsonParse(value) {
   } catch {
     return null;
   }
+}
+
+function safeJsonStringify(value, fallback = "{}") {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function createKnowledgeProcessingState(overrides = {}) {
+  return {
+    upload: { status: "pending" },
+    parsing: { status: "pending" },
+    chunking: { status: "pending" },
+    embedding: { status: "pending" },
+    vector_store: { status: OPENAI_VECTOR_STORE_ID ? "pending" : "skipped" },
+    health: { status: "pending", issues: [] },
+    transcript: { status: "skipped" },
+    final: {
+      status: "pending",
+      available_to_ai: false,
+      message: "Aguardando processamento.",
+    },
+    ...overrides,
+  };
+}
+
+function getKnowledgeProcessingState(record) {
+  const parsed = safeJsonParse(record?.processing_state_json || "{}");
+  return parsed && typeof parsed === "object"
+    ? parsed
+    : createKnowledgeProcessingState();
+}
+
+function hasPersistedKnowledgeStages(record) {
+  const raw = String(record?.processing_state_json || "").trim();
+  if (!raw || raw === "{}") return false;
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object") return false;
+  return ["parsing", "chunking", "embedding", "vector_store", "transcript"].some((key) => parsed[key] && typeof parsed[key] === "object");
+}
+
+function normalizeStageStatus(value, fallback = "pending") {
+  const safe = String(value || "").trim().toLowerCase();
+  return safe || fallback;
+}
+
+function withKnowledgeStage(state, stageKey, patch = {}) {
+  const current = state && typeof state === "object" ? { ...state } : createKnowledgeProcessingState();
+  const previous = current[stageKey] && typeof current[stageKey] === "object" ? current[stageKey] : {};
+  current[stageKey] = {
+    ...previous,
+    ...patch,
+    status: normalizeStageStatus(patch.status || previous.status || "pending"),
+    updated_at: new Date().toISOString(),
+  };
+  return current;
+}
+
+function detectKnowledgeTextIssues(text = "") {
+  const safe = String(text || "");
+  const issues = [];
+
+  if (!safe.trim()) {
+    issues.push("sem_texto_extraido");
+  }
+
+  if (/[�]/.test(safe)) {
+    issues.push("caractere_corrompido");
+  }
+
+  if (/(?:Ã.|Â.|ðŸ|�)/.test(safe)) {
+    issues.push("encoding_suspeito");
+  }
+
+  if (safe.trim() && safe.replace(/\s+/g, "").length < 32) {
+    issues.push("texto_muito_curto");
+  }
+
+  return [...new Set(issues)];
+}
+
+function finalizeKnowledgeProcessingState(state, extras = {}) {
+  const safeState = state && typeof state === "object" ? { ...state } : createKnowledgeProcessingState();
+  const parsingStatus = normalizeStageStatus(safeState.parsing?.status);
+  const chunkStatus = normalizeStageStatus(safeState.chunking?.status);
+  const embeddingStatus = normalizeStageStatus(safeState.embedding?.status);
+  const vectorStatus = normalizeStageStatus(safeState.vector_store?.status, OPENAI_VECTOR_STORE_ID ? "pending" : "skipped");
+  const transcriptStatus = normalizeStageStatus(safeState.transcript?.status, "skipped");
+  const issues = Array.isArray(safeState.health?.issues) ? [...new Set(safeState.health.issues)] : [];
+
+  const localReady = parsingStatus === "completed" && chunkStatus === "completed" && embeddingStatus === "completed";
+  const vectorReady = !OPENAI_VECTOR_STORE_ID || vectorStatus === "completed" || vectorStatus === "skipped";
+  const hasFailure = ["failed"].includes(parsingStatus)
+    || ["failed"].includes(chunkStatus)
+    || ["failed"].includes(embeddingStatus)
+    || ["failed"].includes(vectorStatus)
+    || ["failed"].includes(transcriptStatus);
+
+  let finalStatus = "processing";
+  let message = "Processando conhecimento.";
+  if (hasFailure) {
+    finalStatus = "failed";
+    message = "Houve falha em uma ou mais etapas do processamento.";
+  } else if (localReady && vectorReady) {
+    finalStatus = "available";
+    message = "Disponivel para uso da IA.";
+  }
+
+  safeState.health = {
+    status: issues.length ? "warning" : (finalStatus === "failed" ? "failed" : "healthy"),
+    issues,
+    checked_at: new Date().toISOString(),
+  };
+  safeState.final = {
+    status: finalStatus,
+    available_to_ai: finalStatus === "available",
+    message,
+    ...extras,
+  };
+  return safeState;
+}
+
+function extractKnowledgeLastError(state) {
+  const safeState = state && typeof state === "object" ? state : {};
+  const stages = ["upload", "parsing", "transcript", "chunking", "embedding", "vector_store"];
+  for (const stageKey of stages) {
+    const stage = safeState[stageKey];
+    if (stage?.status === "failed") {
+      return stage.message || stage.error || `${stageKey}_failed`;
+    }
+  }
+  return "";
+}
+
+async function appendKnowledgeProcessingLog(knowledgeSourceId, stageKey, stageStatus, message = "", detail = {}, actorUserId = null) {
+  if (!knowledgeSourceId) return;
+  await run(
+    "INSERT INTO knowledge_processing_logs (knowledge_source_id, stage_key, stage_status, message, detail_json, actor_user_id) VALUES (?, ?, ?, ?, ?, ?)",
+    [
+      knowledgeSourceId,
+      stageKey,
+      stageStatus,
+      message || null,
+      detail && Object.keys(detail).length ? safeJsonStringify(detail, "{}") : null,
+      actorUserId || null,
+    ]
+  );
+}
+
+async function updateKnowledgeSourceState(knowledgeSourceId, state, syncStatus = null) {
+  if (!knowledgeSourceId) return;
+  const finalized = finalizeKnowledgeProcessingState(state);
+  const nextSyncStatus = syncStatus
+    || (finalized.final?.available_to_ai
+      ? "available"
+      : finalized.final?.status === "failed"
+        ? "failed"
+        : "processing");
+
+  await run(
+    "UPDATE knowledge_sources SET processing_state_json=?, sync_status=?, updated_at=datetime('now') WHERE id=?",
+    [safeJsonStringify(finalized, "{}"), nextSyncStatus, knowledgeSourceId]
+  );
+}
+
+async function updateKnowledgeSourceFields(knowledgeSourceId, fields = {}) {
+  const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+  if (!knowledgeSourceId || !entries.length) return;
+
+  const columns = entries.map(([key]) => `${key}=?`).join(", ");
+  const values = entries.map(([, value]) => value);
+  values.push(knowledgeSourceId);
+
+  await run(
+    `UPDATE knowledge_sources SET ${columns}, updated_at=datetime('now') WHERE id=?`,
+    values
+  );
+}
+
+async function getKnowledgeSourceById(knowledgeSourceId) {
+  return await get(
+    `SELECT id, original_name, stored_name, mime_type, language, content_hash, department_name, source_kind,
+            sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, created_at, updated_at
+       FROM knowledge_sources
+      WHERE id=?`,
+    [knowledgeSourceId]
+  );
+}
+
+function getKnowledgeSourceFullPath(source) {
+  if (!source?.stored_name) return "";
+  return path.join(knowledgeDir, source.stored_name);
+}
+
+function getKnowledgeUploadExt(filePath, originalName = "", mimeType = "") {
+  return detectExt(filePath, originalName, mimeType) || path.extname(String(filePath || "")).toLowerCase() || ".bin";
+}
+
+function isMediaKnowledgeFile(originalName = "", mimeType = "", filePath = "") {
+  const ext = getKnowledgeUploadExt(filePath, originalName, mimeType);
+  return MEDIA_EXTS.has(ext) || isMediaFile(originalName || filePath, mimeType);
+}
+
+function buildTranscriptStorageName(storedName = "") {
+  const base = path.basename(storedName, path.extname(storedName));
+  return `${base}.transcript.txt`;
+}
+
+function getTranscriptFilePathForKnowledge(storedName = "") {
+  return path.join(knowledgeDir, buildTranscriptStorageName(storedName));
 }
 
 function compactMemory(text, maxChars = MAX_CONVERSATION_MEMORY) {
@@ -1301,7 +1548,7 @@ function analyzeConversationIntent(userText = "", userLanguage = "pt", options =
   const wantsTranslation = /\b(traduza|translate|traduz|translation|traducao|traduccion|traduzione)\b/i.test(userText);
   const wantsSummary = /\b(resuma|resumo|summary|summarize|resumen|riassunto)\b/i.test(userText);
   const wantsRewrite = /\b(melhore|reescreva|rewrite|rephrase|ajuste|corrija|formate|organize)\b/i.test(userText);
-  const wantsSteps = /\b(passo a passo|step by step|como fazer|how to|como faco|como fa�o)\b/i.test(userText);
+  const wantsSteps = /\b(passo a passo|step by step|como fazer|how to|como faco|como faço)\b/i.test(userText);
   const wantsProfessional = /\b(profissional|formal|executivo|corporativo|business|profesional|professionnel)\b/i.test(userText);
   const wantsPersuasive = /\b(venda|comercial|persuasivo|convencer|sales|conversion)\b/i.test(userText);
   const businessIntent = analyzeBusinessIntent(userText, { departments: options.departments || [] });
@@ -1310,7 +1557,7 @@ function analyzeConversationIntent(userText = "", userLanguage = "pt", options =
   if (wantsProfessional) tone = 'profissional';
   else if (wantsPersuasive || businessIntent.businessAreaKey === 'commercial') tone = 'persuasivo';
   else if (wantsSteps || wantsSummary || businessIntent.responseDepth === 'deep') tone = 'objetivo';
-  else if (/\b(rapido|r�pido|direto|curto|short|brief)\b/i.test(userText)) tone = 'direto';
+  else if (/\b(rapido|rápido|direto|curto|short|brief)\b/i.test(userText)) tone = 'direto';
   else if (/\b(leve|humano|friendly|casual|despojado)\b/i.test(userText)) tone = 'leve';
 
   const responseLabel = userLanguage === 'en'
@@ -1606,6 +1853,183 @@ async function updateUserMemory(userId, userText, assistantText, language = 'pt'
   }
 }
 
+function buildMemoryEntryTitle(userText = "", assistantText = "") {
+  const base = String(userText || assistantText || "").trim();
+  return base ? base.slice(0, 96) : "Memoria contextual";
+}
+
+function buildMemoryEntryContent(userText = "", assistantText = "") {
+  const parts = [];
+  if (String(userText || "").trim()) {
+    parts.push(`Usuario mencionou: ${String(userText || "").trim()}`);
+  }
+  if (String(assistantText || "").trim()) {
+    parts.push(`Contexto/acao da IA: ${String(assistantText || "").trim()}`);
+  }
+  return compactMemory(parts.join("\n"), 2200);
+}
+
+async function upsertMemoryEntry({
+  userId,
+  conversationId = null,
+  memoryScope = "conversation",
+  memoryKind = "context",
+  title = "",
+  contentText = "",
+  topics = [],
+  language = "pt",
+  sourceMessageIds = [],
+}) {
+  const safeText = compactMemory(String(contentText || "").trim(), 2200);
+  if (!userId || !safeText) return null;
+
+  const normalizedText = normalizeSemanticText(safeText);
+  if (!normalizedText) return null;
+
+  const existing = await get(
+    `SELECT id
+       FROM memory_entries
+      WHERE user_id=?
+        AND COALESCE(conversation_id, 0)=?
+        AND memory_scope=?
+        AND normalized_text=?
+      ORDER BY updated_at DESC
+      LIMIT 1`,
+    [userId, Number(conversationId || 0), memoryScope, normalizedText]
+  );
+
+  const embedding = await getEmbeddingForText(safeText);
+  const payload = [
+    title || buildMemoryEntryTitle(safeText),
+    safeText,
+    normalizedText,
+    safeJsonStringify(topics || [], "[]"),
+    language || "pt",
+    safeJsonStringify(sourceMessageIds || [], "[]"),
+    embedding ? JSON.stringify(embedding) : null,
+    embedding ? OPENAI_EMBEDDING_MODEL : null,
+  ];
+
+  if (existing?.id) {
+    await run(
+      "UPDATE memory_entries SET title=?, content_text=?, normalized_text=?, topics_json=?, language=?, source_message_ids_json=?, embedding_json=?, embedding_model=?, updated_at=datetime('now') WHERE id=?",
+      [...payload, existing.id]
+    );
+    return existing.id;
+  }
+
+  const created = await run(
+    "INSERT INTO memory_entries (user_id, conversation_id, memory_scope, memory_kind, title, content_text, normalized_text, topics_json, language, source_message_ids_json, embedding_json, embedding_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [userId, conversationId || null, memoryScope, memoryKind, ...payload]
+  );
+  return created.lastID;
+}
+
+async function persistConversationMemories({
+  userId,
+  conversationId,
+  userText,
+  assistantText,
+  language = "pt",
+}) {
+  if (!userId || !conversationId) return [];
+
+  const topics = extractTopicTerms(`${userText} ${assistantText}`).slice(0, 12);
+  const memoryText = buildMemoryEntryContent(userText, assistantText);
+  const createdIds = [];
+
+  const conversationEntryId = await upsertMemoryEntry({
+    userId,
+    conversationId,
+    memoryScope: "conversation",
+    memoryKind: "thread_context",
+    title: buildMemoryEntryTitle(userText),
+    contentText: memoryText,
+    topics,
+    language,
+  });
+  if (conversationEntryId) createdIds.push(conversationEntryId);
+
+  if (topics.length >= 2 || memoryText.length >= 160) {
+    const globalEntryId = await upsertMemoryEntry({
+      userId,
+      conversationId: null,
+      memoryScope: "user_global",
+      memoryKind: "recurring_context",
+      title: buildMemoryEntryTitle(userText),
+      contentText: memoryText,
+      topics,
+      language,
+    });
+    if (globalEntryId) createdIds.push(globalEntryId);
+  }
+
+  return createdIds;
+}
+
+async function getRelevantMemoryEntries(userId, conversationId, queryText, limit = 4) {
+  if (!userId || !String(queryText || "").trim()) return [];
+
+  const queryEmbedding = await getEmbeddingForText(queryText);
+  const topicTerms = new Set(extractTopicTerms(queryText));
+  const rows = await all(
+    `SELECT id, user_id, conversation_id, memory_scope, memory_kind, title, content_text, topics_json, language, embedding_json, updated_at
+       FROM memory_entries
+      WHERE user_id=?
+        AND (conversation_id=? OR memory_scope='user_global')
+      ORDER BY datetime(updated_at) DESC, id DESC
+      LIMIT ?`,
+    [userId, conversationId || 0, MAX_MEMORY_CANDIDATES]
+  );
+
+  return rows
+    .map((row) => {
+      const topics = safeJsonParse(row.topics_json || "[]") || [];
+      const overlap = topics.filter((topic) => topicTerms.has(topic)).length;
+      const similarity = queryEmbedding ? cosineSimilarity(queryEmbedding, row.embedding_json) : 0;
+      const recencyBoost = row.conversation_id && Number(row.conversation_id) === Number(conversationId || 0) ? 0.18 : 0.06;
+      const score = similarity + (overlap * 0.08) + recencyBoost;
+      return {
+        ...row,
+        topics,
+        memory_score: score,
+      };
+    })
+    .filter((row) => row.memory_score >= MEMORY_ENTRY_MIN_SIMILARITY || row.topics.length >= 2)
+    .sort((left, right) => Number(right.memory_score || 0) - Number(left.memory_score || 0))
+    .slice(0, limit);
+}
+
+function buildMemoryContextBundle(entries = []) {
+  const safeEntries = Array.isArray(entries) ? entries : [];
+  return {
+    text: safeEntries.map((entry) => {
+      const scopeLabel = entry.memory_scope === "user_global" ? "Memoria global do usuario" : "Memoria da conversa";
+      return `[${scopeLabel}: ${entry.title || "Contexto"}]\n${String(entry.content_text || "").slice(0, 1200)}`;
+    }).join("\n\n"),
+    entries: safeEntries,
+  };
+}
+
+async function persistReplyMemories({
+  conversationId,
+  userId,
+  userText,
+  assistantText,
+  language = "pt",
+  resetMemory = false,
+}) {
+  await updateConversationMemory(conversationId, userText, assistantText, { resetMemory });
+  await updateUserMemory(userId, userText, assistantText, language);
+  await persistConversationMemories({
+    userId,
+    conversationId,
+    userText,
+    assistantText,
+    language,
+  });
+}
+
 async function getRelevantUserMemory(userId, userText) {
   const memory = await getUserMemory(userId);
   if (!memory.summaryText) return '';
@@ -1621,10 +2045,6 @@ async function getRelevantUserMemory(userId, userText) {
   return '';
 }
 
-function getKnowledgeUploadExt(filePath, originalName = "", mimeType = "") {
-  return detectExt(filePath, originalName, mimeType) || path.extname(String(filePath || "")).toLowerCase() || ".bin";
-}
-
 function isSupportedKnowledgeUpload(originalName = "", mimeType = "", filePath = "") {
   const ext = getKnowledgeUploadExt(filePath, originalName, mimeType);
   return RAG_ALLOWED_EXTS.has(ext);
@@ -1633,11 +2053,6 @@ function isSupportedKnowledgeUpload(originalName = "", mimeType = "", filePath =
 function shouldExtractKnowledgeLocally(ext, sizeBytes) {
   const limit = RAG_LOCAL_EXTRACTION_LIMITS[ext];
   if (!limit) return false;
-
-  if (OPENAI_VECTOR_STORE_ID && !RAG_TEXT_COMPARE_EXTS.has(ext)) {
-    return false;
-  }
-
   return Number(sizeBytes || 0) <= limit;
 }
 
@@ -1740,20 +2155,33 @@ async function upsertDocumentChunks(documentId, relPath, extractedText, language
   return created;
 }
 
-async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeType, departmentName = '', sourceKind = 'manual_upload' }) {
+async function upsertIndexedDocument({
+  sourcePath,
+  relPath,
+  originalName,
+  mimeType,
+  departmentName = '',
+  sourceKind = 'manual_upload',
+  extractedTextOverride = '',
+  detectedLanguage = '',
+}) {
   if (!fs.existsSync(sourcePath)) return null;
 
   const stat = fs.statSync(sourcePath);
   const ext = getKnowledgeUploadExt(sourcePath, originalName, mimeType);
   const shouldExtract = shouldExtractKnowledgeLocally(ext, stat.size);
-  const extracted = shouldExtract ? (await extractText(sourcePath, originalName, mimeType)).trim() : "";
+  const extracted = normalizeKnowledgeText(
+    extractedTextOverride
+    || (shouldExtract ? await extractText(sourcePath, originalName, mimeType) : "")
+  );
   const safeText = extracted || (shouldExtract
     ? `(sem texto extraido) ${relPath}`
     : `(arquivo grande para indexacao local, mantido para busca vetorial) ${relPath}`);
-  const language = detectConversationLanguage(safeText);
+  const language = normalizeLanguageCode(detectedLanguage || detectConversationLanguage(safeText));
   const keywordText = extractKeywords(safeText, 14).join(', ');
   const contentHash = hashText(safeText);
   const normalizedDepartment = String(departmentName || '').trim() || null;
+  const issues = detectKnowledgeTextIssues(extracted);
   const existing = await get("SELECT id FROM documents WHERE source_path=?", [sourcePath]);
 
   let documentId = existing?.id || 0;
@@ -1779,7 +2207,19 @@ async function upsertIndexedDocument({ sourcePath, relPath, originalName, mimeTy
     ? await upsertDocumentChunks(documentId, relPath, safeText, language, keywordText ? keywordText.split(', ').filter(Boolean) : [], { departmentName: normalizedDepartment })
     : 0;
 
-  return { relPath, extractedText: safeText, language, contentHash, chunkCount, documentId, mimeType: mimeType || null, departmentName: normalizedDepartment, sourceKind };
+  return {
+    relPath,
+    extractedText: safeText,
+    language,
+    contentHash,
+    chunkCount,
+    documentId,
+    mimeType: mimeType || null,
+    departmentName: normalizedDepartment,
+    sourceKind,
+    issues,
+    isMedia: isMediaKnowledgeFile(originalName, mimeType, sourcePath),
+  };
 }
 
 async function getEmbeddingForText(text) {
@@ -1810,6 +2250,46 @@ async function getEmbeddingForText(text) {
     console.log('Falha ao gerar embedding:', err?.message || err);
     return null;
   }
+}
+
+async function materializeDocumentEmbeddings(documentId) {
+  if (!documentId) {
+    return { total: 0, completed: 0, failed: 0 };
+  }
+
+  const chunks = await all(
+    "SELECT id, content_text, translated_text, embedding_json FROM document_chunks WHERE document_id=? ORDER BY chunk_index ASC",
+    [documentId]
+  );
+
+  let completed = 0;
+  let failed = 0;
+
+  for (const chunk of chunks) {
+    const existing = parseEmbedding(chunk.embedding_json);
+    if (existing) {
+      completed += 1;
+      continue;
+    }
+
+    const embedding = await getEmbeddingForText(chunk.translated_text || chunk.content_text || "");
+    if (!embedding) {
+      failed += 1;
+      continue;
+    }
+
+    await run(
+      "UPDATE document_chunks SET embedding_json=?, embedding_model=?, updated_at=datetime('now') WHERE id=?",
+      [JSON.stringify(embedding), OPENAI_EMBEDDING_MODEL, chunk.id]
+    );
+    completed += 1;
+  }
+
+  return {
+    total: chunks.length,
+    completed,
+    failed,
+  };
 }
 
 async function ensureChunkEmbedding(row) {
@@ -1985,6 +2465,8 @@ function mapKnowledgeSource(row) {
     label: String(row?.rel_path || "Documento interno").trim() || "Documento interno",
     excerpt: makeSourceExcerpt(row?.analysis_text || row?.translated_text || row?.extracted_text || ""),
     language: row?.language || '',
+    document_id: row?.document_id || null,
+    stored_name: row?.rel_path ? path.basename(String(row.rel_path)) : '',
   };
 }
 
@@ -2013,6 +2495,7 @@ function buildKnowledgeBundleFromRows(rows, userLanguage = 'pt') {
           .join("\n\n")
       : "",
     sources: deduped.map(mapKnowledgeSource),
+    rows: deduped,
   };
 }
 
@@ -2032,6 +2515,180 @@ async function getKnowledgeSignatureValue() {
     []
   );
   return `${Number(row?.total || 0)}:${row?.updated_at || '0'}:${Number(chunkRow?.total || 0)}:${chunkRow?.updated_at || '0'}`;
+}
+
+async function refreshKnowledgeSourceVectorStatus(source, options = {}) {
+  if (!source?.id) return source;
+  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey || !OPENAI_VECTOR_STORE_ID || !source.vector_store_file_id) {
+    return source;
+  }
+
+  const shouldRefresh = Boolean(options.force)
+    || ["processing", "pending", "failed"].includes(String(source.sync_status || "").trim().toLowerCase());
+
+  if (!shouldRefresh) return source;
+
+  const state = getKnowledgeProcessingState(source);
+
+  try {
+    const vectorState = await getVectorStoreFileStatus(OPENAI_VECTOR_STORE_ID, source.vector_store_file_id, apiKey);
+    const openaiState = source.openai_file_id
+      ? await getOpenAIFileStatus(source.openai_file_id, apiKey).catch(() => null)
+      : null;
+    const vectorStatus = normalizeStageStatus(vectorState?.status, "processing");
+    const lastError = vectorState?.last_error || openaiState?.last_error || null;
+    const updatedState = withKnowledgeStage(state, "vector_store", {
+      status: vectorStatus === "completed" ? "completed" : vectorStatus === "failed" ? "failed" : "processing",
+      file_status: openaiState?.status || null,
+      vector_status: vectorState?.status || null,
+      last_error: lastError,
+      file_id: source.openai_file_id || null,
+      vector_store_file_id: source.vector_store_file_id || null,
+      message: lastError?.message || lastError?.code || "",
+    });
+    const finalized = finalizeKnowledgeProcessingState(updatedState);
+    const nextSyncStatus = finalized.final?.available_to_ai
+      ? "available"
+      : finalized.final?.status === "failed"
+        ? "failed"
+        : "processing";
+
+    await updateKnowledgeSourceFields(source.id, {
+      processing_state_json: safeJsonStringify(finalized, "{}"),
+      sync_status: nextSyncStatus,
+    });
+
+    return {
+      ...source,
+      processing_state_json: safeJsonStringify(finalized, "{}"),
+      sync_status: nextSyncStatus,
+    };
+  } catch (err) {
+    const updatedState = withKnowledgeStage(state, "vector_store", {
+      status: "failed",
+      message: err?.message || "vector_store_status_failed",
+      last_error: { message: err?.message || "vector_store_status_failed" },
+    });
+    const finalized = finalizeKnowledgeProcessingState(updatedState);
+    await updateKnowledgeSourceFields(source.id, {
+      processing_state_json: safeJsonStringify(finalized, "{}"),
+      sync_status: "failed",
+    });
+    return {
+      ...source,
+      processing_state_json: safeJsonStringify(finalized, "{}"),
+      sync_status: "failed",
+    };
+  }
+}
+
+function buildKnowledgeAdminRow(source) {
+  const syncStatus = String(source?.sync_status || "").trim().toLowerCase();
+  const hasState = hasPersistedKnowledgeStages(source);
+  let state = getKnowledgeProcessingState(source);
+
+  if (!hasState && ["available", "synced", "local"].includes(syncStatus)) {
+    state = createKnowledgeProcessingState({
+      parsing: { status: "completed", message: "Estado legado tratado como conteudo disponivel." },
+      transcript: { status: isMediaKnowledgeFile(source?.original_name, source?.mime_type, source?.stored_name || "") ? "completed" : "skipped" },
+      chunking: { status: "completed" },
+      embedding: { status: "completed" },
+      vector_store: {
+        status: OPENAI_VECTOR_STORE_ID
+          ? (syncStatus === "local" ? "skipped" : "completed")
+          : "skipped",
+      },
+      health: { status: "healthy", issues: [] },
+    });
+  } else if (!hasState && syncStatus === "failed") {
+    state = createKnowledgeProcessingState({
+      parsing: { status: "failed", message: "Estado legado com falha." },
+      health: { status: "failed", issues: ["falha_legada"] },
+    });
+  }
+
+  state = finalizeKnowledgeProcessingState(state);
+  const finalStatus = String(state.final?.status || source.sync_status || "pending");
+  const lastError = extractKnowledgeLastError(state);
+  const transcriptStatus = normalizeStageStatus(state.transcript?.status, "skipped");
+
+  return {
+    ...source,
+    processing_state: state,
+    parsing_status: normalizeStageStatus(state.parsing?.status),
+    transcript_status: transcriptStatus,
+    chunking_status: normalizeStageStatus(state.chunking?.status),
+    embedding_status: normalizeStageStatus(state.embedding?.status),
+    vector_store_status: normalizeStageStatus(state.vector_store?.status, OPENAI_VECTOR_STORE_ID ? "pending" : "skipped"),
+    availability_status: finalStatus,
+    available_to_ai: Boolean(state.final?.available_to_ai),
+    last_error: lastError,
+    issue_count: Array.isArray(state.health?.issues) ? state.health.issues.length : 0,
+    health_issues: Array.isArray(state.health?.issues) ? state.health.issues : [],
+  };
+}
+
+async function logAiTrainingEvent({
+  userId = null,
+  conversationId = null,
+  knowledgeSourceId = null,
+  eventType,
+  eventStatus = "info",
+  title = "",
+  detailText = "",
+  meta = null,
+}) {
+  if (!eventType) return null;
+  const created = await run(
+    "INSERT INTO ai_training_events (user_id, conversation_id, knowledge_source_id, event_type, event_status, title, detail_text, meta_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      userId || null,
+      conversationId || null,
+      knowledgeSourceId || null,
+      eventType,
+      eventStatus,
+      title || null,
+      detailText || null,
+      meta ? safeJsonStringify(meta, "{}") : null,
+    ]
+  );
+  return created.lastID;
+}
+
+async function resolveKnowledgeSourceIdFromSource(source = {}) {
+  const storedName = String(source.stored_name || "").trim()
+    || (source.label ? path.basename(String(source.label || "")) : "");
+  if (!storedName) return null;
+  const row = await get("SELECT id FROM knowledge_sources WHERE stored_name=? LIMIT 1", [storedName]);
+  return row?.id || null;
+}
+
+async function recordKnowledgeUsageEvents(userId, conversationId, sources = []) {
+  const safeSources = Array.isArray(sources) ? sources : [];
+  for (const source of safeSources) {
+    if (source?.type !== "knowledge_base" && source?.type !== "file_search") continue;
+    const knowledgeSourceId = await resolveKnowledgeSourceIdFromSource(source);
+    await logAiTrainingEvent({
+      userId,
+      conversationId,
+      knowledgeSourceId,
+      eventType: "knowledge_used",
+      eventStatus: "info",
+      title: source.label || "Documento utilizado",
+      detailText: source.excerpt || "",
+      meta: {
+        source_type: source.type,
+        label: source.label || "",
+      },
+    });
+  }
+}
+
+function responseLooksWeak(text = "") {
+  const safe = String(text || "").trim().toLowerCase();
+  if (!safe) return true;
+  return /(nao encontrei|nao localizei|nao lembro|nao sei|sem contexto suficiente|preciso de mais contexto|nao tenho informacoes suficientes|i couldn't find|i don't know)/i.test(safe);
 }
 
 async function findSemanticCache(userId, queryText, queryLanguage, queryEmbedding, knowledgeSignature) {
@@ -2132,22 +2789,25 @@ async function getConversationFilesContext(conversationId) {
       const filePath = path.join(uploadsDir, file.stored_name);
       if (!fs.existsSync(filePath)) continue;
 
-      if (isAudioFile(file.original_name, file.mime_type)) {
+      if (isMediaFile(file.original_name, file.mime_type)) {
         try {
-          const transcript = await transcribeAudio(filePath, file.original_name, file.mime_type);
+          const transcriptResult = await transcribeMedia(filePath, file.original_name, file.mime_type);
+          const transcript = String(transcriptResult?.text || "").trim();
+          const mediaLabel = isVideoFile(file.original_name, file.mime_type) ? "Video" : "Audio";
           if (transcript && transcript.trim()) {
             blocks.push(
-              `[Audio enviado: ${file.original_name} | ${file.mime_type || "audio"}]\nTranscricao detectada:\n${transcript.slice(0, 9000)}`
+              `[${mediaLabel} enviado: ${file.original_name} | ${file.mime_type || "media"}]\nTranscricao detectada:\n${transcript.slice(0, 9000)}`
             );
           } else {
             blocks.push(
-              `[Audio enviado: ${file.original_name} | ${file.mime_type || "audio"}]\nO audio foi anexado a conversa, mas nao foi possivel transcreve-lo localmente.`
+              `[${mediaLabel} enviado: ${file.original_name} | ${file.mime_type || "media"}]\nO arquivo foi anexado a conversa, mas nao foi possivel gerar uma transcricao local.`
             );
           }
         } catch (err) {
-          console.log("Erro ao transcrever audio:", err?.message || err);
+          console.log("Erro ao transcrever midia:", err?.message || err);
+          const mediaLabel = isVideoFile(file.original_name, file.mime_type) ? "Video" : "Audio";
           blocks.push(
-            `[Audio enviado: ${file.original_name} | ${file.mime_type || "audio"}]\nO audio foi anexado a conversa, mas houve falha ao tentar transcreve-lo.`
+            `[${mediaLabel} enviado: ${file.original_name} | ${file.mime_type || "media"}]\nO arquivo foi anexado a conversa, mas houve falha ao tentar transcreve-lo.`
           );
         }
         continue;
@@ -2267,6 +2927,7 @@ async function getRecentDocumentInputs(conversationId, limit = 2) {
     for (const row of rows) {
       if (out.length >= limit) break;
       if (mimeLooksLikeImage(row.mime_type)) continue;
+      if (isMediaFile(row.original_name, row.mime_type)) continue;
       if (!isSupportedOpenAIInputFile(row.original_name, row.mime_type)) continue;
       if (Number(row.size_bytes || 0) > INLINE_OPENAI_FILE_LIMIT) continue;
 
@@ -2320,6 +2981,10 @@ async function buildOpenAIInput({
   });
   const memory = await getConversationMemory(conversationId);
   const userMemory = await getRelevantUserMemory(userId, userText);
+  const memoryEntries = topicShift.isShift
+    ? []
+    : await getRelevantMemoryEntries(userId, conversationId, userText, 4);
+  const memoryBundle = buildMemoryContextBundle(memoryEntries);
   const visionInputs = await getRecentVisionInputs(conversationId, 3);
   const documentInputs = await getRecentDocumentInputs(conversationId, 2);
   const normalizedUserText = String(userText || '').trim();
@@ -2344,6 +3009,9 @@ async function buildOpenAIInput({
   const userMemoryText = topicShift.isShift
     ? 'Memoria entre conversas nao usada nesta resposta por mudanca de assunto.'
     : (userMemory || 'Sem memoria relevante de outras conversas.');
+  const semanticMemoryText = topicShift.isShift
+    ? 'Memorias semanticas ignoradas nesta resposta por mudanca de assunto.'
+    : (memoryBundle.text || 'Sem memorias semanticas relevantes para esta pergunta.');
 
   const systemText = `
 Voce e a TALKERS IA, assistente corporativa, educacional e operacional da empresa Talkers.
@@ -2374,6 +3042,7 @@ Contexto operacional atual:
 - Data e hora atual no Brasil: ${nowBrazil()}
 - Memoria da conversa atual: ${memoryText}
 - Memoria util de outras conversas deste usuario: ${userMemoryText}
+- Memorias semanticas relevantes por usuario/conversa: ${semanticMemoryText}
 - Historico recente: ${historyText || 'Sem historico anterior.'}
 - Contexto adicional: ${contextText || 'Sem contexto adicional.'}
 
@@ -2555,16 +3224,21 @@ async function buildIntranetPayload(userId) {
   const workspace = buildIntranetWorkspace({
     user,
     departments: user.department_details || [],
-    recentDocuments: recentDocuments.map((document) => ({
-      id: document.id,
-      name: document.original_name,
-      status: document.vector_store_file_id ? 'Sincronizado' : 'Local',
-      created_at: document.created_at,
-      department_name: document.department_name || '',
-      language: document.language || '',
-      mime_type: document.mime_type || '',
-      source_kind: document.source_kind || '',
-    })),
+    recentDocuments: recentDocuments.map((document) => {
+      const adminRow = buildKnowledgeAdminRow(document);
+      return {
+        id: document.id,
+        name: document.original_name,
+        status: adminRow.available_to_ai ? 'Disponivel para IA' : (adminRow.availability_status || document.sync_status || 'Processando'),
+        created_at: document.created_at,
+        department_name: document.department_name || '',
+        language: document.language || '',
+        mime_type: document.mime_type || '',
+        source_kind: document.source_kind || '',
+        available_to_ai: adminRow.available_to_ai,
+        last_error: adminRow.last_error,
+      };
+    }),
     totalDocuments: Number(totalDocumentsRow?.total || 0),
     salesWorkspace: salesPayload,
   });
@@ -2817,6 +3491,9 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   const responseProfile = analyzeConversationIntent(text, userLanguage, {
     departments: currentUser?.departments || [],
   });
+  const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift
+    ? []
+    : await getRelevantMemoryEntries(req.user.sub, id, text, 4);
   const knowledgeSignature = await getKnowledgeSignatureValue();
   const queryEmbedding = await getEmbeddingForText(text);
   const recentImageReferences = await getRecentImageReferences(id, 4);
@@ -2840,8 +3517,14 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         [id, artifact.reply, JSON.stringify(artifactMetaObject)]
       );
       await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-      await updateConversationMemory(id, text, artifact.reply, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
-      await updateUserMemory(req.user.sub, text, artifact.reply, userLanguage);
+      await persistReplyMemories({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: artifact.reply,
+        language: userLanguage,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+      });
       return res.json({ reply: artifact.reply, meta: artifactMetaObject });
     }
 
@@ -2857,8 +3540,14 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       content: artifact.reply,
     });
 
-    await updateConversationMemory(id, text, artifact.reply, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
-    await updateUserMemory(req.user.sub, text, artifact.reply, userLanguage);
+    await persistReplyMemories({
+      conversationId: id,
+      userId: req.user.sub,
+      userText: text,
+      assistantText: artifact.reply,
+      language: userLanguage,
+      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+    });
     return res.json({ reply: artifact.reply, meta: { ...saved.meta, response_language: userLanguage } });
   }
 
@@ -2877,8 +3566,24 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       [id, cachedReply.text, JSON.stringify(cachedMetaObject)]
     );
     await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-    await updateConversationMemory(id, text, cachedReply.text, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
-    await updateUserMemory(req.user.sub, text, cachedReply.text, userLanguage);
+    await persistReplyMemories({
+      conversationId: id,
+      userId: req.user.sub,
+      userText: text,
+      assistantText: cachedReply.text,
+      language: userLanguage,
+      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+    });
+    if (relevantMemoryEntries.length) {
+      await logAiTrainingEvent({
+        userId: req.user.sub,
+        conversationId: id,
+        eventType: "memory_hit",
+        eventStatus: "success",
+        title: "Memoria reutilizada em resposta em cache",
+        detailText: `A pergunta reutilizou ${relevantMemoryEntries.length} memoria(s) relevante(s).`,
+      });
+    }
     return res.json({ reply: cachedReply.text, meta: cachedMetaObject });
   }
 
@@ -2943,9 +3648,45 @@ ${shouldUseWebComplement
     [id, assistant.text, JSON.stringify(assistantMetaObject)]
   );
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-  await updateConversationMemory(id, text, assistant.text, { resetMemory: Boolean(topicSnapshot?.topicShift?.isShift) });
-  await updateUserMemory(req.user.sub, text, assistant.text, userLanguage);
+  await persistReplyMemories({
+    conversationId: id,
+    userId: req.user.sub,
+    userText: text,
+    assistantText: assistant.text,
+    language: userLanguage,
+    resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+  });
   await saveSemanticCache(req.user.sub, text, userLanguage, assistant.text, userLanguage, assistant.sources || [], queryEmbedding, knowledgeSignature);
+  await recordKnowledgeUsageEvents(req.user.sub, id, assistant.sources || []);
+
+  if (relevantMemoryEntries.length) {
+    await logAiTrainingEvent({
+      userId: req.user.sub,
+      conversationId: id,
+      eventType: "memory_hit",
+      eventStatus: "success",
+      title: "Memoria contextual aplicada",
+      detailText: `A resposta considerou ${relevantMemoryEntries.length} memoria(s) relacionada(s) ao usuario.`,
+      meta: {
+        memory_entry_ids: relevantMemoryEntries.map((entry) => entry.id),
+      },
+    });
+  }
+
+  if (responseLooksWeak(assistant.text)) {
+    await logAiTrainingEvent({
+      userId: req.user.sub,
+      conversationId: id,
+      eventType: "weak_response",
+      eventStatus: "warning",
+      title: text.slice(0, 120),
+      detailText: assistant.text,
+      meta: {
+        knowledge_sources: (assistant.sources || []).length,
+        memory_hits: relevantMemoryEntries.length,
+      },
+    });
+  }
 
   res.json({ reply: assistant.text, meta: assistantMetaObject });
 });
@@ -3298,27 +4039,101 @@ app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin")
 });
 
 app.get("/api/admin/rag/status", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const [totalRow, availableRow, processingRow, failedRow] = await Promise.all([
+    get("SELECT COUNT(*) AS total FROM knowledge_sources", []),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources WHERE sync_status IN ('available', 'synced', 'local')", []),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources WHERE sync_status IN ('processing', 'pending')", []),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources WHERE sync_status='failed'", []),
+  ]);
+  const counts = {
+    total: Number(totalRow?.total || 0),
+    available: Number(availableRow?.total || 0),
+    processing: Number(processingRow?.total || 0),
+    failed: Number(failedRow?.total || 0),
+  };
   res.json({
     ok: true,
     vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
     openai_api_configured: Boolean(process.env.OPENAI_API_KEY),
     vector_store_id: OPENAI_VECTOR_STORE_ID || null,
     local_dir: knowledgeDir,
+    counts,
+    needs_reprocess: Math.max(counts.total - counts.available, 0),
+    recent_failures: counts.failed,
+    available_to_ai: counts.available,
+    checked_at: new Date().toISOString(),
   });
 });
 
 app.get("/api/admin/rag/files", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const [files, totalRow] = await Promise.all([
     all(
-      `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, created_at
+      `SELECT id, original_name, stored_name, mime_type, language, content_hash, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, created_at, updated_at
          FROM knowledge_sources
-        ORDER BY datetime(created_at) DESC, id DESC
+        ORDER BY datetime(updated_at) DESC, id DESC
         LIMIT 50`
     ),
     get("SELECT COUNT(*) AS total FROM knowledge_sources"),
   ]);
 
-  res.json({ files, total: Number(totalRow?.total || 0) });
+  const enriched = [];
+  for (const file of files) {
+    const refreshed = ["processing", "failed", "pending"].includes(String(file.sync_status || "").toLowerCase())
+      ? await refreshKnowledgeSourceVectorStatus(file, { force: false })
+      : file;
+    enriched.push(buildKnowledgeAdminRow(refreshed || file));
+  }
+
+  res.json({ files: enriched, total: Number(totalRow?.total || 0) });
+});
+
+app.get("/api/admin/rag/files/:id/logs", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const knowledgeSourceId = Number(req.params.id);
+  const source = await getKnowledgeSourceById(knowledgeSourceId);
+  if (!source) return res.status(404).json({ error: "not_found" });
+
+  const [logs, history] = await Promise.all([
+    all(
+      `SELECT id, knowledge_source_id, stage_key, stage_status, message, detail_json, actor_user_id, created_at
+         FROM knowledge_processing_logs
+        WHERE knowledge_source_id=?
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT 120`,
+      [knowledgeSourceId]
+    ),
+    all(
+      `SELECT id, event_type, event_status, title, detail_text, meta_json, created_at
+         FROM ai_training_events
+        WHERE knowledge_source_id=?
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT 80`,
+      [knowledgeSourceId]
+    ),
+  ]);
+
+  res.json({
+    source: buildKnowledgeAdminRow(source),
+    logs,
+    training_events: history,
+  });
+});
+
+app.post("/api/admin/rag/files/:id/reprocess", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  try {
+    const knowledgeSourceId = Number(req.params.id);
+    const result = await reprocessKnowledgeSourceById(knowledgeSourceId, req.user.sub);
+    res.json({ ok: true, file: result });
+  } catch (err) {
+    console.log("Erro ao reprocessar arquivo da base:", err?.message || err);
+    res.status(err?.message === "knowledge_source_not_found" ? 404 : 400).json({
+      error: err?.message || "knowledge_reprocess_failed",
+    });
+  }
+});
+
+app.get("/api/admin/ai-training/overview", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const overview = await buildAiTrainingOverview();
+  res.json(overview);
 });
 
 function getAdminRagUploads(req) {
@@ -3341,6 +4156,69 @@ function getRagUploadFailureStatus(errors = []) {
   if (codes.every((code) => code === 'knowledge_file_too_large')) return 413;
   if (codes.every((code) => code === 'unsupported_knowledge_file')) return 400;
   return 500;
+}
+
+async function createKnowledgeSourceRecord({
+  originalName,
+  storedName,
+  mimeType,
+  language = null,
+  contentHash = null,
+  departmentName = null,
+  sourceKind = "manual_upload",
+  syncStatus = "processing",
+  openaiFileId = null,
+  vectorStoreFileId = null,
+  uploadedBy = null,
+  processingState = null,
+}) {
+  const created = await run(
+    "INSERT INTO knowledge_sources (original_name, stored_name, mime_type, language, content_hash, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+    [
+      originalName,
+      storedName,
+      mimeType || null,
+      language || null,
+      contentHash || null,
+      departmentName || null,
+      sourceKind,
+      syncStatus,
+      openaiFileId,
+      vectorStoreFileId,
+      uploadedBy,
+      processingState ? safeJsonStringify(processingState, "{}") : null,
+    ]
+  );
+  return created.lastID;
+}
+
+async function prepareKnowledgeVectorUploadFile(source, transcriptText = "") {
+  const fullPath = getKnowledgeSourceFullPath(source);
+  if (!fullPath || !fs.existsSync(fullPath)) {
+    throw new Error("knowledge_source_file_missing");
+  }
+
+  if (isMediaKnowledgeFile(source.original_name, source.mime_type, fullPath)) {
+    const transcriptPath = getTranscriptFilePathForKnowledge(source.stored_name);
+    const normalizedTranscript = String(transcriptText || "").trim();
+    if (!normalizedTranscript) {
+      throw new Error("transcript_missing_for_vector_store");
+    }
+    fs.writeFileSync(transcriptPath, normalizedTranscript, "utf8");
+    return {
+      uploadPath: transcriptPath,
+      uploadName: buildTranscriptStorageName(source.original_name || source.stored_name),
+      uploadMimeType: "text/plain",
+      transcriptPath,
+    };
+  }
+
+  return {
+    uploadPath: fullPath,
+    uploadName: source.original_name,
+    uploadMimeType: source.mime_type || "application/octet-stream",
+    transcriptPath: null,
+  };
 }
 
 async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
@@ -3392,69 +4270,676 @@ async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
   fs.renameSync(tempPath, finalPath);
 
   const relPath = path.relative(kbDir, finalPath).replace(/\\/g, "/");
-  const indexed = await upsertIndexedDocument({
-    sourcePath: finalPath,
-    relPath,
+  const initialState = withKnowledgeStage(createKnowledgeProcessingState(), "upload", {
+    status: "completed",
+    size_bytes: sizeBytes,
+    stored_name: storedName,
+    original_name: safeOriginalName,
+    mime_type: uploaded.mimetype || null,
+    message: "Upload recebido e armazenado no disco persistente.",
+  });
+  const knowledgeSourceId = await createKnowledgeSourceRecord({
     originalName: safeOriginalName,
-    mimeType: uploaded.mimetype || "",
+    storedName,
+    mimeType: uploaded.mimetype || null,
     departmentName,
     sourceKind,
+    syncStatus: "processing",
+    uploadedBy: userId,
+    processingState: initialState,
   });
+  await appendKnowledgeProcessingLog(knowledgeSourceId, "upload", "completed", "Upload registrado com sucesso.", {
+    size_bytes: sizeBytes,
+    rel_path: relPath,
+  }, userId);
 
+  let state = initialState;
+  let indexed = null;
   let openaiFile = null;
   let vectorStoreFile = null;
+  let transcriptText = "";
+  let transcriptLanguage = "";
 
-  if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
-    openaiFile = await uploadFileToOpenAI(
-      finalPath,
-      safeOriginalName,
-      process.env.OPENAI_API_KEY,
-      "user_data",
-      uploaded.mimetype || "application/octet-stream"
-    );
-    vectorStoreFile = await attachFileToVectorStore(
-      openaiFile.id,
-      OPENAI_VECTOR_STORE_ID,
-      process.env.OPENAI_API_KEY
-    );
-  }
+  try {
+    const isMedia = isMediaKnowledgeFile(safeOriginalName, uploaded.mimetype || "", finalPath);
+    if (isMedia) {
+      state = withKnowledgeStage(state, "transcript", {
+        status: "processing",
+        message: "Gerando transcricao da midia.",
+      });
+      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+      await appendKnowledgeProcessingLog(knowledgeSourceId, "transcript", "processing", "Processamento de transcricao iniciado.", {}, userId);
 
-  const syncStatus = vectorStoreFile?.id ? "synced" : "local";
-  const record = await run(
-    "INSERT INTO knowledge_sources (original_name, stored_name, mime_type, language, content_hash, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [
-      safeOriginalName,
-      storedName,
-      uploaded.mimetype || null,
-      indexed?.language || null,
-      indexed?.contentHash || null,
+      const transcriptResult = await transcribeMedia(finalPath, safeOriginalName, uploaded.mimetype || "");
+      transcriptText = normalizeKnowledgeText(transcriptResult?.text || "");
+      transcriptLanguage = normalizeLanguageCode(transcriptResult?.transcriptLanguage || detectConversationLanguage(transcriptText || safeOriginalName));
+
+      state = withKnowledgeStage(state, "transcript", {
+        status: transcriptText ? "completed" : "failed",
+        source_kind: transcriptResult?.sourceKind || "media",
+        used_audio_extraction: Boolean(transcriptResult?.usedAudioExtraction),
+        language: transcriptLanguage || null,
+        message: transcriptText
+          ? "Transcricao concluida com sucesso."
+          : "Nao foi possivel gerar texto a partir da midia.",
+      });
+      await appendKnowledgeProcessingLog(
+        knowledgeSourceId,
+        "transcript",
+        transcriptText ? "completed" : "failed",
+        transcriptText ? "Transcricao concluida." : "Transcricao vazia.",
+        {
+          transcript_language: transcriptLanguage || null,
+          transcript_length: transcriptText.length,
+        },
+        userId
+      );
+    } else {
+      state = withKnowledgeStage(state, "transcript", {
+        status: "skipped",
+        message: "Arquivo textual/documental nao exige transcricao.",
+      });
+    }
+
+    state = withKnowledgeStage(state, "parsing", {
+      status: "processing",
+      message: "Extraindo e normalizando conteudo do arquivo.",
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+    await appendKnowledgeProcessingLog(knowledgeSourceId, "parsing", "processing", "Parsing iniciado.", {}, userId);
+
+    indexed = await upsertIndexedDocument({
+      sourcePath: finalPath,
+      relPath,
+      originalName: safeOriginalName,
+      mimeType: uploaded.mimetype || "",
       departmentName,
       sourceKind,
-      syncStatus,
-      openaiFile?.id || null,
-      vectorStoreFile?.id || null,
-      userId,
-    ]
-  );
+      extractedTextOverride: transcriptText,
+      detectedLanguage: transcriptLanguage,
+    });
 
-  await logEvent(userId, "admin_rag_upload", {
-    knowledge_source_id: record.lastID,
-    filename: safeOriginalName,
-    openai_file_id: openaiFile?.id || null,
-    vector_store_file_id: vectorStoreFile?.id || null,
+    const parsingIssues = Array.isArray(indexed?.issues) ? indexed.issues : [];
+    state = withKnowledgeStage(state, "parsing", {
+      status: indexed?.extractedText ? "completed" : "failed",
+      language: indexed?.language || null,
+      content_hash: indexed?.contentHash || null,
+      message: indexed?.extractedText
+        ? "Conteudo extraido e normalizado com sucesso."
+        : "Nao houve texto extraido do arquivo.",
+      extracted_length: String(indexed?.extractedText || "").length,
+    });
+    state = withKnowledgeStage(state, "health", {
+      status: parsingIssues.length ? "warning" : "healthy",
+      issues: parsingIssues,
+    });
+    await updateKnowledgeSourceFields(knowledgeSourceId, {
+      language: indexed?.language || null,
+      content_hash: indexed?.contentHash || null,
+      processing_state_json: safeJsonStringify(state, "{}"),
+      sync_status: "processing",
+    });
+    await appendKnowledgeProcessingLog(
+      knowledgeSourceId,
+      "parsing",
+      indexed?.extractedText ? "completed" : "failed",
+      indexed?.extractedText ? "Parsing concluido." : "Parsing sem texto utilizavel.",
+      {
+        issues: parsingIssues,
+        language: indexed?.language || null,
+      },
+      userId
+    );
+
+    state = withKnowledgeStage(state, "chunking", {
+      status: indexed?.chunkCount ? "completed" : "failed",
+      chunk_count: Number(indexed?.chunkCount || 0),
+      message: indexed?.chunkCount
+        ? `${indexed.chunkCount} chunk(s) semantico(s) gerado(s).`
+        : "Nenhum chunk semantico foi gerado.",
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+    await appendKnowledgeProcessingLog(
+      knowledgeSourceId,
+      "chunking",
+      indexed?.chunkCount ? "completed" : "failed",
+      indexed?.chunkCount ? "Chunking concluido." : "Chunking sem resultado.",
+      { chunk_count: Number(indexed?.chunkCount || 0) },
+      userId
+    );
+
+    const embeddingResult = await materializeDocumentEmbeddings(indexed?.documentId);
+    state = withKnowledgeStage(state, "embedding", {
+      status: embeddingResult.total > 0 && embeddingResult.failed === 0 ? "completed" : (embeddingResult.completed > 0 ? "processing" : "failed"),
+      total: embeddingResult.total,
+      completed: embeddingResult.completed,
+      failed: embeddingResult.failed,
+      message: embeddingResult.total
+        ? `${embeddingResult.completed}/${embeddingResult.total} embedding(s) gerado(s).`
+        : "Nenhum chunk disponivel para embedding.",
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+    await appendKnowledgeProcessingLog(
+      knowledgeSourceId,
+      "embedding",
+      state.embedding.status,
+      state.embedding.message,
+      embeddingResult,
+      userId
+    );
+
+    if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
+      state = withKnowledgeStage(state, "vector_store", {
+        status: "processing",
+        message: "Enviando conteudo para a Vector Store da OpenAI.",
+      });
+      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+      await appendKnowledgeProcessingLog(knowledgeSourceId, "vector_store", "processing", "Upload para Vector Store iniciado.", {}, userId);
+
+      const sourceRecord = await getKnowledgeSourceById(knowledgeSourceId);
+      const uploadTarget = await prepareKnowledgeVectorUploadFile(sourceRecord, indexed?.extractedText || transcriptText);
+
+      openaiFile = await uploadFileToOpenAI(
+        uploadTarget.uploadPath,
+        uploadTarget.uploadName,
+        process.env.OPENAI_API_KEY,
+        "user_data",
+        uploadTarget.uploadMimeType
+      );
+      vectorStoreFile = await attachFileToVectorStore(
+        openaiFile.id,
+        OPENAI_VECTOR_STORE_ID,
+        process.env.OPENAI_API_KEY
+      );
+
+      state = withKnowledgeStage(state, "vector_store", {
+        status: normalizeStageStatus(vectorStoreFile?.status, "processing") === "completed" ? "completed" : "processing",
+        file_id: openaiFile?.id || null,
+        vector_store_file_id: vectorStoreFile?.id || null,
+        file_status: openaiFile?.status || null,
+        vector_status: vectorStoreFile?.status || null,
+        message: "Arquivo enviado para a Vector Store. Validando disponibilidade.",
+      });
+      await updateKnowledgeSourceFields(knowledgeSourceId, {
+        openai_file_id: openaiFile?.id || null,
+        vector_store_file_id: vectorStoreFile?.id || null,
+        processing_state_json: safeJsonStringify(state, "{}"),
+        sync_status: "processing",
+      });
+      await appendKnowledgeProcessingLog(
+        knowledgeSourceId,
+        "vector_store",
+        "processing",
+        "Arquivo enviado para a OpenAI e anexado a Vector Store.",
+        {
+          openai_file_id: openaiFile?.id || null,
+          vector_store_file_id: vectorStoreFile?.id || null,
+        },
+        userId
+      );
+    } else {
+      state = withKnowledgeStage(state, "vector_store", {
+        status: "skipped",
+        message: "Vector Store nao configurada. O conhecimento fica disponivel via indice local.",
+      });
+    }
+
+    const refreshed = await refreshKnowledgeSourceVectorStatus(await getKnowledgeSourceById(knowledgeSourceId), { force: true });
+    const finalRow = buildKnowledgeAdminRow(refreshed || await getKnowledgeSourceById(knowledgeSourceId));
+    await appendKnowledgeProcessingLog(
+      knowledgeSourceId,
+      "final",
+      finalRow.available_to_ai ? "completed" : finalRow.availability_status,
+      finalRow.processing_state?.final?.message || "Processamento concluido.",
+      {
+        available_to_ai: finalRow.available_to_ai,
+        health_issues: finalRow.health_issues,
+      },
+      userId
+    );
+    await logAiTrainingEvent({
+      userId,
+      knowledgeSourceId,
+      eventType: "knowledge_ingested",
+      eventStatus: finalRow.available_to_ai ? "success" : "warning",
+      title: safeOriginalName,
+      detailText: finalRow.processing_state?.final?.message || "Conhecimento ingerido.",
+      meta: {
+        availability_status: finalRow.availability_status,
+        chunking_status: finalRow.chunking_status,
+        embedding_status: finalRow.embedding_status,
+        vector_store_status: finalRow.vector_store_status,
+      },
+    });
+
+    await logEvent(userId, "admin_rag_upload", {
+      knowledge_source_id: knowledgeSourceId,
+      filename: safeOriginalName,
+      openai_file_id: openaiFile?.id || null,
+      vector_store_file_id: vectorStoreFile?.id || null,
+    });
+
+    return {
+      knowledge_source_id: knowledgeSourceId,
+      original_name: safeOriginalName,
+      stored_name: storedName,
+      local_indexed: Boolean(indexed),
+      language: indexed?.language || null,
+      department_name: departmentName,
+      source_kind: sourceKind,
+      sync_status: finalRow.availability_status,
+      openai_file_id: openaiFile?.id || null,
+      vector_store_file_id: vectorStoreFile?.id || null,
+      processing_state: finalRow.processing_state,
+      parsing_status: finalRow.parsing_status,
+      transcript_status: finalRow.transcript_status,
+      chunking_status: finalRow.chunking_status,
+      embedding_status: finalRow.embedding_status,
+      vector_store_status: finalRow.vector_store_status,
+      available_to_ai: finalRow.available_to_ai,
+      last_error: finalRow.last_error,
+    };
+  } catch (err) {
+    console.log("Erro no pipeline de conhecimento:", err?.message || err);
+    state = withKnowledgeStage(state, "health", {
+      status: "failed",
+      issues: [...new Set([...(state.health?.issues || []), "falha_processamento"])],
+    });
+    const failedStage = state.vector_store?.status === "processing"
+      ? "vector_store"
+      : state.embedding?.status === "processing"
+        ? "embedding"
+        : state.chunking?.status === "processing"
+          ? "chunking"
+          : state.parsing?.status === "processing"
+            ? "parsing"
+            : "upload";
+    state = withKnowledgeStage(state, failedStage, {
+      status: "failed",
+      message: err?.message || "knowledge_processing_failed",
+      error: err?.message || "knowledge_processing_failed",
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "failed");
+    await appendKnowledgeProcessingLog(
+      knowledgeSourceId,
+      failedStage,
+      "failed",
+      err?.message || "knowledge_processing_failed",
+      {},
+      userId
+    );
+    await logAiTrainingEvent({
+      userId,
+      knowledgeSourceId,
+      eventType: "knowledge_ingestion_failed",
+      eventStatus: "error",
+      title: safeOriginalName,
+      detailText: err?.message || "knowledge_processing_failed",
+      meta: {
+        failed_stage: failedStage,
+      },
+    });
+    throw err;
+  }
+}
+
+async function reprocessKnowledgeSourceById(knowledgeSourceId, actorUserId) {
+  const source = await getKnowledgeSourceById(knowledgeSourceId);
+  if (!source) throw new Error("knowledge_source_not_found");
+
+  const fullPath = getKnowledgeSourceFullPath(source);
+  if (!fullPath || !fs.existsSync(fullPath)) {
+    throw new Error("knowledge_source_file_missing");
+  }
+
+  let state = withKnowledgeStage(getKnowledgeProcessingState(source), "upload", {
+    status: "completed",
+    message: "Arquivo localizado para reprocessamento.",
   });
+  await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+  await appendKnowledgeProcessingLog(knowledgeSourceId, "upload", "completed", "Reprocessamento iniciado.", {}, actorUserId);
+
+  let transcriptText = "";
+  let transcriptLanguage = "";
+
+  try {
+    if (isMediaKnowledgeFile(source.original_name, source.mime_type, fullPath)) {
+      state = withKnowledgeStage(state, "transcript", {
+        status: "processing",
+        message: "Reprocessando transcricao da midia.",
+      });
+      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+
+      const transcriptResult = await transcribeMedia(fullPath, source.original_name, source.mime_type || "");
+      transcriptText = normalizeKnowledgeText(transcriptResult?.text || "");
+      transcriptLanguage = normalizeLanguageCode(transcriptResult?.transcriptLanguage || detectConversationLanguage(transcriptText || source.original_name));
+
+      state = withKnowledgeStage(state, "transcript", {
+        status: transcriptText ? "completed" : "failed",
+        language: transcriptLanguage || null,
+        source_kind: transcriptResult?.sourceKind || "media",
+        used_audio_extraction: Boolean(transcriptResult?.usedAudioExtraction),
+        message: transcriptText ? "Transcricao reprocessada com sucesso." : "Transcricao vazia durante o reprocessamento.",
+      });
+      await appendKnowledgeProcessingLog(
+        knowledgeSourceId,
+        "transcript",
+        transcriptText ? "completed" : "failed",
+        transcriptText ? "Transcricao reprocessada." : "Transcricao vazia no reprocessamento.",
+        {
+          transcript_language: transcriptLanguage || null,
+          transcript_length: transcriptText.length,
+        },
+        actorUserId
+      );
+    } else {
+      state = withKnowledgeStage(state, "transcript", {
+        status: "skipped",
+        message: "Arquivo textual/documental nao exige transcricao.",
+      });
+    }
+
+    state = withKnowledgeStage(state, "parsing", {
+      status: "processing",
+      message: "Reprocessando parsing e normalizacao do conteudo.",
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+
+    const indexed = await upsertIndexedDocument({
+      sourcePath: fullPath,
+      relPath: path.relative(kbDir, fullPath).replace(/\\/g, "/"),
+      originalName: source.original_name,
+      mimeType: source.mime_type || "",
+      departmentName: source.department_name || "",
+      sourceKind: source.source_kind || "manual_upload",
+      extractedTextOverride: transcriptText,
+      detectedLanguage: transcriptLanguage,
+    });
+
+    const parsingIssues = Array.isArray(indexed?.issues) ? indexed.issues : [];
+    state = withKnowledgeStage(state, "parsing", {
+      status: indexed?.extractedText ? "completed" : "failed",
+      language: indexed?.language || null,
+      content_hash: indexed?.contentHash || null,
+      extracted_length: String(indexed?.extractedText || "").length,
+      message: indexed?.extractedText ? "Parsing reprocessado com sucesso." : "Reprocessamento sem texto utilizavel.",
+    });
+    state = withKnowledgeStage(state, "health", {
+      status: parsingIssues.length ? "warning" : "healthy",
+      issues: parsingIssues,
+    });
+    await updateKnowledgeSourceFields(knowledgeSourceId, {
+      language: indexed?.language || null,
+      content_hash: indexed?.contentHash || null,
+      processing_state_json: safeJsonStringify(state, "{}"),
+      sync_status: "processing",
+    });
+    await appendKnowledgeProcessingLog(knowledgeSourceId, "parsing", state.parsing.status, state.parsing.message, {
+      issues: parsingIssues,
+      language: indexed?.language || null,
+    }, actorUserId);
+
+    state = withKnowledgeStage(state, "chunking", {
+      status: indexed?.chunkCount ? "completed" : "failed",
+      chunk_count: Number(indexed?.chunkCount || 0),
+      message: indexed?.chunkCount
+        ? `${indexed.chunkCount} chunk(s) semantico(s) regenerado(s).`
+        : "Nenhum chunk foi gerado no reprocessamento.",
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+
+    const embeddingResult = await materializeDocumentEmbeddings(indexed?.documentId);
+    state = withKnowledgeStage(state, "embedding", {
+      status: embeddingResult.total > 0 && embeddingResult.failed === 0 ? "completed" : (embeddingResult.completed > 0 ? "processing" : "failed"),
+      total: embeddingResult.total,
+      completed: embeddingResult.completed,
+      failed: embeddingResult.failed,
+      message: embeddingResult.total
+        ? `${embeddingResult.completed}/${embeddingResult.total} embedding(s) gerado(s) no reprocessamento.`
+        : "Nenhum chunk disponivel para embedding.",
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+    await appendKnowledgeProcessingLog(knowledgeSourceId, "embedding", state.embedding.status, state.embedding.message, embeddingResult, actorUserId);
+
+    if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
+      state = withKnowledgeStage(state, "vector_store", {
+        status: "processing",
+        message: "Reenviando conteudo para a Vector Store.",
+      });
+      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
+
+      const uploadTarget = await prepareKnowledgeVectorUploadFile(source, indexed?.extractedText || transcriptText);
+      const openaiFile = await uploadFileToOpenAI(
+        uploadTarget.uploadPath,
+        uploadTarget.uploadName,
+        process.env.OPENAI_API_KEY,
+        "user_data",
+        uploadTarget.uploadMimeType
+      );
+      const vectorStoreFile = await attachFileToVectorStore(
+        openaiFile.id,
+        OPENAI_VECTOR_STORE_ID,
+        process.env.OPENAI_API_KEY
+      );
+
+      state = withKnowledgeStage(state, "vector_store", {
+        status: normalizeStageStatus(vectorStoreFile?.status, "processing") === "completed" ? "completed" : "processing",
+        file_id: openaiFile?.id || null,
+        vector_store_file_id: vectorStoreFile?.id || null,
+        file_status: openaiFile?.status || null,
+        vector_status: vectorStoreFile?.status || null,
+        message: "Arquivo reenviado para a Vector Store.",
+      });
+      await updateKnowledgeSourceFields(knowledgeSourceId, {
+        openai_file_id: openaiFile?.id || null,
+        vector_store_file_id: vectorStoreFile?.id || null,
+        processing_state_json: safeJsonStringify(state, "{}"),
+        sync_status: "processing",
+      });
+      await appendKnowledgeProcessingLog(
+        knowledgeSourceId,
+        "vector_store",
+        "processing",
+        "Reindexacao enviada para a OpenAI.",
+        {
+          openai_file_id: openaiFile?.id || null,
+          vector_store_file_id: vectorStoreFile?.id || null,
+        },
+        actorUserId
+      );
+    } else {
+      state = withKnowledgeStage(state, "vector_store", {
+        status: "skipped",
+        message: "Vector Store nao configurada. Reprocessamento local concluido.",
+      });
+    }
+
+    const refreshed = await refreshKnowledgeSourceVectorStatus(await getKnowledgeSourceById(knowledgeSourceId), { force: true });
+    const finalRow = buildKnowledgeAdminRow(refreshed || await getKnowledgeSourceById(knowledgeSourceId));
+    await appendKnowledgeProcessingLog(
+      knowledgeSourceId,
+      "final",
+      finalRow.available_to_ai ? "completed" : finalRow.availability_status,
+      finalRow.processing_state?.final?.message || "Reprocessamento concluido.",
+      {
+        available_to_ai: finalRow.available_to_ai,
+        health_issues: finalRow.health_issues,
+      },
+      actorUserId
+    );
+    await logAiTrainingEvent({
+      userId: actorUserId,
+      knowledgeSourceId,
+      eventType: "knowledge_reprocessed",
+      eventStatus: finalRow.available_to_ai ? "success" : "warning",
+      title: source.original_name,
+      detailText: finalRow.processing_state?.final?.message || "Reprocessamento concluido.",
+    });
+    return finalRow;
+  } catch (err) {
+    const failedStage = state.vector_store?.status === "processing"
+      ? "vector_store"
+      : state.embedding?.status === "processing"
+        ? "embedding"
+        : state.chunking?.status === "processing"
+          ? "chunking"
+          : state.parsing?.status === "processing"
+            ? "parsing"
+            : state.transcript?.status === "processing"
+              ? "transcript"
+              : "upload";
+    state = withKnowledgeStage(state, failedStage, {
+      status: "failed",
+      message: err?.message || "knowledge_reprocess_failed",
+      error: err?.message || "knowledge_reprocess_failed",
+    });
+    state = withKnowledgeStage(state, "health", {
+      status: "failed",
+      issues: [...new Set([...(state.health?.issues || []), "falha_reprocessamento"])],
+    });
+    await updateKnowledgeSourceState(knowledgeSourceId, state, "failed");
+    await appendKnowledgeProcessingLog(knowledgeSourceId, failedStage, "failed", err?.message || "knowledge_reprocess_failed", {}, actorUserId);
+    await logAiTrainingEvent({
+      userId: actorUserId,
+      knowledgeSourceId,
+      eventType: "knowledge_reprocess_failed",
+      eventStatus: "error",
+      title: source.original_name,
+      detailText: err?.message || "knowledge_reprocess_failed",
+      meta: {
+        failed_stage: failedStage,
+      },
+    });
+    throw err;
+  }
+}
+
+async function buildAiTrainingOverview() {
+  const [sources, needsReprocessSources, failedSources, recentLogs, recentEvents, memoryRows, topUsedRows, totalKnowledgeRow, availableKnowledgeRow, failedKnowledgeRow, processingKnowledgeRow, totalMemoryRow] = await Promise.all([
+    all(`SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, created_at, updated_at
+           FROM knowledge_sources
+          ORDER BY datetime(updated_at) DESC, id DESC
+          LIMIT 120`),
+    all(`SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, created_at, updated_at
+           FROM knowledge_sources
+          WHERE COALESCE(sync_status, 'pending') NOT IN ('available', 'synced', 'local')
+          ORDER BY datetime(updated_at) DESC, id DESC
+          LIMIT 20`),
+    all(`SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, created_at, updated_at
+           FROM knowledge_sources
+          WHERE sync_status='failed'
+          ORDER BY datetime(updated_at) DESC, id DESC
+          LIMIT 20`),
+    all(`SELECT id, knowledge_source_id, stage_key, stage_status, message, detail_json, actor_user_id, created_at
+           FROM knowledge_processing_logs
+          ORDER BY datetime(created_at) DESC, id DESC
+          LIMIT 80`),
+    all(`SELECT id, user_id, conversation_id, knowledge_source_id, event_type, event_status, title, detail_text, meta_json, created_at
+           FROM ai_training_events
+          ORDER BY datetime(created_at) DESC, id DESC
+          LIMIT 80`),
+    all(`SELECT id, user_id, conversation_id, memory_scope, memory_kind, title, content_text, topics_json, language, created_at, updated_at
+           FROM memory_entries
+          ORDER BY datetime(updated_at) DESC, id DESC
+          LIMIT 120`),
+    all(`SELECT ai_training_events.knowledge_source_id, COUNT(*) AS total, MAX(knowledge_sources.original_name) AS name
+           FROM ai_training_events
+      LEFT JOIN knowledge_sources ON knowledge_sources.id = ai_training_events.knowledge_source_id
+          WHERE event_type='knowledge_used' AND ai_training_events.knowledge_source_id IS NOT NULL
+          GROUP BY ai_training_events.knowledge_source_id
+          ORDER BY total DESC
+          LIMIT 10`),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources", []),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources WHERE sync_status IN ('available', 'synced', 'local')", []),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources WHERE sync_status='failed'", []),
+    get("SELECT COUNT(*) AS total FROM knowledge_sources WHERE sync_status IN ('processing', 'pending')", []),
+    get("SELECT COUNT(*) AS total FROM memory_entries", []),
+  ]);
+
+  const knowledgeRows = [];
+  for (const source of sources) {
+    const maybeRefreshed = ["processing", "failed", "pending"].includes(String(source.sync_status || "").toLowerCase())
+      ? await refreshKnowledgeSourceVectorStatus(source, { force: false })
+      : source;
+    knowledgeRows.push(buildKnowledgeAdminRow(maybeRefreshed || source));
+  }
+
+  const needsReprocessRows = [];
+  for (const source of needsReprocessSources) {
+    const maybeRefreshed = ["processing", "failed", "pending"].includes(String(source.sync_status || "").toLowerCase())
+      ? await refreshKnowledgeSourceVectorStatus(source, { force: false })
+      : source;
+    needsReprocessRows.push(buildKnowledgeAdminRow(maybeRefreshed || source));
+  }
+
+  const failedRows = [];
+  for (const source of failedSources) {
+    const maybeRefreshed = ["processing", "failed", "pending"].includes(String(source.sync_status || "").toLowerCase())
+      ? await refreshKnowledgeSourceVectorStatus(source, { force: false })
+      : source;
+    failedRows.push(buildKnowledgeAdminRow(maybeRefreshed || source));
+  }
+
+  const counts = {
+    total: Number(totalKnowledgeRow?.total || 0),
+    available: Number(availableKnowledgeRow?.total || 0),
+    failed: Number(failedKnowledgeRow?.total || 0),
+    processing: Number(processingKnowledgeRow?.total || 0),
+  };
+
+  const topicCounter = new Map();
+  for (const row of memoryRows) {
+    const topics = safeJsonParse(row.topics_json || "[]") || [];
+    topics.forEach((topic) => {
+      const safe = String(topic || "").trim();
+      if (!safe) return;
+      topicCounter.set(safe, (topicCounter.get(safe) || 0) + 1);
+    });
+  }
+
+  const topTopics = [...topicCounter.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 12)
+    .map(([topic, total]) => ({ topic, total }));
+
+  const sourceLookup = new Map(knowledgeRows.map((row) => [Number(row.id), row]));
+  const topDocuments = topUsedRows.map((row) => ({
+    knowledge_source_id: row.knowledge_source_id,
+    total: Number(row.total || 0),
+    name: row.name || sourceLookup.get(Number(row.knowledge_source_id))?.original_name || `Documento #${row.knowledge_source_id}`,
+  }));
 
   return {
-    knowledge_source_id: record.lastID,
-    original_name: safeOriginalName,
-    stored_name: storedName,
-    local_indexed: Boolean(indexed),
-    language: indexed?.language || null,
-    department_name: departmentName,
-    source_kind: sourceKind,
-    sync_status: vectorStoreFile?.id ? "synced" : "local",
-    openai_file_id: openaiFile?.id || null,
-    vector_store_file_id: vectorStoreFile?.id || null,
+    openai: {
+      api_configured: Boolean(process.env.OPENAI_API_KEY),
+      vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
+      vector_store_id: OPENAI_VECTOR_STORE_ID || null,
+      checked_at: new Date().toISOString(),
+    },
+    knowledge: {
+      counts,
+      files: knowledgeRows.slice(0, 40),
+      needs_reprocess: needsReprocessRows,
+      recent_failures: failedRows,
+      top_documents: topDocuments,
+    },
+    processing_logs: recentLogs,
+    memories: {
+      total: Number(totalMemoryRow?.total || 0),
+      recent: memoryRows.slice(0, 20),
+      top_topics: topTopics,
+      by_scope: memoryRows.reduce((acc, row) => {
+        const key = row.memory_scope || "unknown";
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {}),
+    },
+    training_events: {
+      recent: recentEvents,
+      weak_responses: recentEvents.filter((event) => event.event_type === "weak_response").slice(0, 20),
+      memory_hits: recentEvents.filter((event) => event.event_type === "memory_hit").slice(0, 20),
+      knowledge_hits: recentEvents.filter((event) => event.event_type === "knowledge_used").slice(0, 20),
+    },
   };
 }
 
@@ -3557,6 +5042,13 @@ app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAcces
   res.json(payload || { user: null, intranet: null, department_catalog: [] });
 });
 
+app.get("/api/intranet/training/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  if (!user || user.role !== "admin") return res.status(403).json({ error: "forbidden" });
+  const overview = await buildAiTrainingOverview();
+  res.json({ training: overview });
+});
+
 app.get("/", (req, res) => res.redirect("/index.html"));
 app.get("/login.html", (req, res) => res.sendFile(path.join(publicDir, "login.html")));
 
@@ -3601,6 +5093,7 @@ startServer().catch((err) => {
   console.error("Falha ao iniciar o servidor:", err);
   process.exit(1);
 });
+
 
 
 

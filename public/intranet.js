@@ -244,13 +244,8 @@ function getVisibleDepartments(intranet) {
 function getGlobalNavigationItems(intranet) {
   const items = [
     { key: 'home', label: 'Home', icon: 'workspace' },
-    { key: 'dashboard', label: 'Dashboard', icon: 'chart', hidden: !Boolean(intranet?.dashboard?.enabled) },
-    { key: 'modules', label: 'Modulos', icon: 'layers' },
     { key: 'calendar', label: 'Agenda', icon: 'calendar' },
-    { key: 'departments', label: 'Departamentos', icon: 'briefcase' },
-    { key: 'documents', label: 'Documentos', icon: 'document' },
-    { key: 'training', label: 'Treinamento IA', icon: 'sparkles', hidden: !Boolean(trainingState) },
-    { key: 'communication', label: 'Comunicacao', icon: 'message' },
+    { key: 'sales', label: 'Painel comercial', icon: 'target', hidden: !Boolean(salesState?.enabled) },
   ];
   return items.filter((item) => !item.hidden);
 }
@@ -294,6 +289,7 @@ function normalizeViewState(route = {}, intranet) {
   };
 
   const globalKeys = new Set(getGlobalNavigationItems(intranet).map((item) => item.key));
+  const internalKeys = new Set(['departments']);
   if (normalized.key === 'department') {
     const department = visibleDepartments.find((item) => item.slug === normalized.departmentSlug);
     if (!department) return { key: 'home', departmentSlug: '', submenuSlug: '' };
@@ -311,7 +307,7 @@ function normalizeViewState(route = {}, intranet) {
     return { key: 'home', departmentSlug: '', submenuSlug: '' };
   }
 
-  if (!globalKeys.has(normalized.key)) {
+  if (!globalKeys.has(normalized.key) && !internalKeys.has(normalized.key)) {
     return { key: 'home', departmentSlug: '', submenuSlug: '' };
   }
 
@@ -422,15 +418,18 @@ function resolveQuickLinkRoute(link = {}) {
   const anchorMap = {
     home: { key: 'home' },
     calendar: { key: 'calendar' },
-    documents: { key: 'documents' },
-    communication: { key: 'communication' },
-    modules: { key: 'modules' },
-    dashboard: { key: 'dashboard' },
-    training: { key: 'training' },
-    departments: { key: 'departments' },
+    sales: { key: 'sales' },
   };
   if (anchor && anchorMap[anchor]) return anchorMap[anchor];
   return null;
+}
+
+function openHomeArea(targetId = 'home') {
+  setActiveView('home');
+  window.setTimeout(() => {
+    const target = el(targetId);
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 40);
 }
 
 function renderSidebarUtility(intranet) {
@@ -439,12 +438,26 @@ function renderSidebarUtility(intranet) {
   feed.innerHTML = '';
 
   const notifications = Array.isArray(intranet?.notifications) ? intranet.notifications : [];
-  if (!notifications.length) {
-    feed.innerHTML = '<div class="small muted">Nenhum lembrete imediato para este perfil.</div>';
+  const upcoming = Array.isArray(intranet?.home?.upcoming_events) ? intranet.home.upcoming_events : [];
+  const items = [
+    ...notifications.slice(0, 3).map((item) => ({
+      type: item.type || 'notification',
+      title: item.title || 'Atualizacao',
+      description: item.description || '',
+    })),
+    ...upcoming.slice(0, 3).map((item) => ({
+      type: 'event',
+      title: item.title || 'Compromisso',
+      description: `${formatDate(item.start_at || item.start_date || '')}${item.meeting_mode_label ? ` - ${item.meeting_mode_label}` : ''}`,
+    })),
+  ].slice(0, 5);
+
+  if (!items.length) {
+    feed.innerHTML = '<div class="small muted">Nenhum lembrete, reuniao ou aviso rapido no momento.</div>';
     return;
   }
 
-  notifications.slice(0, 5).forEach((item) => {
+  items.forEach((item) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'intranet-side-link intranet-utility-item';
@@ -456,8 +469,11 @@ function renderSidebarUtility(intranet) {
       </span>
     `;
     button.onclick = () => {
-      const routeKey = item.type === 'event' ? 'calendar' : item.type === 'announcement' ? 'communication' : 'home';
-      setActiveView(routeKey);
+      if (item.type === 'event') {
+        setActiveView('calendar');
+        return;
+      }
+      openHomeArea('homeCommunicationSection');
     };
     feed.appendChild(button);
   });
@@ -556,6 +572,7 @@ function renderSidebar(user, intranet) {
 
 function renderHomeOverview(user, intranet) {
   const overviewGrid = el('homeOverviewGrid');
+  const directionGrid = el('homeDirectionGrid');
   const communicationGrid = el('homeCommunicationGrid');
   if (overviewGrid) {
     const updates = Array.isArray(intranet.home?.updates) ? intranet.home.updates : [];
@@ -588,14 +605,39 @@ function renderHomeOverview(user, intranet) {
     `).join('');
   }
 
+  if (directionGrid) {
+    const directionItems = Array.isArray(intranet.home?.direction_board) ? intranet.home.direction_board : [];
+    if (!directionItems.length) {
+      directionGrid.innerHTML = `
+        <article class="intranet-direction-card is-empty">
+          <div class="intranet-card-meta">Direcao</div>
+          <h4>Nenhum comunicado institucional em destaque</h4>
+          <p>Quando a Direcao ou setores autorizados publicarem comunicados prioritarios, eles aparecerao aqui.</p>
+        </article>
+      `;
+    } else {
+      directionGrid.innerHTML = directionItems.map((item) => `
+        <article class="intranet-direction-card${item.is_direction_highlight ? ' is-direction' : ''}">
+          <div class="intranet-direction-pill">${escapeHtml(item.origin_label || 'Direcao')}</div>
+          <div class="intranet-card-meta">${escapeHtml(item.type || 'Comunicado')} - ${escapeHtml(item.priority || 'normal')}</div>
+          <h4>${escapeHtml(item.title || 'Comunicado institucional')}</h4>
+          <p>${escapeHtml(item.summary || '')}</p>
+          <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
+        </article>
+      `).join('');
+    }
+  }
+
   if (communicationGrid) {
     const announcements = Array.isArray(intranet.home?.communication_board) ? intranet.home.communication_board : [];
-    if (!announcements.length) {
+    const directionIds = new Set((Array.isArray(intranet.home?.direction_board) ? intranet.home.direction_board : []).map((item) => Number(item.id || 0)));
+    const visibleAnnouncements = announcements.filter((item) => !directionIds.has(Number(item.id || 0)));
+    if (!visibleAnnouncements.length) {
       communicationGrid.innerHTML = '<div class="intranet-empty-card">Nenhum comunicado ativo no mural neste momento.</div>';
     } else {
-      communicationGrid.innerHTML = announcements.map((item) => `
+      communicationGrid.innerHTML = visibleAnnouncements.map((item) => `
         <article class="intranet-communication-card">
-          <div class="intranet-card-meta">${escapeHtml(item.type || 'Comunicado')} - ${escapeHtml(item.priority || 'normal')}</div>
+          <div class="intranet-card-meta">${escapeHtml(item.origin_label || 'Comunicado interno')} - ${escapeHtml(item.priority || 'normal')}</div>
           <h4>${escapeHtml(item.title || 'Comunicado')}</h4>
           <p>${escapeHtml(item.summary || '')}</p>
           <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
@@ -633,14 +675,11 @@ function renderHero(user, intranet) {
 
   const quick = el('intranetQuickGrid');
   quick.innerHTML = '';
-  const links = [...(intranet.home.quickLinks || [])];
-  if (trainingState && !links.some((item) => item.routeKey === 'training')) {
-    links.push({
-      title: 'Treinamento da IA',
-      description: 'Ver a saude da base documental, memorias e reprocessamentos.',
-      routeKey: 'training',
-    });
-  }
+  const hiddenRouteKeys = new Set(['dashboard', 'modules', 'departments', 'documents', 'training', 'communication']);
+  const links = [...(intranet.home.quickLinks || [])].filter((link) => {
+    const route = resolveQuickLinkRoute(link);
+    return !route || !hiddenRouteKeys.has(route.key);
+  });
 
   links.forEach((link) => {
     const route = resolveQuickLinkRoute(link);
@@ -708,10 +747,15 @@ function renderModules(intranet, query = '') {
 
 function renderDepartments(intranet) {
   const grid = el('departmentGrid');
+  const reminderGrid = el('departmentReminderGrid');
   grid.innerHTML = '';
+  if (reminderGrid) reminderGrid.innerHTML = '';
 
   if (!Array.isArray(intranet.departments) || !intranet.departments.length) {
     grid.innerHTML = '<div class="intranet-empty-card">Nenhum departamento especifico foi liberado para este perfil.</div>';
+    if (reminderGrid) {
+      reminderGrid.innerHTML = '<div class="intranet-empty-card">Sem lembretes operacionais para este perfil no momento.</div>';
+    }
     return;
   }
 
@@ -743,6 +787,36 @@ function renderDepartments(intranet) {
       setActiveView('department', { departmentSlug });
     });
   });
+
+  if (reminderGrid) {
+    const reminderItems = [
+      ...(Array.isArray(intranet.home?.upcoming_events) ? intranet.home.upcoming_events.slice(0, 3).map((item) => ({
+        badge: 'Reuniao',
+        title: item.title || 'Compromisso',
+        description: item.description || item.meeting_mode_label || 'Agenda corporativa',
+        meta: formatDate(item.start_at || item.start_date || ''),
+      })) : []),
+      ...(Array.isArray(intranet.notifications) ? intranet.notifications.slice(0, 3).map((item) => ({
+        badge: item.type === 'announcement' ? 'Aviso' : 'Lembrete',
+        title: item.title || 'Atualizacao',
+        description: item.description || '',
+        meta: 'Fluxo interno',
+      })) : []),
+    ].slice(0, 6);
+
+    if (!reminderItems.length) {
+      reminderGrid.innerHTML = '<div class="intranet-empty-card">Nenhuma reuniao, aviso rapido ou lembrete imediato encontrado.</div>';
+    } else {
+      reminderGrid.innerHTML = reminderItems.map((item) => `
+        <article class="intranet-quick-card intranet-home-overview-card intranet-reminder-card">
+          <div class="intranet-card-meta">${escapeHtml(item.badge || 'Lembrete')}</div>
+          <div class="intranet-quick-title">${escapeHtml(item.title || 'Atualizacao')}</div>
+          <div class="intranet-quick-text">${escapeHtml(item.description || '')}</div>
+          <div class="intranet-home-overview-meta">${escapeHtml(item.meta || '')}</div>
+        </article>
+      `).join('');
+    }
+  }
 }
 
 function setDashboardSectionVisible(isVisible) {
@@ -1108,6 +1182,23 @@ function addDays(dateKey, amount) {
   }).format(base);
 }
 
+function addMonths(dateKey, amount) {
+  const [year, month, day] = String(dateKey || getTodayDateKey()).split('-').map((item) => Number(item || 0));
+  const safeYear = year || new Date().getFullYear();
+  const safeMonth = month || 1;
+  const safeDay = day || 1;
+  const monthAnchor = new Date(`${String(safeYear).padStart(4, '0')}-${String(safeMonth).padStart(2, '0')}-01T12:00:00-03:00`);
+  monthAnchor.setMonth(monthAnchor.getMonth() + Number(amount || 0));
+  const lastDay = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + 1, 0).getDate();
+  monthAnchor.setDate(Math.min(safeDay, lastDay));
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(monthAnchor);
+}
+
 function formatCalendarDateLabel(dateKey) {
   try {
     return new Date(`${dateKey}T12:00:00-03:00`).toLocaleDateString('pt-BR', {
@@ -1121,6 +1212,16 @@ function formatCalendarDateLabel(dateKey) {
 }
 
 function formatCalendarRangeLabel(range = {}) {
+  if (calendarState.view === 'month' && range.from) {
+    try {
+      return new Date(`${range.from}T12:00:00-03:00`).toLocaleDateString('pt-BR', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'America/Sao_Paulo',
+      });
+    } catch {}
+  }
+
   const from = range.from ? formatCalendarDateLabel(range.from) : '';
   const to = range.to ? formatCalendarDateLabel(range.to) : '';
   if (!from && !to) return 'Agenda';
@@ -1322,8 +1423,10 @@ function buildCalendarMonthGrid(events = []) {
   const range = calendarState.range || {};
   const start = new Date(`${range.from}T12:00:00-03:00`);
   const end = new Date(`${range.to}T12:00:00-03:00`);
+  const today = getTodayDateKey();
+  const activeMonth = String(calendarState.baseDate || range.from || today).slice(0, 7);
   const byDate = new Map();
-  events.forEach((event) => {
+  sortCalendarEvents(events).forEach((event) => {
     const key = event.start_date || '';
     if (!byDate.has(key)) byDate.set(key, []);
     byDate.get(key).push(event);
@@ -1350,8 +1453,15 @@ function buildCalendarMonthGrid(events = []) {
       <div class="intranet-calendar-grid">
         ${days.map((dateKey) => {
           const items = byDate.get(dateKey) || [];
+          const stateClass = [
+            'intranet-calendar-day',
+            dateKey === today ? 'is-today' : '',
+            dateKey === calendarState.baseDate ? 'is-selected' : '',
+            dateKey.slice(0, 7) !== activeMonth ? 'is-outside-month' : '',
+            items.length ? 'has-events' : '',
+          ].filter(Boolean).join(' ');
           return `
-            <div class="intranet-calendar-day">
+            <div class="${stateClass}">
               <button class="intranet-calendar-day-number" type="button" data-date="${escapeHtml(dateKey)}">${escapeHtml(dateKey.slice(-2))}</button>
               <div class="intranet-calendar-day-events">
                 ${items.slice(0, 4).map((item) => `
@@ -1381,6 +1491,7 @@ function buildCalendarWeekGrid(events = []) {
   const range = calendarState.range || {};
   const start = new Date(`${range.from}T12:00:00-03:00`);
   const end = new Date(`${range.to}T12:00:00-03:00`);
+  const today = getTodayDateKey();
   const byDate = new Map();
   sortCalendarEvents(events).forEach((event) => {
     const key = event.start_date || '';
@@ -1404,9 +1515,11 @@ function buildCalendarWeekGrid(events = []) {
     <div class="intranet-calendar-week">
       ${days.map((dateKey) => {
         const items = byDate.get(dateKey) || [];
+        const isToday = dateKey === today;
+        const isSelected = dateKey === calendarState.baseDate;
         return `
-          <section class="intranet-calendar-week-column">
-            <button class="intranet-calendar-week-head" type="button" data-date="${escapeHtml(dateKey)}">
+          <section class="intranet-calendar-week-column${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}">
+            <button class="intranet-calendar-week-head${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}" type="button" data-date="${escapeHtml(dateKey)}">
               <strong>${escapeHtml(formatCalendarDateLabel(dateKey))}</strong>
               <span>${items.length} compromisso(s)</span>
             </button>
@@ -1490,6 +1603,7 @@ function buildCalendarListView(events = []) {
 function renderCalendarView() {
   const wrap = el('calendarView');
   if (!wrap) return;
+  wrap.setAttribute('data-calendar-view', calendarState.view);
   if (calendarState.view === 'month') {
     wrap.innerHTML = buildCalendarMonthGrid(calendarState.events || []);
   } else if (calendarState.view === 'week') {
@@ -1504,11 +1618,28 @@ function renderCalendarView() {
     button.addEventListener('click', () => selectCalendarEvent(Number(button.getAttribute('data-event-id'))));
   });
   Array.from(wrap.querySelectorAll('[data-date]')).forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const dateKey = button.getAttribute('data-date');
+      calendarState.baseDate = dateKey || calendarState.baseDate;
+      if (calendarState.view !== 'day') {
+        calendarState.view = 'day';
+      }
+      await fetchCalendarEvents();
       resetCalendarEditor(dateKey);
     });
   });
+}
+
+function shiftCalendarBaseDate(step = 1) {
+  if (calendarState.view === 'month') {
+    calendarState.baseDate = addMonths(calendarState.baseDate || getTodayDateKey(), step);
+    return;
+  }
+  if (calendarState.view === 'week') {
+    calendarState.baseDate = addDays(calendarState.baseDate || getTodayDateKey(), step * 7);
+    return;
+  }
+  calendarState.baseDate = addDays(calendarState.baseDate || getTodayDateKey(), step);
 }
 
 async function selectCalendarEvent(eventId) {
@@ -2092,8 +2223,7 @@ async function init() {
   el('btnNewCalendarEvent')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
   el('btnCalendarReset')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
   el('btnCalendarPrev')?.addEventListener('click', async () => {
-    const step = calendarState.view === 'month' ? -30 : calendarState.view === 'week' ? -7 : -1;
-    calendarState.baseDate = addDays(calendarState.baseDate || getTodayDateKey(), step);
+    shiftCalendarBaseDate(-1);
     await fetchCalendarEvents();
   });
   el('btnCalendarToday')?.addEventListener('click', async () => {
@@ -2101,8 +2231,7 @@ async function init() {
     await fetchCalendarEvents();
   });
   el('btnCalendarNext')?.addEventListener('click', async () => {
-    const step = calendarState.view === 'month' ? 30 : calendarState.view === 'week' ? 7 : 1;
-    calendarState.baseDate = addDays(calendarState.baseDate || getTodayDateKey(), step);
+    shiftCalendarBaseDate(1);
     await fetchCalendarEvents();
   });
   Array.from(document.querySelectorAll('#calendarViewSwitch [data-view]')).forEach((button) => {

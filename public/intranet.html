@@ -30,7 +30,7 @@
       </div>
 
       <div class="intranet-sidebar-block intranet-sidebar-utility">
-        <div class="intranet-block-title">Proximos passos</div>
+        <div class="intranet-block-title">Lembretes e agenda</div>
         <div class="intranet-sidebar-links intranet-sidebar-utility-feed" id="sidebarUtilityFeed"></div>
       </div>
 
@@ -86,10 +86,13 @@
         <div class="intranet-section-head">
           <div>
             <div class="intranet-section-eyebrow">Comunicacao corporativa</div>
-            <h3 class="intranet-section-title">Mural de avisos da empresa</h3>
+            <h3 class="intranet-section-title">Avisos institucionais e comunicados internos</h3>
           </div>
         </div>
-        <div class="intranet-communication-grid" id="homeCommunicationGrid"></div>
+        <div class="intranet-home-announcement-layout">
+          <div class="intranet-direction-grid" id="homeDirectionGrid"></div>
+          <div class="intranet-communication-grid" id="homeCommunicationGrid"></div>
+        </div>
       </section>
 
       <section class="intranet-section intranet-view" id="dashboard" data-view="dashboard" hidden>
@@ -311,6 +314,13 @@
           </div>
         </div>
         <div class="intranet-department-grid" id="departmentGrid"></div>
+        <div class="intranet-section-head intranet-section-head-stack" style="margin-top:18px;">
+          <div>
+            <div class="intranet-section-eyebrow">Lembretes operacionais</div>
+            <h4 class="intranet-section-title" style="font-size:20px;">Reunioes, compromissos e avisos rapidos</h4>
+          </div>
+        </div>
+        <div class="intranet-home-grid intranet-department-reminder-grid" id="departmentReminderGrid"></div>
       </section>
 
       <section class="intranet-section intranet-view" id="departmentWorkspace" data-view="department" hidden>

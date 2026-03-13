@@ -19,6 +19,7 @@ const ICONS = {
   workspace: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8"/><path d="M12 18v2"/></svg>',
   assistant: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v4"/><path d="m8 6 4 2 4-2"/><rect x="5" y="8" width="14" height="10" rx="4"/><path d="M9 13h.01"/><path d="M15 13h.01"/><path d="M9 17c1 .7 2 .9 3 .9s2-.2 3-.9"/></svg>',
   insight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V18h8v-3.3A7 7 0 0 0 12 2Z"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>',
   general: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>',
 };
 
@@ -47,6 +48,10 @@ let calendarState = {
   summary: null,
 };
 const SIDEBAR_STORAGE_KEY = 'talkers_intranet_sidebar_state_v1';
+const VIEW_STORAGE_KEY = 'talkers_intranet_view_state_v1';
+const DEPARTMENT_TREE_STORAGE_KEY = 'talkers_intranet_department_tree_state_v1';
+let currentViewState = { key: 'home', departmentSlug: '', submenuSlug: '' };
+let expandedDepartmentSlugs = new Set();
 
 function renderIcon(name) {
   return ICONS[name] || ICONS.general;
@@ -170,57 +175,377 @@ function closeSidebarOnMobile() {
   if (!isDesktopSidebarViewport()) setSidebarOpen(false);
 }
 
-function decorateSidebarNav() {
-  Array.from(document.querySelectorAll('.intranet-nav-link')).forEach((link) => {
-    const iconWrap = link.querySelector('.intranet-nav-link-icon');
-    if (!iconWrap) return;
-    const iconName = link.getAttribute('data-icon') || 'general';
-    iconWrap.innerHTML = renderIcon(iconName);
+function readViewPreference() {
+  try {
+    const raw = localStorage.getItem(VIEW_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object'
+      ? {
+          key: String(parsed.key || 'home'),
+          departmentSlug: String(parsed.departmentSlug || ''),
+          submenuSlug: String(parsed.submenuSlug || ''),
+        }
+      : { key: 'home', departmentSlug: '', submenuSlug: '' };
+  } catch {
+    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+  }
+}
+
+function writeViewPreference(route = {}) {
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({
+      key: String(route.key || 'home'),
+      departmentSlug: String(route.departmentSlug || ''),
+      submenuSlug: String(route.submenuSlug || ''),
+    }));
+  } catch {}
+}
+
+function readExpandedDepartmentPreference() {
+  try {
+    const raw = localStorage.getItem(DEPARTMENT_TREE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item || '')) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeExpandedDepartmentPreference() {
+  try {
+    localStorage.setItem(DEPARTMENT_TREE_STORAGE_KEY, JSON.stringify(Array.from(expandedDepartmentSlugs)));
+  } catch {}
+}
+
+function getVisibleDepartments(intranet) {
+  return Array.isArray(intranet?.departments) ? intranet.departments : [];
+}
+
+function getGlobalNavigationItems(intranet) {
+  const items = [
+    { key: 'home', label: 'Home', icon: 'workspace' },
+    { key: 'dashboard', label: 'Dashboard', icon: 'chart', hidden: !Boolean(intranet?.dashboard?.enabled) },
+    { key: 'modules', label: 'Modulos', icon: 'layers' },
+    { key: 'calendar', label: 'Agenda', icon: 'calendar' },
+    { key: 'departments', label: 'Departamentos', icon: 'briefcase' },
+    { key: 'documents', label: 'Documentos', icon: 'document' },
+    { key: 'training', label: 'Treinamento IA', icon: 'sparkles', hidden: !Boolean(trainingState) },
+    { key: 'communication', label: 'Comunicacao', icon: 'message' },
+  ];
+  return items.filter((item) => !item.hidden);
+}
+
+function getDepartmentRouteMeta(intranet, departmentSlug = '', submenuSlug = '') {
+  const department = getVisibleDepartments(intranet).find((item) => item.slug === departmentSlug) || null;
+  const submenu = department?.submenus?.find((item) => item.slug === submenuSlug) || null;
+  return { department, submenu };
+}
+
+function getRouteMeta(route = {}, intranet) {
+  if (route.key === 'department') {
+    const { department, submenu } = getDepartmentRouteMeta(intranet, route.departmentSlug, route.submenuSlug);
+    return {
+      title: submenu?.title || department?.name || 'Departamento',
+      eyebrow: submenu ? (department?.name || 'Departamento') : 'Departamento',
+    };
+  }
+
+  const map = {
+    home: { title: 'Home', eyebrow: 'Painel institucional' },
+    dashboard: { title: 'Dashboard / BI', eyebrow: 'Indicadores' },
+    modules: { title: 'Modulos', eyebrow: 'Fluxos e ferramentas' },
+    calendar: { title: 'Agenda', eyebrow: 'Calendario corporativo' },
+    departments: { title: 'Departamentos', eyebrow: 'Areas de trabalho' },
+    documents: { title: 'Documentos', eyebrow: 'Base de conhecimento' },
+    training: { title: 'Treinamento IA', eyebrow: 'Aprendizado e ingestao' },
+    communication: { title: 'Comunicacao', eyebrow: 'Avisos e comunicados' },
+    sales: { title: 'Painel comercial', eyebrow: 'Operacao comercial' },
+  };
+
+  return map[route.key] || { title: 'Intranet Talkers', eyebrow: 'Workspace corporativo' };
+}
+
+function normalizeViewState(route = {}, intranet) {
+  const visibleDepartments = getVisibleDepartments(intranet);
+  const normalized = {
+    key: String(route.key || 'home'),
+    departmentSlug: String(route.departmentSlug || ''),
+    submenuSlug: String(route.submenuSlug || ''),
+  };
+
+  const globalKeys = new Set(getGlobalNavigationItems(intranet).map((item) => item.key));
+  if (normalized.key === 'department') {
+    const department = visibleDepartments.find((item) => item.slug === normalized.departmentSlug);
+    if (!department) return { key: 'home', departmentSlug: '', submenuSlug: '' };
+    const submenu = normalized.submenuSlug
+      ? (department.submenus || []).find((item) => item.slug === normalized.submenuSlug)
+      : null;
+    return {
+      key: 'department',
+      departmentSlug: department.slug,
+      submenuSlug: submenu?.slug || '',
+    };
+  }
+
+  if (normalized.key === 'sales' && !salesState.enabled) {
+    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+  }
+
+  if (!globalKeys.has(normalized.key)) {
+    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+  }
+
+  return normalized;
+}
+
+function syncTopbar(route, intranet) {
+  const meta = getRouteMeta(route, intranet);
+  const greeting = el('intranetGreeting');
+  if (greeting) greeting.textContent = meta.title;
+  const eyebrow = document.querySelector('.intranet-topbar .intranet-eyebrow');
+  if (eyebrow) eyebrow.textContent = meta.eyebrow;
+  document.title = `${meta.title} - Intranet Talkers`;
+}
+
+function syncVisibleViews(route) {
+  Array.from(document.querySelectorAll('.intranet-view')).forEach((section) => {
+    const sectionView = section.getAttribute('data-view');
+    const shouldShow = route.key === 'department'
+      ? sectionView === 'department'
+      : sectionView === route.key;
+    section.hidden = !shouldShow;
+  });
+}
+
+function syncSidebarNavigation(intranet) {
+  Array.from(document.querySelectorAll('[data-nav-key]')).forEach((item) => {
+    const isActive = item.getAttribute('data-nav-key') === currentViewState.key;
+    item.classList.toggle('is-active', isActive);
+    item.setAttribute('aria-current', isActive ? 'page' : 'false');
+  });
+
+  Array.from(document.querySelectorAll('.intranet-department-group')).forEach((group) => {
+    const slug = group.getAttribute('data-department-slug') || '';
+    const isExpanded = expandedDepartmentSlugs.has(slug);
+    const isDepartmentActive = currentViewState.key === 'department' && currentViewState.departmentSlug === slug;
+    group.classList.toggle('is-open', isExpanded);
+    group.classList.toggle('is-active', isDepartmentActive);
+
+    const toggle = group.querySelector('.intranet-department-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+
+    const submenuList = group.querySelector('.intranet-department-submenu-list');
+    if (submenuList) submenuList.hidden = !isExpanded;
+
+    Array.from(group.querySelectorAll('.intranet-submenu-link')).forEach((button) => {
+      const submenuSlug = button.getAttribute('data-submenu-slug') || '';
+      const active = isDepartmentActive && currentViewState.submenuSlug === submenuSlug;
+      button.classList.toggle('is-active', active);
+    });
+  });
+}
+
+function toggleDepartmentExpanded(slug, forceValue = null) {
+  const safeSlug = String(slug || '').trim();
+  if (!safeSlug) return;
+  const shouldOpen = typeof forceValue === 'boolean' ? forceValue : !expandedDepartmentSlugs.has(safeSlug);
+  if (shouldOpen) {
+    expandedDepartmentSlugs.add(safeSlug);
+  } else {
+    expandedDepartmentSlugs.delete(safeSlug);
+  }
+  writeExpandedDepartmentPreference();
+  syncSidebarNavigation(bootstrapData?.intranet || {});
+}
+
+function resolveQuickLinkRoute(link = {}) {
+  if (link.routeKey) return { key: String(link.routeKey) };
+
+  const anchor = String(link.anchor || '').trim().replace(/^#/, '');
+  const anchorMap = {
+    home: { key: 'home' },
+    calendar: { key: 'calendar' },
+    documents: { key: 'documents' },
+    communication: { key: 'communication' },
+    modules: { key: 'modules' },
+    dashboard: { key: 'dashboard' },
+    training: { key: 'training' },
+    departments: { key: 'departments' },
+  };
+  if (anchor && anchorMap[anchor]) return anchorMap[anchor];
+  return null;
+}
+
+function renderSidebarUtility(intranet) {
+  const feed = el('sidebarUtilityFeed');
+  if (!feed) return;
+  feed.innerHTML = '';
+
+  const notifications = Array.isArray(intranet?.notifications) ? intranet.notifications : [];
+  if (!notifications.length) {
+    feed.innerHTML = '<div class="small muted">Nenhum lembrete imediato para este perfil.</div>';
+    return;
+  }
+
+  notifications.slice(0, 5).forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'intranet-side-link intranet-utility-item';
+    button.innerHTML = `
+      <span class="intranet-nav-link-icon">${renderIcon(item.type === 'event' ? 'calendar' : item.type === 'announcement' ? 'megaphone' : 'general')}</span>
+      <span class="intranet-side-link-copy">
+        <strong>${escapeHtml(item.title || 'Atualizacao')}</strong>
+        <small>${escapeHtml(item.description || '')}</small>
+      </span>
+    `;
+    button.onclick = () => {
+      const routeKey = item.type === 'event' ? 'calendar' : item.type === 'announcement' ? 'communication' : 'home';
+      setActiveView(routeKey);
+    };
+    feed.appendChild(button);
   });
 }
 
 function renderSidebar(user, intranet) {
-  el('intranetBrandSub').textContent = `${user.email || ''} - ${user.role || 'user'}`;
+  const visibleDepartments = getVisibleDepartments(intranet);
+  el('intranetBrandSub').textContent = user.role === 'admin'
+    ? 'Acesso administrativo total'
+    : `${visibleDepartments.length} area(s) liberada(s) - ${user.email || ''}`;
 
-  const chips = el('sidebarDepartmentChips');
-  chips.innerHTML = '';
-  const visibleDepartments = Array.isArray(intranet.departments) ? intranet.departments : [];
-  visibleDepartments.forEach((department) => {
-    const item = document.createElement('span');
-    item.className = 'intranet-chip';
-    item.textContent = department.name || department;
-    chips.appendChild(item);
+  const primaryNav = el('intranetPrimaryNav');
+  primaryNav.innerHTML = '';
+  getGlobalNavigationItems(intranet).forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'intranet-nav-link';
+    button.setAttribute('data-nav-key', item.key);
+    button.innerHTML = `
+      <span class="intranet-nav-link-icon">${renderIcon(item.icon || 'general')}</span>
+      <span class="intranet-nav-link-label">${escapeHtml(item.label)}</span>
+    `;
+    button.onclick = () => setActiveView(item.key);
+    primaryNav.appendChild(button);
   });
-  if (!visibleDepartments.length) {
-    chips.innerHTML = '<span class="small muted">Nenhuma area setorial liberada para este perfil.</span>';
-  }
 
-  const quickLinks = el('sidebarQuickLinks');
-  quickLinks.innerHTML = '';
-  const links = [...(intranet.home.quickLinks || [])];
-  if (trainingState) {
-    links.unshift({
-      title: 'Treinamento da IA',
-      description: 'Saude da base documental, memoria e reprocessamento.',
-      anchor: '#training',
+  const departmentNav = el('intranetDepartmentNav');
+  departmentNav.innerHTML = '';
+  if (!visibleDepartments.length) {
+    departmentNav.innerHTML = '<div class="small muted">Nenhum departamento setorial liberado para este usuario.</div>';
+  } else {
+    visibleDepartments.forEach((department) => {
+      const group = document.createElement('div');
+      group.className = 'intranet-department-group';
+      group.setAttribute('data-department-slug', department.slug || '');
+      const submenus = Array.isArray(department.submenus) ? department.submenus : [];
+
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'intranet-department-toggle';
+      toggle.innerHTML = `
+        <span class="intranet-nav-link-icon">${renderIcon(department.icon || 'layers')}</span>
+        <span class="intranet-department-toggle-copy">
+          <strong>${escapeHtml(department.name || 'Departamento')}</strong>
+          <small>${submenus.length ? `${submenus.length} submenu(s)` : 'Area principal'}</small>
+        </span>
+        <span class="intranet-department-chevron">${renderIcon('chevron')}</span>
+      `;
+      toggle.onclick = () => {
+        const slug = department.slug || '';
+        const isExpanded = expandedDepartmentSlugs.has(slug);
+        const isCurrentDepartment = currentViewState.key === 'department' && currentViewState.departmentSlug === slug && !currentViewState.submenuSlug;
+
+        if (isExpanded && isCurrentDepartment) {
+          toggleDepartmentExpanded(slug, false);
+          setActiveView('departments');
+          return;
+        }
+
+        toggleDepartmentExpanded(slug, true);
+        setActiveView('department', { departmentSlug: slug });
+      };
+      group.appendChild(toggle);
+
+      const submenuList = document.createElement('div');
+      submenuList.className = 'intranet-department-submenu-list';
+      submenuList.hidden = !expandedDepartmentSlugs.has(department.slug || '');
+      if (submenus.length) {
+        submenus.forEach((submenu) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'intranet-submenu-link';
+          button.setAttribute('data-submenu-slug', submenu.slug || '');
+          button.innerHTML = `
+            <span class="intranet-nav-link-icon">${renderIcon(submenu.icon || department.icon || 'layers')}</span>
+            <span class="intranet-side-link-copy">
+              <strong>${escapeHtml(submenu.title || 'Submenu')}</strong>
+              <small>${escapeHtml(submenu.description || 'Fluxo interno do departamento')}</small>
+            </span>
+          `;
+          button.onclick = () => {
+            toggleDepartmentExpanded(department.slug || '', true);
+            setActiveView('department', { departmentSlug: department.slug || '', submenuSlug: submenu.slug || '' });
+          };
+          submenuList.appendChild(button);
+        });
+      }
+      group.appendChild(submenuList);
+      departmentNav.appendChild(group);
     });
   }
-  links.forEach((link) => {
-    const item = document.createElement(link.href ? 'a' : 'button');
-    item.className = 'intranet-side-link';
-    item.textContent = link.title;
-    if (link.href) {
-      item.href = link.href;
-      item.target = link.href.startsWith('#') ? '' : '_self';
-    } else if (link.anchor) {
-      item.type = 'button';
-      item.onclick = () => {
-        document.querySelector(link.anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        closeSidebarOnMobile();
-      };
+
+  renderSidebarUtility(intranet);
+  syncSidebarNavigation(intranet);
+}
+
+function renderHomeOverview(user, intranet) {
+  const overviewGrid = el('homeOverviewGrid');
+  const communicationGrid = el('homeCommunicationGrid');
+  if (overviewGrid) {
+    const updates = Array.isArray(intranet.home?.updates) ? intranet.home.updates : [];
+    const overviewCards = [
+      {
+        title: `${getPeriodGreeting()}, ${user.name}`,
+        description: 'Esta e a entrada principal da intranet, com contexto institucional, agenda e comunicacao interna.',
+        badge: user.role === 'admin' ? 'Admin' : 'Perfil ativo',
+      },
+      ...(updates || []).slice(0, 4).map((item) => ({
+        title: item.title || 'Atualizacao',
+        description: item.description || '',
+        badge: item.label || 'Resumo',
+      })),
+      {
+        title: 'Proximas reunioes',
+        description: intranet.home?.upcoming_events?.[0]
+          ? `${intranet.home.upcoming_events[0].title} - ${formatDate(intranet.home.upcoming_events[0].start_at || intranet.home.upcoming_events[0].start_date)}`
+          : 'Nenhuma reuniao agendada para os proximos dias.',
+        badge: `${Number((intranet.home?.upcoming_events || []).length || 0)} evento(s)`,
+      },
+    ];
+
+    overviewGrid.innerHTML = overviewCards.map((item) => `
+      <article class="intranet-quick-card intranet-home-overview-card">
+        <div class="intranet-quick-title">${escapeHtml(item.title)}</div>
+        <div class="intranet-quick-text">${escapeHtml(item.description)}</div>
+        <div class="intranet-home-overview-meta">${escapeHtml(item.badge || '')}</div>
+      </article>
+    `).join('');
+  }
+
+  if (communicationGrid) {
+    const announcements = Array.isArray(intranet.home?.communication_board) ? intranet.home.communication_board : [];
+    if (!announcements.length) {
+      communicationGrid.innerHTML = '<div class="intranet-empty-card">Nenhum comunicado ativo no mural neste momento.</div>';
+    } else {
+      communicationGrid.innerHTML = announcements.map((item) => `
+        <article class="intranet-communication-card">
+          <div class="intranet-card-meta">${escapeHtml(item.type || 'Comunicado')} - ${escapeHtml(item.priority || 'normal')}</div>
+          <h4>${escapeHtml(item.title || 'Comunicado')}</h4>
+          <p>${escapeHtml(item.summary || '')}</p>
+          <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
+        </article>
+      `).join('');
     }
-    quickLinks.appendChild(item);
-  });
+  }
 }
 
 function renderHero(user, intranet) {
@@ -252,29 +577,34 @@ function renderHero(user, intranet) {
   const quick = el('intranetQuickGrid');
   quick.innerHTML = '';
   const links = [...(intranet.home.quickLinks || [])];
-  if (trainingState) {
-    links.unshift({
+  if (trainingState && !links.some((item) => item.routeKey === 'training')) {
+    links.push({
       title: 'Treinamento da IA',
-      description: 'Saude da base documental, memoria e reprocessamento.',
-      anchor: '#training',
-      style: 'primary',
+      description: 'Ver a saude da base documental, memorias e reprocessamentos.',
+      routeKey: 'training',
     });
   }
+
   links.forEach((link) => {
-    const card = document.createElement(link.href ? 'a' : 'button');
+    const route = resolveQuickLinkRoute(link);
+    const card = document.createElement(route || !link.href ? 'button' : 'a');
     card.className = `intranet-quick-card${link.style === 'primary' ? ' is-primary' : ''}`;
     card.innerHTML = `
       <div class="intranet-quick-title">${escapeHtml(link.title)}</div>
       <div class="intranet-quick-text">${escapeHtml(link.description)}</div>
     `;
-    if (link.href) {
-      card.href = link.href;
-    } else if (link.anchor) {
+    if (route) {
       card.type = 'button';
-      card.onclick = () => document.querySelector(link.anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      card.onclick = () => setActiveView(route.key, route);
+    } else if (link.href) {
+      card.href = link.href;
+    } else {
+      card.type = 'button';
     }
     quick.appendChild(card);
   });
+
+  renderHomeOverview(user, intranet);
 }
 
 function renderModules(intranet, query = '') {
@@ -342,16 +672,121 @@ function renderDepartments(intranet) {
       </div>
       <p>${escapeHtml(department.description || '')}</p>
       <ul class="intranet-department-modules">${modules}</ul>
+      <div class="intranet-card-actions">
+        <button class="btn" type="button" data-open-department="${escapeHtml(department.slug || '')}">Abrir area</button>
+      </div>
     `;
     grid.appendChild(card);
+  });
+
+  grid.querySelectorAll('[data-open-department]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const departmentSlug = button.getAttribute('data-open-department') || '';
+      toggleDepartmentExpanded(departmentSlug, true);
+      setActiveView('department', { departmentSlug });
+    });
   });
 }
 
 function setDashboardSectionVisible(isVisible) {
   const section = el('dashboard');
-  const navLink = el('dashboardNavLink');
   if (section) section.hidden = !isVisible;
-  if (navLink) navLink.hidden = !isVisible;
+}
+
+function renderDepartmentWorkspace(intranet) {
+  const section = el('departmentWorkspace');
+  if (!section) return;
+
+  const { department, submenu } = getDepartmentRouteMeta(intranet, currentViewState.departmentSlug, currentViewState.submenuSlug);
+  if (!department) {
+    section.hidden = true;
+    return;
+  }
+
+  section.hidden = false;
+  el('departmentWorkspaceEyebrow').textContent = submenu ? department.name : 'Departamento';
+  el('departmentWorkspaceTitle').textContent = submenu?.title || department.name || 'Area departamental';
+  el('departmentWorkspaceDescription').textContent = submenu?.description || department.description || 'Area departamental da intranet.';
+
+  const summary = el('departmentWorkspaceSummary');
+  summary.innerHTML = '';
+  const summaryCards = [
+    { title: 'Nivel atual', description: department.access_level || 'colaborador', badge: 'Permissao' },
+    { title: 'Submenus ativos', description: String((department.submenus || []).length || 0), badge: 'Fluxos' },
+    { title: 'Modulos liberados', description: String((department.modules || []).length || 0), badge: 'Recursos' },
+    { title: submenu ? 'Submenu ativo' : 'Area selecionada', description: submenu?.title || department.name, badge: submenu ? 'Detalhe' : 'Principal' },
+  ];
+  summaryCards.forEach((item) => {
+    const card = document.createElement('article');
+    card.className = 'intranet-quick-card intranet-home-overview-card';
+    card.innerHTML = `
+      <div class="intranet-quick-title">${escapeHtml(item.title)}</div>
+      <div class="intranet-quick-text">${escapeHtml(item.description)}</div>
+      <div class="intranet-home-overview-meta">${escapeHtml(item.badge)}</div>
+    `;
+    summary.appendChild(card);
+  });
+
+  const submenusWrap = el('departmentWorkspaceSubmenus');
+  submenusWrap.innerHTML = '';
+  const submenus = Array.isArray(department.submenus) ? department.submenus : [];
+  if (!submenus.length) {
+    submenusWrap.innerHTML = '<div class="intranet-empty-card">Nenhum submenu configurado para este departamento ainda.</div>';
+  } else {
+    submenus.forEach((item) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `intranet-quick-card intranet-submenu-card${currentViewState.submenuSlug === item.slug ? ' is-active' : ''}`;
+      card.innerHTML = `
+        <div class="intranet-quick-title">${escapeHtml(item.title)}</div>
+        <div class="intranet-quick-text">${escapeHtml(item.description || 'Fluxo interno do departamento')}</div>
+      `;
+      card.onclick = () => setActiveView('department', { departmentSlug: department.slug, submenuSlug: item.slug || '' });
+      submenusWrap.appendChild(card);
+    });
+  }
+
+  const modulesWrap = el('departmentWorkspaceModules');
+  modulesWrap.innerHTML = '';
+  const modules = Array.isArray(department.modules) ? department.modules : [];
+  if (!modules.length) {
+    modulesWrap.innerHTML = '<div class="intranet-empty-card">Nenhum modulo liberado para esta area no momento.</div>';
+  } else {
+    modules.forEach((module) => {
+      const card = document.createElement('article');
+      card.className = 'intranet-module-card';
+      card.innerHTML = `
+        <div class="intranet-module-top">
+          <span class="intranet-module-icon">${renderIcon(module.icon || department.icon || 'workspace')}</span>
+          <span class="intranet-chip">${escapeHtml(department.name || 'Departamento')}</span>
+        </div>
+        <h4>${escapeHtml(module.title || 'Modulo')}</h4>
+        <p>${escapeHtml(module.description || '')}</p>
+        <div class="intranet-module-type">${escapeHtml(module.type || 'workspace')}</div>
+      `;
+      modulesWrap.appendChild(card);
+    });
+  }
+}
+
+function setActiveView(viewKey, options = {}) {
+  if (!bootstrapData?.intranet) return;
+  currentViewState = normalizeViewState({
+    key: viewKey,
+    departmentSlug: options.departmentSlug ?? currentViewState.departmentSlug,
+    submenuSlug: options.submenuSlug ?? currentViewState.submenuSlug,
+  }, bootstrapData.intranet);
+
+  if (currentViewState.key === 'department' && currentViewState.departmentSlug) {
+    toggleDepartmentExpanded(currentViewState.departmentSlug, true);
+  }
+
+  writeViewPreference(currentViewState);
+  syncTopbar(currentViewState, bootstrapData.intranet);
+  syncVisibleViews(currentViewState);
+  syncSidebarNavigation(bootstrapData.intranet);
+  renderDepartmentWorkspace(bootstrapData.intranet);
+  closeSidebarOnMobile();
 }
 
 function renderDashboard(intranet) {
@@ -480,9 +915,7 @@ function renderDocuments(intranet, query = '') {
 
 function setTrainingSectionVisible(isVisible) {
   const section = el('training');
-  const navLink = el('trainingNavLink');
   if (section) section.hidden = !isVisible;
-  if (navLink) navLink.hidden = !isVisible;
 }
 
 function renderTrainingCards(training = {}) {
@@ -1007,9 +1440,7 @@ async function fetchCalendarBootstrap() {
 
 function setSalesSectionVisible(isVisible) {
   const section = el('sales');
-  const navLink = el('salesNavLink');
   if (section) section.hidden = !isVisible;
-  if (navLink) navLink.hidden = !isVisible;
 }
 
 function renderSalesSummary(sales) {
@@ -1228,30 +1659,28 @@ function hydrateSalesWorkspace(intranet) {
 
 function renderCommunication(intranet) {
   const grid = el('communicationGrid');
+  if (!grid) return;
   grid.innerHTML = '';
 
-  (intranet.communication.mural || []).forEach((item) => {
-    const card = document.createElement('article');
-    card.className = 'intranet-communication-card';
-    card.innerHTML = `
-      <h4>${escapeHtml(item.title)}</h4>
-      <p>${escapeHtml(item.description)}</p>
-    `;
-    grid.appendChild(card);
-  });
-
-  const futureWrap = el('adminFuture');
-  const futureList = el('futureList');
-  if (intranet.admin?.can_manage) {
-    futureWrap.style.display = '';
-    futureList.innerHTML = '';
-    (intranet.admin.next_steps || []).forEach((item) => {
-      const block = document.createElement('div');
-      block.className = 'intranet-future-item';
-      block.textContent = item;
-      futureList.appendChild(block);
+  const items = intranet.communication?.mural || [];
+  if (!items.length) {
+    grid.innerHTML = '<div class="intranet-empty-card">Nenhum comunicado ativo foi publicado ainda.</div>';
+  } else {
+    items.forEach((item) => {
+      const card = document.createElement('article');
+      card.className = 'intranet-communication-card';
+      card.innerHTML = `
+        <div class="intranet-card-meta">${escapeHtml(item.priority || 'normal')} - ${escapeHtml(item.type || 'announcement')}</div>
+        <h4>${escapeHtml(item.title || 'Comunicado')}</h4>
+        <p>${escapeHtml(item.description || '')}</p>
+        <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
+      `;
+      grid.appendChild(card);
     });
   }
+
+  const futureWrap = el('adminFuture');
+  if (futureWrap) futureWrap.style.display = 'none';
 }
 
 function applyDocumentFilter() {
@@ -1275,10 +1704,11 @@ async function init() {
   await fetchTrainingBootstrap();
   await fetchCalendarBootstrap().catch(() => {});
   const { user, intranet } = bootstrapData;
+  expandedDepartmentSlugs = readExpandedDepartmentPreference();
+  currentViewState = normalizeViewState({ key: 'home', departmentSlug: '', submenuSlug: '' }, intranet);
   allModuleItems = intranet.modules || [];
   allDocumentItems = intranet.document_center?.recent_documents || [];
 
-  decorateSidebarNav();
   applySidebarPreference();
   renderSidebar(user, intranet);
   renderHero(user, intranet);
@@ -1288,6 +1718,8 @@ async function init() {
   renderDocuments(intranet);
   hydrateSalesWorkspace(intranet);
   renderCommunication(intranet);
+  renderDepartmentWorkspace(intranet);
+  setActiveView(currentViewState.key, currentViewState);
 
   el('documentSearch').addEventListener('input', applyDocumentFilter);
   el('btnNewCalendarEvent')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
@@ -1397,9 +1829,7 @@ async function init() {
   });
   el('btnIntranetMenu')?.addEventListener('click', toggleSidebar);
   el('btnSidebarCollapse')?.addEventListener('click', toggleSidebar);
-  Array.from(document.querySelectorAll('.intranet-nav-link')).forEach((link) => {
-    link.addEventListener('click', () => closeSidebarOnMobile());
-  });
+  el('intranetSidebarBackdrop')?.addEventListener('click', () => setSidebarOpen(false));
   document.addEventListener('click', (event) => {
     if (window.innerWidth > 960) return;
     const sidebar = el('intranetSidebar');

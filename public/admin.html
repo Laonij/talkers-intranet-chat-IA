@@ -20,126 +20,138 @@
         <a class="btn" href="/index.html">Voltar</a>
       </div>
 
+      <div class="admin-tabs" id="adminTabs">
+        <button class="admin-tab-btn is-active" type="button" data-admin-tab="users">Usuarios</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="departments">Departamentos</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="knowledge">Base de conhecimento</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="training">Treinamento da IA</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="logs">Logs do sistema</button>
+      </div>
+
       <div class="admin-grid">
         <section class="admin-panel">
-          <div class="admin-panel-head">
+          <div class="admin-tab-chunk" data-admin-chunk="users">
+            <div class="admin-panel-head">
+              <div>
+                <div class="admin-section-title" id="userFormTitle">Criar usuario</div>
+                <div class="small muted">Usuarios e historicos existentes sao preservados. A exclusao administrativa continua bloqueada.</div>
+              </div>
+            </div>
+
+            <input type="hidden" id="editingUserId" value="" />
+
+            <div class="row admin-form-grid">
+              <div>
+                <label>Nome</label>
+                <input id="name" placeholder="Nome" />
+              </div>
+              <div>
+                <label>Email</label>
+                <input id="email" placeholder="email@empresa.com" />
+              </div>
+            </div>
+
+            <div class="row admin-form-grid">
+              <div>
+                <label>Senha</label>
+                <input id="password" type="password" placeholder="Senha" />
+                <div class="small muted" id="passwordHint">Obrigatoria para criar. Na edicao, deixe em branco para manter.</div>
+              </div>
+              <div>
+                <label>Tipo</label>
+                <select id="role">
+                  <option value="user">Usuario</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row admin-form-grid">
+              <div>
+                <label>Cargo (preparado para evolucao)</label>
+                <input id="jobTitle" placeholder="Ex.: Analista, Coordenador, Professor" />
+              </div>
+              <div>
+                <label>Unidade (preparado para evolucao)</label>
+                <input id="unitName" placeholder="Ex.: Unidade Centro" />
+              </div>
+            </div>
+
+            <div class="admin-inline-toggle">
+              <label class="admin-check-row">
+                <input id="canAccessIntranet" type="checkbox" />
+                <span>
+                  <strong>Permitir acesso a Intranet Talkers</strong>
+                  <small>Quando marcado, o usuario ve o botao da intranet e pode acessar a area corporativa.</small>
+                </span>
+              </label>
+            </div>
+
             <div>
-              <div class="admin-section-title" id="userFormTitle">Criar usuario</div>
-              <div class="small muted">Usuarios e historicos existentes sao preservados. A exclusao administrativa continua bloqueada.</div>
+              <label>Departamentos</label>
+              <div class="small muted" style="margin-bottom:10px;">Selecione um ou varios departamentos. A estrutura ja fica pronta para novos departamentos no futuro.</div>
+              <div id="departmentsGrid" class="departments-grid"></div>
+            </div>
+
+            <div class="admin-form-actions">
+              <button class="btn" id="btnCancelEdit" type="button" style="display:none;">Cancelar edicao</button>
+              <button class="btn primary" id="btnSaveUser" type="button">Criar usuario</button>
             </div>
           </div>
 
-          <input type="hidden" id="editingUserId" value="" />
+          <div class="admin-tab-chunk" data-admin-chunk="departments">
+            <div class="admin-divider"></div>
 
-          <div class="row admin-form-grid">
-            <div>
-              <label>Nome</label>
-              <input id="name" placeholder="Nome" />
+            <div class="admin-panel-head" style="margin-bottom:0;">
+              <div>
+                <div class="admin-section-title" id="departmentFormTitle">Criar departamento</div>
+                <div class="small muted">Crie novos departamentos sem depender de alteracao manual no codigo.</div>
+              </div>
             </div>
-            <div>
-              <label>Email</label>
-              <input id="email" placeholder="email@empresa.com" />
+
+            <input type="hidden" id="editingDepartmentId" value="" />
+
+            <div class="row admin-form-grid">
+              <div>
+                <label>Nome do departamento</label>
+                <input id="departmentName" placeholder="Ex.: Secretaria, Coordenacao, Atendimento" />
+              </div>
+              <div>
+                <label>Slug (opcional)</label>
+                <input id="departmentSlug" placeholder="Gerado automaticamente se vazio" />
+              </div>
             </div>
-          </div>
 
-          <div class="row admin-form-grid">
-            <div>
-              <label>Senha</label>
-              <input id="password" type="password" placeholder="Senha" />
-              <div class="small muted" id="passwordHint">Obrigatoria para criar. Na edicao, deixe em branco para manter.</div>
+            <div class="row admin-form-grid">
+              <div>
+                <label>Descricao</label>
+                <input id="departmentDescription" placeholder="Resumo do papel e da area" />
+              </div>
+              <div>
+                <label>Icone (opcional)</label>
+                <input id="departmentIcon" placeholder="Ex.: layers, briefcase, users" />
+              </div>
             </div>
-            <div>
-              <label>Tipo</label>
-              <select id="role">
-                <option value="user">Usuario</option>
-                <option value="admin">Admin</option>
-              </select>
+
+            <div class="admin-inline-toggle">
+              <label class="admin-check-row">
+                <input id="departmentIsActive" type="checkbox" checked />
+                <span>
+                  <strong>Departamento ativo</strong>
+                  <small>Departamentos inativos deixam de aparecer na associacao de usuarios e na intranet.</small>
+                </span>
+              </label>
             </div>
-          </div>
 
-          <div class="row admin-form-grid">
-            <div>
-              <label>Cargo (preparado para evolucao)</label>
-              <input id="jobTitle" placeholder="Ex.: Analista, Coordenador, Professor" />
+            <div class="admin-form-actions">
+              <button class="btn" id="btnCancelDepartmentEdit" type="button" style="display:none;">Cancelar edicao</button>
+              <button class="btn primary" id="btnSaveDepartment" type="button">Criar departamento</button>
             </div>
-            <div>
-              <label>Unidade (preparado para evolucao)</label>
-              <input id="unitName" placeholder="Ex.: Unidade Centro" />
-            </div>
-          </div>
-
-          <div class="admin-inline-toggle">
-            <label class="admin-check-row">
-              <input id="canAccessIntranet" type="checkbox" />
-              <span>
-                <strong>Permitir acesso a Intranet Talkers</strong>
-                <small>Quando marcado, o usuario ve o botao da intranet e pode acessar a area corporativa.</small>
-              </span>
-            </label>
-          </div>
-
-          <div>
-            <label>Departamentos</label>
-            <div class="small muted" style="margin-bottom:10px;">Selecione um ou varios departamentos. A estrutura ja fica pronta para novos departamentos no futuro.</div>
-            <div id="departmentsGrid" class="departments-grid"></div>
-          </div>
-
-          <div class="admin-form-actions">
-            <button class="btn" id="btnCancelEdit" type="button" style="display:none;">Cancelar edicao</button>
-            <button class="btn primary" id="btnSaveUser" type="button">Criar usuario</button>
-          </div>
-
-          <div class="admin-divider"></div>
-
-          <div class="admin-panel-head" style="margin-bottom:0;">
-            <div>
-              <div class="admin-section-title" id="departmentFormTitle">Criar departamento</div>
-              <div class="small muted">Crie novos departamentos sem depender de alteracao manual no codigo.</div>
-            </div>
-          </div>
-
-          <input type="hidden" id="editingDepartmentId" value="" />
-
-          <div class="row admin-form-grid">
-            <div>
-              <label>Nome do departamento</label>
-              <input id="departmentName" placeholder="Ex.: Secretaria, Coordenacao, Atendimento" />
-            </div>
-            <div>
-              <label>Slug (opcional)</label>
-              <input id="departmentSlug" placeholder="Gerado automaticamente se vazio" />
-            </div>
-          </div>
-
-          <div class="row admin-form-grid">
-            <div>
-              <label>Descricao</label>
-              <input id="departmentDescription" placeholder="Resumo do papel e da area" />
-            </div>
-            <div>
-              <label>Icone (opcional)</label>
-              <input id="departmentIcon" placeholder="Ex.: layers, briefcase, users" />
-            </div>
-          </div>
-
-          <div class="admin-inline-toggle">
-            <label class="admin-check-row">
-              <input id="departmentIsActive" type="checkbox" checked />
-              <span>
-                <strong>Departamento ativo</strong>
-                <small>Departamentos inativos deixam de aparecer na associacao de usuarios e na intranet.</small>
-              </span>
-            </label>
-          </div>
-
-          <div class="admin-form-actions">
-            <button class="btn" id="btnCancelDepartmentEdit" type="button" style="display:none;">Cancelar edicao</button>
-            <button class="btn primary" id="btnSaveDepartment" type="button">Criar departamento</button>
           </div>
         </section>
 
         <aside class="admin-sidebar-panels">
-          <div class="admin-side-card">
+          <div class="admin-side-card admin-tab-chunk" data-admin-chunk="knowledge,training">
             <div class="admin-side-head">
               <div class="admin-side-title">Status do RAG</div>
               <span id="ragDocCountBadge" class="badge">0 documentos</span>
@@ -153,7 +165,7 @@
             </div>
           </div>
 
-          <div class="admin-side-card">
+          <div class="admin-side-card admin-tab-chunk" data-admin-chunk="knowledge">
             <div class="admin-side-title">Enviar para a base da empresa</div>
             <div class="small muted" style="margin-bottom:12px;">Os arquivos vao para o armazenamento local do projeto e, se configurado, tambem para a Vector Store da OpenAI.</div>
             <div>
@@ -176,27 +188,27 @@
             </div>
           </div>
 
-          <div class="admin-side-card">
+          <div class="admin-side-card admin-tab-chunk" data-admin-chunk="knowledge">
             <div class="admin-side-head">
-              <div class="admin-side-title">Importar vendas</div>
+              <div class="admin-side-title">Importar planilhas</div>
               <span class="badge">MATRICULAS NOVAS</span>
             </div>
-            <div class="small muted" style="margin-bottom:12px;">Importe a planilha principal de vendas e, opcionalmente, a planilha de pos-venda para sincronizar closers e aliases sem depender de hardcode.</div>
+            <div class="small muted" style="margin-bottom:12px;">Importe planilhas operacionais para sincronizar dados estruturados com a intranet sem depender de preenchimento manual.</div>
             <input id="salesWorkbookInput" type="file" accept=".xlsx,.xls,.csv" hidden />
             <input id="postSaleWorkbookInput" type="file" accept=".xlsx,.xls,.csv" hidden />
             <div class="admin-upload-actions">
-              <button class="btn" type="button" id="btnPickSalesWorkbook">Planilha de vendas</button>
-              <button class="btn" type="button" id="btnPickPostSaleWorkbook">Planilha de pos-venda</button>
+              <button class="btn" type="button" id="btnPickSalesWorkbook">Planilha principal</button>
+              <button class="btn" type="button" id="btnPickPostSaleWorkbook">Planilha complementar</button>
             </div>
-            <div id="salesWorkbookLabel" class="small muted admin-upload-file">Nenhuma planilha de vendas selecionada.</div>
-            <div id="postSaleWorkbookLabel" class="small muted admin-upload-file">Nenhuma planilha de pos-venda selecionada.</div>
-            <div id="salesImportState" class="small admin-state-box">Pronto para importar matriculas e vincular por closer.</div>
+            <div id="salesWorkbookLabel" class="small muted admin-upload-file">Nenhuma planilha principal selecionada.</div>
+            <div id="postSaleWorkbookLabel" class="small muted admin-upload-file">Nenhuma planilha complementar selecionada.</div>
+            <div id="salesImportState" class="small admin-state-box">Pronto para importar e sincronizar registros operacionais.</div>
             <div class="admin-form-actions" style="margin-top:14px;">
               <button class="btn primary" id="btnImportSales" type="button">Importar planilhas</button>
             </div>
           </div>
 
-          <div class="admin-side-card">
+          <div class="admin-side-card" hidden>
             <div class="admin-panel-head" style="margin-bottom:0;">
               <div>
                 <div class="admin-side-title" id="closerFormTitle">Cadastrar closer</div>
@@ -247,7 +259,7 @@
       </div>
 
       <div class="admin-content-grid admin-collapsible-grid">
-        <section class="admin-panel admin-collapsible" data-section="users">
+        <section class="admin-panel admin-collapsible admin-tab-panel is-active" data-admin-tab-panel="users" data-section="users">
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title">Usuarios</div>
@@ -274,7 +286,7 @@
           </div>
         </section>
 
-        <section class="admin-panel admin-collapsible" data-section="departments">
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="departments" data-section="departments">
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title">Departamentos</div>
@@ -299,7 +311,7 @@
           </div>
         </section>
 
-        <section class="admin-panel admin-collapsible" data-section="closers">
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="legacy-hidden" data-section="closers" hidden>
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title">Closers</div>
@@ -324,7 +336,7 @@
           </div>
         </section>
 
-        <section class="admin-panel admin-collapsible" data-section="sales">
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="legacy-hidden" data-section="sales" hidden>
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title">Painel comercial</div>
@@ -401,7 +413,7 @@
           </div>
         </section>
 
-        <section class="admin-panel admin-collapsible" data-section="sales-logs">
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="legacy-hidden" data-section="sales-logs" hidden>
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title">Logs comerciais</div>
@@ -426,7 +438,7 @@
           </div>
         </section>
 
-        <section class="admin-panel admin-collapsible" data-section="knowledge">
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="knowledge" data-section="knowledge">
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title">Arquivos da base interna</div>
@@ -458,7 +470,7 @@
           </div>
         </section>
 
-        <section class="admin-panel admin-collapsible" data-section="training">
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="training" data-section="training">
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title">Treinamento da IA</div>
@@ -540,6 +552,283 @@
             </table>
           </div>
         </section>
+
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="departments" data-section="submenus">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title" id="submenuFormTitle">Submenus dos departamentos</div>
+              <div class="small muted" id="submenuCountLabel">Carregando submenus...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="submenus">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="submenus">
+            <input type="hidden" id="editingSubmenuId" value="" />
+
+            <div class="admin-form-grid">
+              <div>
+                <label>Departamento</label>
+                <select id="submenuDepartmentId">
+                  <option value="">Selecione</option>
+                </select>
+              </div>
+              <div>
+                <label>Titulo do submenu</label>
+                <input id="submenuTitle" placeholder="Ex.: Relatorios, Cadastro, Trilhas" />
+              </div>
+            </div>
+
+            <div class="admin-form-grid">
+              <div>
+                <label>Slug (opcional)</label>
+                <input id="submenuSlug" placeholder="Gerado automaticamente se vazio" />
+              </div>
+              <div>
+                <label>View key (opcional)</label>
+                <input id="submenuViewKey" placeholder="Ex.: relatorios-financeiros" />
+              </div>
+            </div>
+
+            <div class="admin-form-grid">
+              <div>
+                <label>Descricao</label>
+                <input id="submenuDescription" placeholder="Resumo do fluxo interno do submenu" />
+              </div>
+              <div>
+                <label>Icone</label>
+                <input id="submenuIcon" placeholder="Ex.: layers, document, chart" />
+              </div>
+            </div>
+
+            <div class="admin-inline-toggle">
+              <label class="admin-check-row">
+                <input id="submenuIsActive" type="checkbox" checked />
+                <span>
+                  <strong>Submenu ativo</strong>
+                  <small>Submenus inativos deixam de aparecer na navegacao lateral da intranet.</small>
+                </span>
+              </label>
+            </div>
+
+            <div class="admin-form-actions">
+              <button class="btn" id="btnCancelSubmenuEdit" type="button" style="display:none;">Cancelar edicao</button>
+              <button class="btn primary" id="btnSaveSubmenu" type="button">Salvar submenu</button>
+            </div>
+
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Departamento</th>
+                  <th>Titulo</th>
+                  <th>Slug</th>
+                  <th>Status</th>
+                  <th>Descricao</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody id="submenusBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="departments" data-section="announcements">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title" id="announcementFormTitle">Comunicados internos</div>
+              <div class="small muted" id="announcementsCountLabel">Carregando comunicados...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="announcements">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="announcements">
+            <input type="hidden" id="editingAnnouncementId" value="" />
+
+            <div class="admin-form-grid">
+              <div>
+                <label>Titulo</label>
+                <input id="announcementTitle" placeholder="Ex.: Treinamento interno desta semana" />
+              </div>
+              <div>
+                <label>Resumo</label>
+                <input id="announcementSummary" placeholder="Texto curto para o mural da Home" />
+              </div>
+            </div>
+
+            <div>
+              <label>Conteudo completo</label>
+              <textarea id="announcementContent" rows="4" placeholder="Texto principal do comunicado"></textarea>
+            </div>
+
+            <div class="admin-form-grid">
+              <div>
+                <label>Tipo</label>
+                <select id="announcementType">
+                  <option value="announcement">Comunicado</option>
+                  <option value="event">Evento</option>
+                  <option value="training">Treinamento</option>
+                  <option value="institutional">Institucional</option>
+                </select>
+              </div>
+              <div>
+                <label>Prioridade</label>
+                <select id="announcementPriority">
+                  <option value="normal">Normal</option>
+                  <option value="high">Alta</option>
+                  <option value="critical">Critica</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="admin-form-grid">
+              <div>
+                <label>Publico</label>
+                <select id="announcementAudienceScope">
+                  <option value="all">Todos os usuarios</option>
+                  <option value="departments">Departamentos especificos</option>
+                </select>
+              </div>
+              <div></div>
+            </div>
+
+            <div>
+              <label>Departamentos do comunicado</label>
+              <div class="small muted" style="margin-bottom:10px;">Use quando o publico for segmentado por departamento.</div>
+              <div id="announcementDepartments" class="departments-grid"></div>
+            </div>
+
+            <div class="admin-form-grid">
+              <div>
+                <label>Inicio (opcional)</label>
+                <input id="announcementStartsAt" type="datetime-local" />
+              </div>
+              <div>
+                <label>Fim (opcional)</label>
+                <input id="announcementEndsAt" type="datetime-local" />
+              </div>
+            </div>
+
+            <div class="admin-inline-toggle">
+              <label class="admin-check-row">
+                <input id="announcementIsActive" type="checkbox" checked />
+                <span>
+                  <strong>Comunicado ativo</strong>
+                  <small>Comunicados ativos aparecem na Home, na comunicacao interna e nas notificacoes conforme o publico definido.</small>
+                </span>
+              </label>
+            </div>
+
+            <div class="admin-form-actions">
+              <button class="btn" id="btnCancelAnnouncementEdit" type="button" style="display:none;">Cancelar edicao</button>
+              <button class="btn primary" id="btnSaveAnnouncement" type="button">Salvar comunicado</button>
+            </div>
+
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Titulo</th>
+                  <th>Publico</th>
+                  <th>Status</th>
+                  <th>Periodo</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody id="announcementsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="logs" data-section="audit-logs">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Logs administrativos</div>
+              <div class="small muted" id="auditLogsCountLabel">Carregando logs administrativos...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="audit-logs">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="audit-logs">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Usuario</th>
+                  <th>Acao</th>
+                  <th>Detalhe</th>
+                </tr>
+              </thead>
+              <tbody id="auditLogsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="logs" data-section="processing-logs">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Logs de processamento</div>
+              <div class="small muted" id="processingLogsCountLabel">Carregando logs de processamento...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="processing-logs">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="processing-logs">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Arquivo</th>
+                  <th>Etapa</th>
+                  <th>Status</th>
+                  <th>Detalhe</th>
+                </tr>
+              </thead>
+              <tbody id="processingLogsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="logs" data-section="training-logs">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Logs de treinamento</div>
+              <div class="small muted" id="trainingLogsCountLabel">Carregando eventos de treinamento...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="training-logs">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="training-logs">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Usuario</th>
+                  <th>Evento</th>
+                  <th>Status</th>
+                  <th>Detalhe</th>
+                </tr>
+              </thead>
+              <tbody id="systemTrainingLogsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="logs" data-section="calendar-logs">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Logs de agenda</div>
+              <div class="small muted" id="calendarLogsCountLabel">Carregando logs de agenda...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="calendar-logs">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="calendar-logs">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Quando</th>
+                  <th>Evento</th>
+                  <th>Acao</th>
+                  <th>Campo</th>
+                  <th>Detalhe</th>
+                </tr>
+              </thead>
+              <tbody id="calendarLogsBody"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
 
       <div id="msg" class="small"></div>
@@ -559,7 +848,11 @@ let cachedUsers = [];
 let closerCatalog = [];
 let salesOverview = null;
 let trainingOverview = null;
+let submenuCatalog = [];
+let announcementCatalog = [];
+let systemLogsState = null;
 let collapsedSections = new Set();
+let activeAdminTab = 'users';
 
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
@@ -857,6 +1150,7 @@ function getDepartmentOptions(includeInactive = false) {
 
 function renderDepartmentsGrid() {
   const wrap = document.getElementById('departmentsGrid');
+  const selected = new Set(Array.from(wrap.querySelectorAll('input:checked')).map((input) => String(input.value)));
   wrap.innerHTML = '';
 
   const options = getDepartmentOptions(false);
@@ -868,6 +1162,7 @@ function renderDepartmentsGrid() {
     input.type = 'checkbox';
     input.name = 'departments';
     input.value = department.name;
+    input.checked = selected.has(String(department.name));
 
     const copy = document.createElement('span');
     copy.className = 'department-check-copy';
@@ -884,19 +1179,56 @@ function renderDepartmentsGrid() {
 
 function renderDepartmentSelect() {
   const select = document.getElementById('ragDepartment');
-  const previousValue = select.value;
-  select.innerHTML = '<option value="">Geral / corporativo</option>';
+  if (select) {
+    const previousValue = select.value;
+    select.innerHTML = '<option value="">Geral / corporativo</option>';
 
-  getDepartmentOptions(false).forEach((department) => {
-    const option = document.createElement('option');
-    option.value = department.name;
-    option.textContent = department.name;
-    select.appendChild(option);
-  });
+    getDepartmentOptions(false).forEach((department) => {
+      const option = document.createElement('option');
+      option.value = department.name;
+      option.textContent = department.name;
+      select.appendChild(option);
+    });
 
-  if (Array.from(select.options).some((option) => option.value === previousValue)) {
-    select.value = previousValue;
+    if (Array.from(select.options).some((option) => option.value === previousValue)) {
+      select.value = previousValue;
+    }
   }
+
+  const submenuSelect = document.getElementById('submenuDepartmentId');
+  if (submenuSelect) {
+    const previousValue = submenuSelect.value;
+    submenuSelect.innerHTML = '<option value="">Selecione</option>';
+    getDepartmentOptions(true).forEach((department) => {
+      const option = document.createElement('option');
+      option.value = String(department.id);
+      option.textContent = department.name;
+      submenuSelect.appendChild(option);
+    });
+    if (Array.from(submenuSelect.options).some((option) => option.value === previousValue)) {
+      submenuSelect.value = previousValue;
+    }
+  }
+
+  const announcementWrap = document.getElementById('announcementDepartments');
+  if (announcementWrap) {
+    const selected = new Set(Array.from(announcementWrap.querySelectorAll('input:checked')).map((input) => String(input.value)));
+    announcementWrap.innerHTML = '';
+    getDepartmentOptions(true).forEach((department) => {
+      const label = document.createElement('label');
+      label.className = 'department-check';
+      label.innerHTML = `
+        <input type="checkbox" value="${escapeHtml(department.id)}" ${selected.has(String(department.id)) ? 'checked' : ''} />
+        <span class="department-check-copy">
+          <strong>${escapeHtml(department.name)}</strong>
+          <small>${escapeHtml(department.description || 'Comunicado segmentado para esta area.')}</small>
+        </span>
+      `;
+      announcementWrap.appendChild(label);
+    });
+  }
+
+  syncAnnouncementAudienceControls();
 }
 
 function renderDepartmentTable() {
@@ -935,8 +1267,303 @@ function renderDepartmentTable() {
     editBtn.textContent = 'Editar';
     editBtn.onclick = () => populateDepartmentForm(department);
     actionsCell.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger';
+    deleteBtn.textContent = 'Excluir';
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Deseja excluir o departamento "${department.name}"?`)) return;
+      try {
+        await api(`/api/admin/departments/${department.id}`, { method: 'DELETE' });
+        setMsg(`Departamento ${department.name} excluido com sucesso.`);
+        await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadAnnouncements(), loadSystemLogs()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actionsCell.appendChild(deleteBtn);
     body.appendChild(tr);
   });
+}
+
+function getSelectedAnnouncementDepartments() {
+  return Array.from(document.querySelectorAll('#announcementDepartments input:checked')).map((input) => Number(input.value));
+}
+
+function setSelectedAnnouncementDepartments(departmentIds = []) {
+  const safe = new Set((departmentIds || []).map((item) => String(item)));
+  document.querySelectorAll('#announcementDepartments input').forEach((input) => {
+    input.checked = safe.has(String(input.value));
+  });
+}
+
+function resetSubmenuForm() {
+  if (!document.getElementById('editingSubmenuId')) return;
+  document.getElementById('editingSubmenuId').value = '';
+  document.getElementById('submenuFormTitle').textContent = 'Submenus dos departamentos';
+  document.getElementById('submenuDepartmentId').value = '';
+  document.getElementById('submenuTitle').value = '';
+  document.getElementById('submenuSlug').value = '';
+  document.getElementById('submenuViewKey').value = '';
+  document.getElementById('submenuDescription').value = '';
+  document.getElementById('submenuIcon').value = '';
+  document.getElementById('submenuIsActive').checked = true;
+  document.getElementById('btnCancelSubmenuEdit').style.display = 'none';
+  document.getElementById('btnSaveSubmenu').textContent = 'Salvar submenu';
+}
+
+function populateSubmenuForm(submenu) {
+  if (!submenu) return;
+  document.getElementById('editingSubmenuId').value = String(submenu.id || '');
+  document.getElementById('submenuFormTitle').textContent = `Editar submenu #${submenu.id}`;
+  document.getElementById('submenuDepartmentId').value = String(submenu.department_id || '');
+  document.getElementById('submenuTitle').value = submenu.title || '';
+  document.getElementById('submenuSlug').value = submenu.slug || '';
+  document.getElementById('submenuViewKey').value = submenu.view_key || '';
+  document.getElementById('submenuDescription').value = submenu.description || '';
+  document.getElementById('submenuIcon').value = submenu.icon || '';
+  document.getElementById('submenuIsActive').checked = submenu.is_active !== false;
+  document.getElementById('btnCancelSubmenuEdit').style.display = '';
+  document.getElementById('btnSaveSubmenu').textContent = 'Salvar alteracoes';
+  setAdminTab('departments');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderSubmenuTable() {
+  const body = document.getElementById('submenusBody');
+  if (!body) return;
+  body.innerHTML = '';
+  document.getElementById('submenuCountLabel').textContent = submenuCatalog.length === 1
+    ? '1 submenu cadastrado'
+    : `${submenuCatalog.length} submenus cadastrados`;
+
+  if (!submenuCatalog.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhum submenu cadastrado ainda.</td></tr>';
+    return;
+  }
+
+  submenuCatalog.forEach((submenu) => {
+    const department = departmentCatalog.find((item) => Number(item.id) === Number(submenu.department_id));
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(submenu.department_name || department?.name || '-')}</td>
+      <td>${escapeHtml(submenu.title || '-')}</td>
+      <td class="small muted">${escapeHtml(submenu.slug || '-')}</td>
+      <td><span class="badge ${submenu.is_active !== false ? 'admin' : ''}">${submenu.is_active !== false ? 'Ativo' : 'Inativo'}</span></td>
+      <td class="small muted">${escapeHtml(submenu.description || 'Sem descricao')}</td>
+      <td class="admin-inline-actions"></td>
+    `;
+    const actions = tr.lastElementChild;
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateSubmenuForm(submenu);
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger';
+    deleteBtn.textContent = 'Excluir';
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Deseja excluir o submenu "${submenu.title}"?`)) return;
+      try {
+        await api(`/api/admin/department-submenus/${submenu.id}`, { method: 'DELETE' });
+        setMsg(`Submenu ${submenu.title} excluido com sucesso.`);
+        await Promise.all([loadSubmenus(), loadSystemLogs()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actions.appendChild(deleteBtn);
+
+    body.appendChild(tr);
+  });
+}
+
+async function loadSubmenus() {
+  const { submenus } = await api('/api/admin/department-submenus');
+  submenuCatalog = submenus || [];
+  renderSubmenuTable();
+}
+
+function resetAnnouncementForm() {
+  if (!document.getElementById('editingAnnouncementId')) return;
+  document.getElementById('editingAnnouncementId').value = '';
+  document.getElementById('announcementFormTitle').textContent = 'Comunicados internos';
+  document.getElementById('announcementTitle').value = '';
+  document.getElementById('announcementSummary').value = '';
+  document.getElementById('announcementContent').value = '';
+  document.getElementById('announcementType').value = 'announcement';
+  document.getElementById('announcementPriority').value = 'normal';
+  document.getElementById('announcementAudienceScope').value = 'all';
+  document.getElementById('announcementStartsAt').value = '';
+  document.getElementById('announcementEndsAt').value = '';
+  document.getElementById('announcementIsActive').checked = true;
+  document.getElementById('btnCancelAnnouncementEdit').style.display = 'none';
+  document.getElementById('btnSaveAnnouncement').textContent = 'Salvar comunicado';
+  setSelectedAnnouncementDepartments([]);
+}
+
+function toDateTimeLocalValue(value) {
+  if (!value) return '';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  } catch {
+    return '';
+  }
+}
+
+function populateAnnouncementForm(announcement) {
+  if (!announcement) return;
+  document.getElementById('editingAnnouncementId').value = String(announcement.id || '');
+  document.getElementById('announcementFormTitle').textContent = `Editar comunicado #${announcement.id}`;
+  document.getElementById('announcementTitle').value = announcement.title || '';
+  document.getElementById('announcementSummary').value = announcement.summary_text || '';
+  document.getElementById('announcementContent').value = announcement.content_text || '';
+  document.getElementById('announcementType').value = announcement.announcement_type || 'announcement';
+  document.getElementById('announcementPriority').value = announcement.priority || 'normal';
+  document.getElementById('announcementAudienceScope').value = announcement.audience_scope || 'all';
+  document.getElementById('announcementStartsAt').value = toDateTimeLocalValue(announcement.starts_at);
+  document.getElementById('announcementEndsAt').value = toDateTimeLocalValue(announcement.ends_at);
+  document.getElementById('announcementIsActive').checked = announcement.is_active !== false;
+  setSelectedAnnouncementDepartments(announcement.department_ids || []);
+  syncAnnouncementAudienceControls();
+  document.getElementById('btnCancelAnnouncementEdit').style.display = '';
+  document.getElementById('btnSaveAnnouncement').textContent = 'Salvar alteracoes';
+  setAdminTab('departments');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderAnnouncementsTable() {
+  const body = document.getElementById('announcementsBody');
+  if (!body) return;
+  body.innerHTML = '';
+  document.getElementById('announcementsCountLabel').textContent = announcementCatalog.length === 1
+    ? '1 comunicado publicado'
+    : `${announcementCatalog.length} comunicados publicados`;
+
+  if (!announcementCatalog.length) {
+    body.innerHTML = '<tr><td colspan="5" class="small muted">Nenhum comunicado interno publicado ainda.</td></tr>';
+    return;
+  }
+
+  announcementCatalog.forEach((announcement) => {
+    const audience = announcement.audience_scope === 'departments'
+      ? `Departamentos: ${(announcement.department_names || []).join(', ') || '-'}`
+      : 'Todos os usuarios';
+    const schedule = [announcement.starts_at ? formatDateTime(announcement.starts_at) : 'Agora', announcement.ends_at ? formatDateTime(announcement.ends_at) : 'Sem fim'].join(' - ');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(announcement.title || '-')}</td>
+      <td class="small muted">${escapeHtml(audience)}</td>
+      <td><span class="badge ${announcement.is_active !== false ? 'admin' : ''}">${announcement.is_active !== false ? 'Ativo' : 'Inativo'}</span></td>
+      <td class="small muted">${escapeHtml(schedule)}</td>
+      <td class="admin-inline-actions"></td>
+    `;
+    const actions = tr.lastElementChild;
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateAnnouncementForm(announcement);
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger';
+    deleteBtn.textContent = 'Excluir';
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Deseja excluir o comunicado "${announcement.title}"?`)) return;
+      try {
+        await api(`/api/admin/intranet/announcements/${announcement.id}`, { method: 'DELETE' });
+        setMsg(`Comunicado ${announcement.title} excluido com sucesso.`);
+        await Promise.all([loadAnnouncements(), loadSystemLogs()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actions.appendChild(deleteBtn);
+
+    body.appendChild(tr);
+  });
+}
+
+async function loadAnnouncements() {
+  const { announcements } = await api('/api/admin/intranet/announcements');
+  announcementCatalog = announcements || [];
+  renderAnnouncementsTable();
+}
+
+function renderSystemLogsTable(bodyId, items = [], formatter, emptyText) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  body.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    body.innerHTML = `<tr><td colspan="5" class="small muted">${emptyText}</td></tr>`;
+    return;
+  }
+  items.forEach((item) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = formatter(item);
+    body.appendChild(tr);
+  });
+}
+
+async function loadSystemLogs() {
+  const logs = await api('/api/admin/system-logs');
+  systemLogsState = logs;
+
+  const auditRows = logs.audit_logs || [];
+  const processingRows = logs.processing_logs || [];
+  const trainingRows = logs.training_logs || [];
+  const calendarRows = logs.calendar_logs || [];
+
+  document.getElementById('auditLogsCountLabel').textContent = `${auditRows.length} log(s) recente(s)`;
+  document.getElementById('processingLogsCountLabel').textContent = `${processingRows.length} log(s) recente(s)`;
+  document.getElementById('trainingLogsCountLabel').textContent = `${trainingRows.length} evento(s) recente(s)`;
+  document.getElementById('calendarLogsCountLabel').textContent = `${calendarRows.length} log(s) recente(s)`;
+
+  renderSystemLogsTable('auditLogsBody', auditRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.actor_name || 'Sistema')}</td>
+    <td>${escapeHtml(item.action || '-')}</td>
+    <td class="small muted">${escapeHtml(item.meta_json || '')}</td>
+  `, 'Nenhum log administrativo recente.');
+
+  renderSystemLogsTable('processingLogsBody', processingRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.file_name || '-')}</td>
+    <td>${escapeHtml(item.stage_key || '-')}</td>
+    <td>${escapeHtml(item.stage_status || '-')}</td>
+    <td class="small muted">${escapeHtml(item.message || '-')}</td>
+  `, 'Nenhum log de processamento recente.');
+
+  renderSystemLogsTable('systemTrainingLogsBody', trainingRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.actor_name || 'Sistema')}</td>
+    <td>${escapeHtml(item.event_type || item.title || '-')}</td>
+    <td>${escapeHtml(item.event_status || '-')}</td>
+    <td class="small muted">${escapeHtml(item.detail_text || '-')}</td>
+  `, 'Nenhum evento recente de treinamento.');
+
+  renderSystemLogsTable('calendarLogsBody', calendarRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.event_title || '-')}</td>
+    <td>${escapeHtml(item.action || '-')}</td>
+    <td>${escapeHtml(item.field_name || '-')}</td>
+    <td class="small muted">${escapeHtml(item.new_value || item.old_value || '-')}</td>
+  `, 'Nenhum log recente da agenda.');
 }
 
 function getSelectedDepartments() {
@@ -1052,6 +1679,45 @@ function bindSectionToggles() {
       syncSectionToggles();
     };
   });
+}
+
+function setAdminTab(tabKey = 'users') {
+  activeAdminTab = tabKey;
+  document.querySelectorAll('[data-admin-tab]').forEach((button) => {
+    button.classList.toggle('is-active', button.getAttribute('data-admin-tab') === tabKey);
+  });
+
+  document.querySelectorAll('[data-admin-tab-panel]').forEach((panel) => {
+    const isActive = panel.getAttribute('data-admin-tab-panel') === tabKey;
+    panel.classList.toggle('is-active', isActive);
+    panel.hidden = !isActive;
+  });
+
+  document.querySelectorAll('[data-admin-chunk]').forEach((chunk) => {
+    const allowedTabs = String(chunk.getAttribute('data-admin-chunk') || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    chunk.hidden = !allowedTabs.includes(tabKey);
+  });
+}
+
+function bindAdminTabs() {
+  document.querySelectorAll('[data-admin-tab]').forEach((button) => {
+    button.onclick = () => setAdminTab(button.getAttribute('data-admin-tab') || 'users');
+  });
+}
+
+function syncAnnouncementAudienceControls() {
+  const scope = document.getElementById('announcementAudienceScope')?.value || 'all';
+  const container = document.getElementById('announcementDepartments');
+  if (!container) return;
+  const shouldDisable = scope !== 'departments';
+  container.querySelectorAll('input').forEach((input) => {
+    input.disabled = shouldDisable;
+    if (shouldDisable) input.checked = false;
+  });
+  container.style.opacity = shouldDisable ? '.6' : '1';
 }
 
 async function loadDepartments() {
@@ -1756,7 +2422,7 @@ document.getElementById('btnSaveUser').onclick = async () => {
     }
 
     resetUserForm();
-    await Promise.all([loadUsers(), loadDepartments(), loadClosers(), loadSalesOverview()]);
+    await Promise.all([loadUsers(), loadDepartments(), loadSubmenus(), loadAnnouncements(), loadSystemLogs()]);
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
   }
@@ -1793,7 +2459,108 @@ document.getElementById('btnSaveDepartment').onclick = async () => {
     }
 
     resetDepartmentForm();
-    await Promise.all([loadDepartments(), loadUsers()]);
+    await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadAnnouncements(), loadSystemLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnCancelSubmenuEdit').onclick = () => {
+  resetSubmenuForm();
+  setMsg('Edicao do submenu cancelada.');
+};
+
+document.getElementById('btnSaveSubmenu').onclick = async () => {
+  const submenuId = document.getElementById('editingSubmenuId').value;
+  const payload = {
+    department_id: Number(document.getElementById('submenuDepartmentId').value || 0),
+    title: document.getElementById('submenuTitle').value.trim(),
+    slug: document.getElementById('submenuSlug').value.trim(),
+    view_key: document.getElementById('submenuViewKey').value.trim(),
+    description: document.getElementById('submenuDescription').value.trim(),
+    icon: document.getElementById('submenuIcon').value.trim(),
+    is_active: document.getElementById('submenuIsActive').checked,
+  };
+
+  if (!payload.department_id || !payload.title) {
+    setMsg('Selecione o departamento e informe o titulo do submenu.', true);
+    return;
+  }
+
+  try {
+    if (submenuId) {
+      await api(`/api/admin/department-submenus/${submenuId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Submenu atualizado com sucesso.');
+    } else {
+      await api('/api/admin/department-submenus', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Submenu criado com sucesso.');
+    }
+
+    resetSubmenuForm();
+    await Promise.all([loadSubmenus(), loadSystemLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnCancelAnnouncementEdit').onclick = () => {
+  resetAnnouncementForm();
+  syncAnnouncementAudienceControls();
+  setMsg('Edicao do comunicado cancelada.');
+};
+
+document.getElementById('announcementAudienceScope').addEventListener('change', syncAnnouncementAudienceControls);
+
+document.getElementById('btnSaveAnnouncement').onclick = async () => {
+  const announcementId = document.getElementById('editingAnnouncementId').value;
+  const scope = document.getElementById('announcementAudienceScope').value;
+  const payload = {
+    title: document.getElementById('announcementTitle').value.trim(),
+    summary_text: document.getElementById('announcementSummary').value.trim(),
+    content_text: document.getElementById('announcementContent').value.trim(),
+    announcement_type: document.getElementById('announcementType').value,
+    priority: document.getElementById('announcementPriority').value,
+    audience_scope: scope,
+    department_ids: scope === 'departments' ? getSelectedAnnouncementDepartments() : [],
+    starts_at: document.getElementById('announcementStartsAt').value || '',
+    ends_at: document.getElementById('announcementEndsAt').value || '',
+    is_active: document.getElementById('announcementIsActive').checked,
+  };
+
+  if (!payload.title) {
+    setMsg('Informe o titulo do comunicado.', true);
+    return;
+  }
+
+  if (scope === 'departments' && !payload.department_ids.length) {
+    setMsg('Selecione ao menos um departamento para um comunicado segmentado.', true);
+    return;
+  }
+
+  try {
+    if (announcementId) {
+      await api(`/api/admin/intranet/announcements/${announcementId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Comunicado atualizado com sucesso.');
+    } else {
+      await api('/api/admin/intranet/announcements', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Comunicado publicado com sucesso.');
+    }
+
+    resetAnnouncementForm();
+    syncAnnouncementAudienceControls();
+    await Promise.all([loadAnnouncements(), loadSystemLogs()]);
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
   }
@@ -1868,7 +2635,7 @@ document.getElementById('btnImportSales').onclick = async () => {
     document.getElementById('salesWorkbookInput').value = '';
     document.getElementById('postSaleWorkbookInput').value = '';
     updateSalesWorkbookLabels();
-    await Promise.all([loadClosers(), loadSalesOverview(), loadSalesRecords(), loadSalesLogs()]);
+    await loadSystemLogs();
   } catch (err) {
     setSalesImportState('Falha na importacao: ' + err.message, 'error');
     setMsg('Erro: ' + err.message, true);
@@ -2006,28 +2773,32 @@ document.getElementById('btnQueueKnowledgeBackfill').onclick = async () => {
 loadSectionState();
 bindSectionToggles();
 syncSectionToggles();
+bindAdminTabs();
+setAdminTab('users');
 renderRagSelection();
 setRagUploadState('Pronto para novos envios.');
 setRagUploadProgress(0, 0, false);
 setSalesImportState('Pronto para importar matriculas e vincular por closer.');
 resetUserForm();
 resetDepartmentForm();
+resetSubmenuForm();
+resetAnnouncementForm();
+syncAnnouncementAudienceControls();
 resetCloserForm();
 updateSalesWorkbookLabels();
 
 Promise.all([
   loadDepartments(),
   loadUsers(),
+  loadSubmenus(),
+  loadAnnouncements(),
   loadRagStatus(),
   loadRagFiles(),
+  loadSystemLogs(),
   loadAiTrainingOverview().catch((err) => {
     document.getElementById('trainingCountLabel').textContent = 'Painel de treinamento indisponivel no momento';
     setMsg('Aviso: nao foi possivel carregar o painel de treinamento: ' + err.message, true);
   }),
-  loadClosers(),
-  loadSalesOverview(),
-  loadSalesRecords(),
-  loadSalesLogs(),
 ])
   .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
 </script>

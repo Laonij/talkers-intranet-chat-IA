@@ -312,6 +312,31 @@ function nowBrazil() {
   }).format(new Date());
 }
 
+function formatDateTimeBrazil(value) {
+  if (!value) return "";
+  try {
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(value));
+  } catch {
+    return String(value || "");
+  }
+}
+
+function formatDateBrazil(value) {
+  if (!value) return "";
+  try {
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      dateStyle: "short",
+    }).format(new Date(value));
+  } catch {
+    return String(value || "");
+  }
+}
+
 function tryDecodeSession(req) {
   const token = req.cookies?.session;
   if (!token) return null;
@@ -649,6 +674,27 @@ function mapDepartmentRow(row) {
   };
 }
 
+function mapDepartmentSubmenuRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    is_active: row.is_active === undefined ? true : coerceDbBoolean(row.is_active),
+    metadata: safeJsonParse(row.metadata_json || '{}') || {},
+  };
+}
+
+function mapAnnouncementRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    is_active: row.is_active === undefined ? true : coerceDbBoolean(row.is_active),
+    is_pinned: coerceDbBoolean(row.is_pinned),
+    department_ids: Array.isArray(safeJsonParse(row.department_ids_json || '[]'))
+      ? safeJsonParse(row.department_ids_json || '[]')
+      : [],
+  };
+}
+
 async function listDepartmentCatalog(options = {}) {
   const includeInactive = Boolean(options.includeInactive);
   const rows = await all(
@@ -658,6 +704,79 @@ async function listDepartmentCatalog(options = {}) {
       ORDER BY sort_order ASC, name ASC`
   );
   return rows.map(mapDepartmentRow).filter(Boolean);
+}
+
+async function listDepartmentSubmenus(options = {}) {
+  const includeInactive = Boolean(options.includeInactive);
+  const safeDepartmentIds = Array.isArray(options.departmentIds)
+    ? options.departmentIds.map((value) => Number(value || 0)).filter(Boolean)
+    : [];
+  const where = [];
+  const params = [];
+  if (!includeInactive) {
+    where.push("COALESCE(ds.is_active, 1) = 1");
+  }
+  if (safeDepartmentIds.length) {
+    where.push(`ds.department_id IN (${safeDepartmentIds.map(() => '?').join(', ')})`);
+    params.push(...safeDepartmentIds);
+  }
+
+  const rows = await all(
+    `SELECT ds.id, ds.department_id, ds.title, ds.slug, ds.description, ds.icon, ds.view_key, ds.sort_order, ds.is_active, ds.metadata_json, ds.created_at, ds.updated_at,
+            d.name AS department_name, d.slug AS department_slug
+       FROM department_submenus ds
+       JOIN departments d ON d.id = ds.department_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY d.sort_order ASC, d.name ASC, ds.sort_order ASC, ds.title ASC`,
+    params
+  );
+
+  return rows.map(mapDepartmentSubmenuRow).filter(Boolean);
+}
+
+async function listIntranetAnnouncements(options = {}) {
+  const includeInactive = Boolean(options.includeInactive);
+  const limit = Math.max(1, Math.min(200, Number(options.limit || 40)));
+  const rows = await all(
+    `SELECT id, title, content_text, summary_text, audience_scope, department_ids_json, announcement_type, priority, is_pinned, is_active,
+            starts_at, ends_at, author_user_id, created_at, updated_at, users.name AS author_name
+       FROM intranet_announcements
+  LEFT JOIN users ON users.id = intranet_announcements.author_user_id
+      ${includeInactive ? '' : 'WHERE COALESCE(is_active, 1) = 1'}
+      ORDER BY COALESCE(is_pinned, 0) DESC, datetime(created_at) DESC, id DESC
+      LIMIT ?`,
+    [limit]
+  );
+  return rows.map(mapAnnouncementRow).filter(Boolean);
+}
+
+function isAnnouncementActiveNow(announcement, referenceDate = new Date()) {
+  const now = new Date(referenceDate);
+  if (!announcement || announcement.is_active === false) return false;
+
+  if (announcement.starts_at) {
+    const start = new Date(announcement.starts_at);
+    if (!Number.isNaN(start.getTime()) && start > now) return false;
+  }
+  if (announcement.ends_at) {
+    const end = new Date(announcement.ends_at);
+    if (!Number.isNaN(end.getTime()) && end < now) return false;
+  }
+  return true;
+}
+
+function filterAnnouncementsForUser(announcements = [], user = null, departmentDetails = []) {
+  if (!Array.isArray(announcements) || !announcements.length) return [];
+  const isAdmin = user?.role === 'admin';
+  const visibleDepartmentIds = new Set((departmentDetails || []).map((item) => Number(item.id || 0)).filter(Boolean));
+
+  return announcements.filter((announcement) => {
+    if (!isAnnouncementActiveNow(announcement)) return false;
+    if (isAdmin) return true;
+    if (announcement.audience_scope === 'all') return true;
+    const departmentIds = Array.isArray(announcement.department_ids) ? announcement.department_ids : [];
+    return departmentIds.some((departmentId) => visibleDepartmentIds.has(Number(departmentId || 0)));
+  });
 }
 
 async function getDepartmentCatalogLookup(options = {}) {
@@ -4298,8 +4417,36 @@ async function getUserByEmail(email) {
 }
 
 function hasIntranetAccess(user) {
-  if (!user) return false;
-  return user.role === 'admin' || coerceDbBoolean(user.can_access_intranet);
+  return Boolean(user);
+}
+
+function buildIntranetNotifications(announcements = [], upcomingEvents = []) {
+  const items = [];
+
+  announcements
+    .filter((item) => item.is_pinned)
+    .slice(0, 3)
+    .forEach((item) => {
+      items.push({
+        kind: 'announcement',
+        title: item.title,
+        description: item.summary_text || item.content_text || '',
+        date_label: item.created_at ? formatDateBrazil(item.created_at) : '',
+      });
+    });
+
+  upcomingEvents
+    .slice(0, 3)
+    .forEach((item) => {
+      items.push({
+        kind: 'meeting',
+        title: item.title || 'Compromisso',
+        description: item.description || item.location || item.meeting_mode_label || '',
+        date_label: item.start_at ? formatDateTimeBrazil(item.start_at) : (item.start_date || ''),
+      });
+    });
+
+  return items.slice(0, 6);
 }
 
 async function buildIntranetPayload(userId) {
@@ -4315,6 +4462,7 @@ async function buildIntranetPayload(userId) {
       }))
     : (user.department_details || []).filter((department) => department.is_active !== false);
   const visibleDepartments = visibleDepartmentDetails.map((item) => item.name).filter(Boolean);
+  const visibleDepartmentIds = visibleDepartmentDetails.map((item) => Number(item.id || 0)).filter(Boolean);
   const documentWhere = [];
   const documentParams = [];
   if (!isAdmin && visibleDepartments.length) {
@@ -4326,7 +4474,10 @@ async function buildIntranetPayload(userId) {
 
   const documentWhereSql = documentWhere.length ? `WHERE ${documentWhere.join(' AND ')}` : '';
 
-  const [recentDocuments, totalDocumentsRow, salesPayload, documentCountRows] = await Promise.all([
+  const [departmentSubmenus, recentDocuments, totalDocumentsRow, salesPayload, documentCountRows, announcementsRaw, upcomingEvents] = await Promise.all([
+    (!isAdmin && !visibleDepartmentIds.length)
+      ? Promise.resolve([])
+      : listDepartmentSubmenus({ includeInactive: isAdmin, departmentIds: visibleDepartmentIds }),
     all(
       `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, vector_store_file_id, created_at
          FROM knowledge_sources
@@ -4346,11 +4497,31 @@ async function buildIntranetPayload(userId) {
           LIMIT 16`,
         documentParams
       ),
+      listIntranetAnnouncements({ includeInactive: isAdmin, limit: 24 }),
+      listCalendarEventsForUser(user, {
+        from: brazilDateKey(),
+        to: brazilDateKey(new Date(Date.now() + 1000 * 60 * 60 * 24 * 21)),
+        status: 'scheduled',
+        limit: 8,
+      }),
   ]);
+
+  const submenusByDepartmentId = new Map();
+  for (const submenu of departmentSubmenus || []) {
+    const key = Number(submenu.department_id || 0);
+    if (!submenusByDepartmentId.has(key)) submenusByDepartmentId.set(key, []);
+    submenusByDepartmentId.get(key).push(submenu);
+  }
+
+  const visibleAnnouncements = filterAnnouncementsForUser(announcementsRaw, user, visibleDepartmentDetails);
+  const departmentDetailsWithSubmenus = visibleDepartmentDetails.map((department) => ({
+    ...department,
+    submenus: submenusByDepartmentId.get(Number(department.id || 0)) || [],
+  }));
 
   const workspace = buildIntranetWorkspace({
     user,
-    departments: visibleDepartmentDetails,
+    departments: departmentDetailsWithSubmenus,
     recentDocuments: recentDocuments.map((document) => {
       const adminRow = buildKnowledgeAdminRow(document);
       return {
@@ -4372,9 +4543,16 @@ async function buildIntranetPayload(userId) {
       name: row.department_name || 'Geral',
       total: Number(row.total || 0),
     })),
+    announcements: visibleAnnouncements,
+    upcomingEvents,
+    notifications: buildIntranetNotifications(visibleAnnouncements, upcomingEvents),
   });
 
   workspace.sales = salesPayload;
+  workspace.calendar_preview = {
+    total_upcoming: upcomingEvents.length,
+    upcoming_events: upcomingEvents,
+  };
 
   return {
     user,
@@ -4915,6 +5093,265 @@ app.patch("/api/admin/departments/:id", requireAuth(JWT_SECRET), requireRole("ad
   await logEvent(req.user.sub, 'admin_update_department', { department_id: departmentId, name, slug, is_active: isActive });
   const department = await get('SELECT id, slug, name, description, icon, is_active, sort_order, metadata_json, created_at, updated_at FROM departments WHERE id=?', [departmentId]);
   res.json({ ok: true, department: mapDepartmentRow(department) });
+});
+
+app.delete("/api/admin/departments/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const departmentId = Number(req.params.id);
+  const existing = await get('SELECT id, slug, name FROM departments WHERE id=?', [departmentId]);
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+
+  const announcements = await all('SELECT id, department_ids_json FROM intranet_announcements WHERE audience_scope=?', ['departments']);
+  for (const announcement of announcements) {
+    const currentIds = safeJsonParse(announcement.department_ids_json, []);
+    const nextIds = currentIds.map((value) => Number(value || 0)).filter((value) => value && value !== departmentId);
+    if (nextIds.length !== currentIds.length) {
+      await run(
+        "UPDATE intranet_announcements SET department_ids_json=?, updated_at=datetime('now') WHERE id=?",
+        [safeJsonStringify(nextIds, '[]'), announcement.id]
+      );
+    }
+  }
+
+  await run("DELETE FROM user_departments WHERE department_id=?", [departmentId]);
+  await run("DELETE FROM department_submenus WHERE department_id=?", [departmentId]);
+  await run("UPDATE users SET department=NULL WHERE department=?", [existing.name]);
+  await run("UPDATE knowledge_sources SET department_name=NULL, updated_at=datetime('now') WHERE department_name=?", [existing.name]);
+  await run("UPDATE documents SET department_name=NULL, updated_at=datetime('now') WHERE department_name=?", [existing.name]);
+  await run("UPDATE document_chunks SET department_name=NULL, updated_at=datetime('now') WHERE department_name=?", [existing.name]);
+  await run("DELETE FROM departments WHERE id=?", [departmentId]);
+
+  await logEvent(req.user.sub, 'admin_delete_department', { department_id: departmentId, name: existing.name, slug: existing.slug });
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/department-submenus", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const submenus = await listDepartmentSubmenus({ includeInactive: true });
+  res.json({ submenus });
+});
+
+app.post("/api/admin/department-submenus", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const departmentId = Number(req.body?.department_id || 0);
+  const title = String(req.body?.title || '').trim();
+  const description = String(req.body?.description || '').trim();
+  const icon = String(req.body?.icon || 'layers').trim() || 'layers';
+  const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active')
+    ? parseBooleanInput(req.body?.is_active)
+    : true;
+  const slug = slugifyDepartmentName(req.body?.slug || title);
+  const viewKey = String(req.body?.view_key || slug || '').trim() || slug;
+
+  if (!departmentId || !title || !slug) {
+    return res.status(400).json({ error: 'missing_department_submenu_fields' });
+  }
+
+  const department = await get('SELECT id, name FROM departments WHERE id=?', [departmentId]);
+  if (!department) return res.status(404).json({ error: 'department_not_found' });
+
+  const conflict = await get('SELECT id FROM department_submenus WHERE department_id=? AND slug=? LIMIT 1', [departmentId, slug]);
+  if (conflict) return res.status(409).json({ error: 'department_submenu_already_exists' });
+
+  const created = await run(
+    "INSERT INTO department_submenus (department_id, title, slug, description, icon, view_key, sort_order, is_active, metadata_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 10 FROM department_submenus WHERE department_id=?), 10), ?, ?, datetime('now'))",
+    [departmentId, title, slug, description || null, icon, viewKey, departmentId, isActive, safeJsonStringify({}, '{}')]
+  );
+
+  await logEvent(req.user.sub, 'admin_create_department_submenu', { submenu_id: created.lastID, department_id: departmentId, title, slug });
+  const submenu = await get(
+    `SELECT ds.id, ds.department_id, ds.title, ds.slug, ds.description, ds.icon, ds.view_key, ds.sort_order, ds.is_active, ds.metadata_json, ds.created_at, ds.updated_at,
+            d.name AS department_name, d.slug AS department_slug
+       FROM department_submenus ds
+       JOIN departments d ON d.id = ds.department_id
+      WHERE ds.id=?`,
+    [created.lastID]
+  );
+  res.json({ ok: true, submenu: mapDepartmentSubmenuRow(submenu) });
+});
+
+app.patch("/api/admin/department-submenus/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const submenuId = Number(req.params.id);
+  const existing = await get('SELECT id, department_id, title, slug, description, icon, view_key, is_active FROM department_submenus WHERE id=?', [submenuId]);
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+
+  const departmentId = Object.prototype.hasOwnProperty.call(req.body || {}, 'department_id')
+    ? Number(req.body?.department_id || 0)
+    : Number(existing.department_id || 0);
+  const title = Object.prototype.hasOwnProperty.call(req.body || {}, 'title') ? String(req.body?.title || '').trim() : String(existing.title || '').trim();
+  const description = Object.prototype.hasOwnProperty.call(req.body || {}, 'description') ? String(req.body?.description || '').trim() : String(existing.description || '').trim();
+  const icon = Object.prototype.hasOwnProperty.call(req.body || {}, 'icon') ? String(req.body?.icon || '').trim() : String(existing.icon || 'layers').trim();
+  const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? parseBooleanInput(req.body?.is_active) : coerceDbBoolean(existing.is_active);
+  const slug = slugifyDepartmentName(req.body?.slug || title || existing.slug);
+  const viewKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'view_key')
+    ? String(req.body?.view_key || '').trim()
+    : String(existing.view_key || existing.slug || '').trim();
+
+  if (!departmentId || !title || !slug) {
+    return res.status(400).json({ error: 'missing_department_submenu_fields' });
+  }
+
+  const department = await get('SELECT id FROM departments WHERE id=?', [departmentId]);
+  if (!department) return res.status(404).json({ error: 'department_not_found' });
+
+  const conflict = await get('SELECT id FROM department_submenus WHERE department_id=? AND slug=? AND id<>? LIMIT 1', [departmentId, slug, submenuId]);
+  if (conflict) return res.status(409).json({ error: 'department_submenu_already_exists' });
+
+  await run(
+    "UPDATE department_submenus SET department_id=?, title=?, slug=?, description=?, icon=?, view_key=?, is_active=?, updated_at=datetime('now') WHERE id=?",
+    [departmentId, title, slug, description || null, icon || 'layers', viewKey || slug, isActive, submenuId]
+  );
+
+  await logEvent(req.user.sub, 'admin_update_department_submenu', { submenu_id: submenuId, department_id: departmentId, title, slug });
+  const submenu = await get(
+    `SELECT ds.id, ds.department_id, ds.title, ds.slug, ds.description, ds.icon, ds.view_key, ds.sort_order, ds.is_active, ds.metadata_json, ds.created_at, ds.updated_at,
+            d.name AS department_name, d.slug AS department_slug
+       FROM department_submenus ds
+       JOIN departments d ON d.id = ds.department_id
+      WHERE ds.id=?`,
+    [submenuId]
+  );
+  res.json({ ok: true, submenu: mapDepartmentSubmenuRow(submenu) });
+});
+
+app.delete("/api/admin/department-submenus/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const submenuId = Number(req.params.id);
+  const existing = await get('SELECT id, department_id, title, slug FROM department_submenus WHERE id=?', [submenuId]);
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+
+  await run("DELETE FROM department_submenus WHERE id=?", [submenuId]);
+  await logEvent(req.user.sub, 'admin_delete_department_submenu', { submenu_id: submenuId, department_id: existing.department_id, title: existing.title, slug: existing.slug });
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/intranet/announcements", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const announcements = await listIntranetAnnouncements({ includeInactive: true, limit: 200 });
+  res.json({ announcements });
+});
+
+app.post("/api/admin/intranet/announcements", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const title = String(req.body?.title || '').trim();
+  const contentText = String(req.body?.content_text || '').trim();
+  const summaryText = String(req.body?.summary_text || '').trim();
+  const audienceScope = String(req.body?.audience_scope || 'all').trim() === 'departments' ? 'departments' : 'all';
+  const departmentIds = audienceScope === 'departments'
+    ? parseDepartmentInput(req.body?.department_ids).map((value) => Number(value || 0)).filter(Boolean)
+    : [];
+  const announcementType = String(req.body?.announcement_type || 'announcement').trim() || 'announcement';
+  const priority = String(req.body?.priority || 'normal').trim() || 'normal';
+  const isPinned = parseBooleanInput(req.body?.is_pinned);
+  const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? parseBooleanInput(req.body?.is_active) : true;
+  const startsAt = String(req.body?.starts_at || '').trim() || null;
+  const endsAt = String(req.body?.ends_at || '').trim() || null;
+
+  if (!title || !contentText) {
+    return res.status(400).json({ error: 'missing_announcement_fields' });
+  }
+
+  const created = await run(
+    "INSERT INTO intranet_announcements (title, content_text, summary_text, audience_scope, department_ids_json, announcement_type, priority, is_pinned, is_active, starts_at, ends_at, author_user_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+    [title, contentText, summaryText || null, audienceScope, safeJsonStringify(departmentIds, '[]'), announcementType, priority, isPinned, isActive, startsAt, endsAt, req.user.sub]
+  );
+  await logEvent(req.user.sub, 'admin_create_intranet_announcement', { announcement_id: created.lastID, title, audience_scope: audienceScope });
+  const announcement = await all(
+    `SELECT id, title, content_text, summary_text, audience_scope, department_ids_json, announcement_type, priority, is_pinned, is_active,
+            starts_at, ends_at, author_user_id, created_at, updated_at, users.name AS author_name
+       FROM intranet_announcements
+  LEFT JOIN users ON users.id = intranet_announcements.author_user_id
+      WHERE intranet_announcements.id=?`,
+    [created.lastID]
+  );
+  res.json({ ok: true, announcement: mapAnnouncementRow(announcement[0]) });
+});
+
+app.patch("/api/admin/intranet/announcements/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const announcementId = Number(req.params.id);
+  const existing = await get('SELECT * FROM intranet_announcements WHERE id=?', [announcementId]);
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+
+  const audienceScope = Object.prototype.hasOwnProperty.call(req.body || {}, 'audience_scope')
+    ? (String(req.body?.audience_scope || 'all').trim() === 'departments' ? 'departments' : 'all')
+    : String(existing.audience_scope || 'all');
+  const departmentIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'department_ids')
+    ? (audienceScope === 'departments'
+      ? parseDepartmentInput(req.body?.department_ids).map((value) => Number(value || 0)).filter(Boolean)
+      : [])
+    : (safeJsonParse(existing.department_ids_json || '[]') || []);
+
+  const title = Object.prototype.hasOwnProperty.call(req.body || {}, 'title') ? String(req.body?.title || '').trim() : String(existing.title || '').trim();
+  const contentText = Object.prototype.hasOwnProperty.call(req.body || {}, 'content_text') ? String(req.body?.content_text || '').trim() : String(existing.content_text || '').trim();
+  const summaryText = Object.prototype.hasOwnProperty.call(req.body || {}, 'summary_text') ? String(req.body?.summary_text || '').trim() : String(existing.summary_text || '').trim();
+  const announcementType = Object.prototype.hasOwnProperty.call(req.body || {}, 'announcement_type') ? String(req.body?.announcement_type || '').trim() : String(existing.announcement_type || 'announcement').trim();
+  const priority = Object.prototype.hasOwnProperty.call(req.body || {}, 'priority') ? String(req.body?.priority || '').trim() : String(existing.priority || 'normal').trim();
+  const isPinned = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_pinned') ? parseBooleanInput(req.body?.is_pinned) : coerceDbBoolean(existing.is_pinned);
+  const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? parseBooleanInput(req.body?.is_active) : coerceDbBoolean(existing.is_active);
+  const startsAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'starts_at') ? (String(req.body?.starts_at || '').trim() || null) : existing.starts_at;
+  const endsAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'ends_at') ? (String(req.body?.ends_at || '').trim() || null) : existing.ends_at;
+
+  if (!title || !contentText) {
+    return res.status(400).json({ error: 'missing_announcement_fields' });
+  }
+
+  await run(
+    "UPDATE intranet_announcements SET title=?, content_text=?, summary_text=?, audience_scope=?, department_ids_json=?, announcement_type=?, priority=?, is_pinned=?, is_active=?, starts_at=?, ends_at=?, updated_at=datetime('now') WHERE id=?",
+    [title, contentText, summaryText || null, audienceScope, safeJsonStringify(departmentIds, '[]'), announcementType || 'announcement', priority || 'normal', isPinned, isActive, startsAt, endsAt, announcementId]
+  );
+  await logEvent(req.user.sub, 'admin_update_intranet_announcement', { announcement_id: announcementId, title, audience_scope: audienceScope });
+  const announcement = await all(
+    `SELECT id, title, content_text, summary_text, audience_scope, department_ids_json, announcement_type, priority, is_pinned, is_active,
+            starts_at, ends_at, author_user_id, created_at, updated_at, users.name AS author_name
+       FROM intranet_announcements
+  LEFT JOIN users ON users.id = intranet_announcements.author_user_id
+      WHERE intranet_announcements.id=?`,
+    [announcementId]
+  );
+  res.json({ ok: true, announcement: mapAnnouncementRow(announcement[0]) });
+});
+
+app.delete("/api/admin/intranet/announcements/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const announcementId = Number(req.params.id);
+  const existing = await get('SELECT id, title FROM intranet_announcements WHERE id=?', [announcementId]);
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+  await run("DELETE FROM intranet_announcements WHERE id=?", [announcementId]);
+  await logEvent(req.user.sub, 'admin_delete_intranet_announcement', { announcement_id: announcementId, title: existing.title });
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/system-logs", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  const [auditRows, processingRows, trainingRows, calendarRows] = await Promise.all([
+    all(`SELECT audit_log.id, audit_log.user_id, audit_log.action, audit_log.meta_json, audit_log.created_at, users.name AS actor_name
+           FROM audit_log
+      LEFT JOIN users ON users.id = audit_log.user_id
+          ORDER BY datetime(audit_log.created_at) DESC, audit_log.id DESC
+          LIMIT 120`),
+    all(`SELECT knowledge_processing_logs.id, knowledge_processing_logs.knowledge_source_id, knowledge_processing_logs.stage_key, knowledge_processing_logs.stage_status,
+                knowledge_processing_logs.message, knowledge_processing_logs.detail_json, knowledge_processing_logs.actor_user_id, knowledge_processing_logs.created_at,
+                users.name AS actor_name, knowledge_sources.original_name AS file_name
+           FROM knowledge_processing_logs
+      LEFT JOIN users ON users.id = knowledge_processing_logs.actor_user_id
+      LEFT JOIN knowledge_sources ON knowledge_sources.id = knowledge_processing_logs.knowledge_source_id
+          ORDER BY datetime(knowledge_processing_logs.created_at) DESC, knowledge_processing_logs.id DESC
+          LIMIT 120`),
+    all(`SELECT ai_training_events.id, ai_training_events.user_id, ai_training_events.conversation_id, ai_training_events.knowledge_source_id, ai_training_events.event_type,
+                ai_training_events.event_status, ai_training_events.title, ai_training_events.detail_text, ai_training_events.meta_json, ai_training_events.created_at,
+                users.name AS actor_name
+           FROM ai_training_events
+      LEFT JOIN users ON users.id = ai_training_events.user_id
+          ORDER BY datetime(ai_training_events.created_at) DESC, ai_training_events.id DESC
+          LIMIT 120`),
+    all(`SELECT calendar_event_logs.id, calendar_event_logs.event_id, calendar_event_logs.action, calendar_event_logs.field_name, calendar_event_logs.old_value,
+                calendar_event_logs.new_value, calendar_event_logs.detail_json, calendar_event_logs.created_at, users.name AS actor_name,
+                calendar_events.title AS event_title
+           FROM calendar_event_logs
+      LEFT JOIN users ON users.id = calendar_event_logs.actor_user_id
+      LEFT JOIN calendar_events ON calendar_events.id = calendar_event_logs.event_id
+          ORDER BY datetime(calendar_event_logs.created_at) DESC, calendar_event_logs.id DESC
+          LIMIT 120`),
+  ]);
+
+  res.json({
+    audit_logs: auditRows || [],
+    processing_logs: processingRows || [],
+    training_logs: trainingRows || [],
+    calendar_logs: calendarRows || [],
+  });
 });
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {

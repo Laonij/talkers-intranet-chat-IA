@@ -22,32 +22,24 @@
         </button>
       </div>
 
-      <nav class="intranet-nav">
-        <a href="#home" class="intranet-nav-link" id="homeNavLink" data-icon="workspace"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Home</span></a>
-        <a href="#dashboard" class="intranet-nav-link" id="dashboardNavLink" data-icon="chart" hidden><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Dashboard</span></a>
-        <a href="#modules" class="intranet-nav-link" id="modulesNavLink" data-icon="layers"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Modulos</span></a>
-        <a href="#calendar" class="intranet-nav-link" id="calendarNavLink" data-icon="calendar"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Agenda</span></a>
-        <a href="#departments" class="intranet-nav-link" id="departmentsNavLink" data-icon="briefcase"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Departamentos</span></a>
-        <a href="#documents" class="intranet-nav-link" id="documentsNavLink" data-icon="document"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Documentos</span></a>
-        <a href="#sales" class="intranet-nav-link sales-nav-link" id="salesNavLink" data-icon="target" hidden><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Comercial</span></a>
-        <a href="#training" class="intranet-nav-link" id="trainingNavLink" data-icon="assistant" hidden><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Treinamento IA</span></a>
-        <a href="#communication" class="intranet-nav-link" id="communicationNavLink" data-icon="message"><span class="intranet-nav-link-icon" aria-hidden="true"></span><span class="intranet-nav-link-label">Comunicacao</span></a>
-      </nav>
+      <nav class="intranet-nav intranet-nav-primary" id="intranetPrimaryNav"></nav>
 
-      <div class="intranet-sidebar-block">
-        <div class="intranet-block-title">Departamentos liberados</div>
-        <div class="intranet-chip-list" id="sidebarDepartmentChips"></div>
+      <div class="intranet-sidebar-block intranet-sidebar-tree">
+        <div class="intranet-block-title">Departamentos</div>
+        <div class="intranet-department-tree" id="intranetDepartmentNav"></div>
       </div>
 
-      <div class="intranet-sidebar-block">
-        <div class="intranet-block-title">Atalhos</div>
-        <div class="intranet-sidebar-links" id="sidebarQuickLinks"></div>
+      <div class="intranet-sidebar-block intranet-sidebar-utility">
+        <div class="intranet-block-title">Proximos passos</div>
+        <div class="intranet-sidebar-links intranet-sidebar-utility-feed" id="sidebarUtilityFeed"></div>
       </div>
 
       <div class="intranet-sidebar-footer">
         <a class="btn intranet-back-btn" href="/index.html">Voltar ao chat</a>
       </div>
     </aside>
+
+    <button class="intranet-sidebar-backdrop" id="intranetSidebarBackdrop" type="button" aria-label="Fechar menu lateral"></button>
 
     <main class="intranet-main">
       <header class="intranet-topbar">
@@ -65,11 +57,11 @@
         </div>
 
         <div class="intranet-topbar-actions">
-          <a class="btn" href="/index.html">Abrir chat</a>
+          <a class="btn" href="/index.html">Voltar ao chat</a>
         </div>
       </header>
 
-      <section class="intranet-hero" id="home">
+      <section class="intranet-hero intranet-view" id="home" data-view="home">
         <div>
           <div class="intranet-hero-badge">IA + conteudo corporativo</div>
           <h2 class="intranet-hero-title" id="heroTitle">Carregando workspace...</h2>
@@ -78,9 +70,29 @@
         <div class="intranet-highlight-list" id="heroHighlights"></div>
       </section>
 
-      <section class="intranet-stats" id="homeStats"></section>
+      <section class="intranet-stats intranet-view" id="homeStats" data-view="home"></section>
 
-      <section class="intranet-section" id="dashboard" hidden>
+      <section class="intranet-section intranet-view" data-view="home" id="homeOverviewSection">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Visao geral</div>
+            <h3 class="intranet-section-title">Panorama rapido da rotina interna</h3>
+          </div>
+        </div>
+        <div class="intranet-home-grid" id="homeOverviewGrid"></div>
+      </section>
+
+      <section class="intranet-section intranet-view" data-view="home" id="homeCommunicationSection">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Comunicacao corporativa</div>
+            <h3 class="intranet-section-title">Mural de avisos da empresa</h3>
+          </div>
+        </div>
+        <div class="intranet-communication-grid" id="homeCommunicationGrid"></div>
+      </section>
+
+      <section class="intranet-section intranet-view" id="dashboard" data-view="dashboard" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
             <div class="intranet-section-eyebrow">Dashboard / BI</div>
@@ -104,7 +116,7 @@
         <div class="intranet-module-grid" id="dashboardWidgetGrid"></div>
       </section>
 
-      <section class="intranet-section">
+      <section class="intranet-section intranet-view" data-view="home" id="homeQuickSection">
         <div class="intranet-section-head">
           <div>
             <div class="intranet-section-eyebrow">Acesso rapido</div>
@@ -114,7 +126,7 @@
         <div class="intranet-quick-grid" id="intranetQuickGrid"></div>
       </section>
 
-      <section class="intranet-section" id="modules">
+      <section class="intranet-section intranet-view" id="modules" data-view="modules" hidden>
         <div class="intranet-section-head">
           <div>
             <div class="intranet-section-eyebrow">Modulos</div>
@@ -124,7 +136,7 @@
         <div class="intranet-module-grid" id="moduleGrid"></div>
       </section>
 
-      <section class="intranet-section" id="calendar">
+      <section class="intranet-section intranet-view" id="calendar" data-view="calendar" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
             <div class="intranet-section-eyebrow">Agenda corporativa</div>
@@ -291,7 +303,7 @@
         </div>
       </section>
 
-      <section class="intranet-section" id="departments">
+      <section class="intranet-section intranet-view" id="departments" data-view="departments" hidden>
         <div class="intranet-section-head">
           <div>
             <div class="intranet-section-eyebrow">Departamentos</div>
@@ -301,7 +313,32 @@
         <div class="intranet-department-grid" id="departmentGrid"></div>
       </section>
 
-      <section class="intranet-section" id="documents">
+      <section class="intranet-section intranet-view" id="departmentWorkspace" data-view="department" hidden>
+        <div class="intranet-section-head intranet-section-head-stack">
+          <div>
+            <div class="intranet-section-eyebrow" id="departmentWorkspaceEyebrow">Departamento</div>
+            <h3 class="intranet-section-title" id="departmentWorkspaceTitle">Area departamental</h3>
+            <p class="small muted" id="departmentWorkspaceDescription">Selecione um departamento no menu para visualizar a area correspondente.</p>
+          </div>
+        </div>
+        <div class="intranet-home-grid" id="departmentWorkspaceSummary"></div>
+        <div class="intranet-section-head" style="margin-top:18px;">
+          <div>
+            <div class="intranet-section-eyebrow">Submenus</div>
+            <h4 class="intranet-section-title" style="font-size:20px;">Fluxos e acessos da area</h4>
+          </div>
+        </div>
+        <div class="intranet-quick-grid" id="departmentWorkspaceSubmenus"></div>
+        <div class="intranet-section-head" style="margin-top:18px;">
+          <div>
+            <div class="intranet-section-eyebrow">Modulos do departamento</div>
+            <h4 class="intranet-section-title" style="font-size:20px;">Recursos disponiveis</h4>
+          </div>
+        </div>
+        <div class="intranet-module-grid" id="departmentWorkspaceModules"></div>
+      </section>
+
+      <section class="intranet-section intranet-view" id="documents" data-view="documents" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
             <div class="intranet-section-eyebrow">Central de documentos</div>
@@ -312,7 +349,7 @@
         <div class="intranet-document-grid" id="documentGrid"></div>
       </section>
 
-      <section class="intranet-section sales-section" id="sales" hidden>
+      <section class="intranet-section sales-section intranet-view" id="sales" data-view="sales" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
             <div class="intranet-section-eyebrow">Comercial e pos-venda</div>
@@ -385,7 +422,7 @@
         </div>
       </section>
 
-      <section class="intranet-section" id="training" hidden>
+      <section class="intranet-section intranet-view" id="training" data-view="training" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
             <div class="intranet-section-eyebrow">Treinamento da IA</div>
@@ -420,7 +457,7 @@
         </div>
       </section>
 
-      <section class="intranet-section" id="communication">
+      <section class="intranet-section intranet-view" id="communication" data-view="communication" hidden>
         <div class="intranet-section-head">
           <div>
             <div class="intranet-section-eyebrow">Comunicacao interna</div>

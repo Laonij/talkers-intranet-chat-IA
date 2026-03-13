@@ -351,7 +351,7 @@ function renderUser() {
 
   const intranetBtn = el("btnIntranet");
   if (intranetBtn) {
-    intranetBtn.style.display = me.can_access_intranet ? "" : "none";
+    intranetBtn.style.display = "";
   }
 
   const adminBtn = el("adminBtn");

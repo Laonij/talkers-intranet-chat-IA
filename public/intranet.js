@@ -47,6 +47,10 @@ let calendarState = {
   history: [],
   summary: null,
 };
+let communicationState = {
+  catalog: [],
+  editingId: null,
+};
 const SIDEBAR_STORAGE_KEY = 'talkers_intranet_sidebar_state_v1';
 const VIEW_STORAGE_KEY = 'talkers_intranet_view_state_v1';
 const DEPARTMENT_TREE_STORAGE_KEY = 'talkers_intranet_department_tree_state_v1';
@@ -83,6 +87,22 @@ function escapeHtml(value) {
 function formatDate(value) {
   try {
     return new Date(value).toLocaleString('pt-BR');
+  } catch {
+    return '';
+  }
+}
+
+function toDateTimeLocalValue(value) {
+  if (!value) return '';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
   } catch {
     return '';
   }
@@ -296,6 +316,43 @@ function normalizeViewState(route = {}, intranet) {
   }
 
   return normalized;
+}
+
+function applyIntranetSnapshot(snapshot, options = {}) {
+  if (!snapshot?.intranet || !snapshot?.user) return;
+  const preserveRoute = options.preserveRoute !== false;
+  const nextRoute = preserveRoute
+    ? normalizeViewState(options.route || currentViewState, snapshot.intranet)
+    : normalizeViewState({ key: 'home', departmentSlug: '', submenuSlug: '' }, snapshot.intranet);
+
+  bootstrapData = snapshot;
+  allModuleItems = snapshot.intranet.modules || [];
+  allDocumentItems = snapshot.intranet.document_center?.recent_documents || [];
+
+  renderSidebar(snapshot.user, snapshot.intranet);
+  renderHero(snapshot.user, snapshot.intranet);
+  renderDashboard(snapshot.intranet);
+  renderModules(snapshot.intranet);
+  renderDepartments(snapshot.intranet);
+  renderDocuments(snapshot.intranet);
+  hydrateSalesWorkspace(snapshot.intranet);
+  renderCommunication(snapshot.intranet);
+  renderDepartmentWorkspace(snapshot.intranet);
+
+  currentViewState = nextRoute;
+  setActiveView(nextRoute.key, nextRoute);
+}
+
+async function refreshIntranetBootstrap(options = {}) {
+  const snapshot = await api('/api/intranet/bootstrap');
+  applyIntranetSnapshot(snapshot, {
+    route: options.route || currentViewState,
+    preserveRoute: options.preserveRoute !== false,
+  });
+
+  if (canManageCommunication()) {
+    await fetchCommunicationCatalog();
+  }
 }
 
 function syncTopbar(route, intranet) {
@@ -1312,6 +1369,93 @@ function buildCalendarMonthGrid(events = []) {
   `;
 }
 
+function sortCalendarEvents(events = []) {
+  return [...events].sort((left, right) => {
+    const leftKey = `${left.start_date || ''} ${left.all_day ? '00:00' : (left.start_time || '00:00')} ${left.title || ''}`;
+    const rightKey = `${right.start_date || ''} ${right.all_day ? '00:00' : (right.start_time || '00:00')} ${right.title || ''}`;
+    return leftKey.localeCompare(rightKey, 'pt-BR');
+  });
+}
+
+function buildCalendarWeekGrid(events = []) {
+  const range = calendarState.range || {};
+  const start = new Date(`${range.from}T12:00:00-03:00`);
+  const end = new Date(`${range.to}T12:00:00-03:00`);
+  const byDate = new Map();
+  sortCalendarEvents(events).forEach((event) => {
+    const key = event.start_date || '';
+    if (!byDate.has(key)) byDate.set(key, []);
+    byDate.get(key).push(event);
+  });
+
+  const days = [];
+  const cursor = new Date(start);
+  while (cursor.getTime() <= end.getTime()) {
+    days.push(new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return `
+    <div class="intranet-calendar-week">
+      ${days.map((dateKey) => {
+        const items = byDate.get(dateKey) || [];
+        return `
+          <section class="intranet-calendar-week-column">
+            <button class="intranet-calendar-week-head" type="button" data-date="${escapeHtml(dateKey)}">
+              <strong>${escapeHtml(formatCalendarDateLabel(dateKey))}</strong>
+              <span>${items.length} compromisso(s)</span>
+            </button>
+            <div class="intranet-calendar-week-events">
+              ${items.length ? items.map((item) => `
+                <button class="intranet-calendar-event-chip intranet-calendar-week-item" type="button" data-event-id="${escapeHtml(item.id)}">
+                  <span>${escapeHtml(item.all_day ? 'Dia inteiro' : (item.start_time || ''))}</span>${escapeHtml(item.title || 'Compromisso')}
+                </button>
+              `).join('') : '<div class="small muted intranet-calendar-week-empty">Sem eventos</div>'}
+            </div>
+          </section>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function buildCalendarDayView(events = []) {
+  const title = calendarState.range?.from ? formatCalendarDateLabel(calendarState.range.from) : 'Dia selecionado';
+  const sortedEvents = sortCalendarEvents(events);
+
+  if (!sortedEvents.length) {
+    return `
+      <div class="intranet-calendar-day-view">
+        <div class="intranet-block-title">${escapeHtml(title)}</div>
+        <div class="intranet-empty-card">Nenhum compromisso encontrado para este dia.</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="intranet-calendar-day-view">
+      <div class="intranet-block-title">${escapeHtml(title)}</div>
+      <div class="intranet-calendar-day-list">
+        ${sortedEvents.map((item) => `
+          <button class="intranet-calendar-day-item" type="button" data-event-id="${escapeHtml(item.id)}">
+            <div class="intranet-calendar-day-time">${escapeHtml(item.all_day ? 'Dia inteiro' : `${item.start_time || ''} - ${item.end_time || ''}`)}</div>
+            <div class="intranet-calendar-day-copy">
+              <strong>${escapeHtml(item.title || 'Compromisso')}</strong>
+              <span>${escapeHtml(item.event_type_name || 'Agenda')} - ${escapeHtml(getCalendarModeLabel(item.meeting_mode))}</span>
+              <small>${escapeHtml(item.location || item.meeting_link || item.description || '')}</small>
+            </div>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function buildCalendarListView(events = []) {
   if (!events.length) {
     return '<div class="intranet-empty-card">Nenhum compromisso encontrado para este periodo.</div>';
@@ -1346,9 +1490,15 @@ function buildCalendarListView(events = []) {
 function renderCalendarView() {
   const wrap = el('calendarView');
   if (!wrap) return;
-  wrap.innerHTML = calendarState.view === 'month'
-    ? buildCalendarMonthGrid(calendarState.events || [])
-    : buildCalendarListView(calendarState.events || []);
+  if (calendarState.view === 'month') {
+    wrap.innerHTML = buildCalendarMonthGrid(calendarState.events || []);
+  } else if (calendarState.view === 'week') {
+    wrap.innerHTML = buildCalendarWeekGrid(calendarState.events || []);
+  } else if (calendarState.view === 'day') {
+    wrap.innerHTML = buildCalendarDayView(calendarState.events || []);
+  } else {
+    wrap.innerHTML = buildCalendarListView(calendarState.events || []);
+  }
 
   Array.from(wrap.querySelectorAll('[data-event-id]')).forEach((button) => {
     button.addEventListener('click', () => selectCalendarEvent(Number(button.getAttribute('data-event-id'))));
@@ -1657,6 +1807,174 @@ function hydrateSalesWorkspace(intranet) {
   renderSalesRecordsGrid();
 }
 
+function canManageCommunication() {
+  return Boolean(bootstrapData?.intranet?.admin?.can_manage);
+}
+
+function getCommunicationDepartments() {
+  const catalog = Array.isArray(bootstrapData?.department_catalog) ? bootstrapData.department_catalog : [];
+  return [...catalog]
+    .filter((department) => department?.is_active !== false)
+    .sort((a, b) => {
+      const left = Number(a?.sort_order || a?.sortOrder || 0);
+      const right = Number(b?.sort_order || b?.sortOrder || 0);
+      if (left !== right) return left - right;
+      return String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR');
+    });
+}
+
+function getSelectedCommunicationDepartmentIds() {
+  return Array.from(document.querySelectorAll('#communicationDepartments input:checked')).map((input) => Number(input.value));
+}
+
+function renderCommunicationDepartmentOptions(selectedIds = []) {
+  const wrap = el('communicationDepartments');
+  if (!wrap) return;
+  const selected = new Set((selectedIds || []).map((item) => String(item)));
+  wrap.innerHTML = '';
+
+  getCommunicationDepartments().forEach((department) => {
+    const label = document.createElement('label');
+    label.className = 'department-check';
+    label.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(department.id)}" ${selected.has(String(department.id)) ? 'checked' : ''} />
+      <span>
+        <strong>${escapeHtml(department.name || 'Departamento')}</strong>
+        <small>${escapeHtml(department.description || 'Comunicado segmentado para esta area.')}</small>
+      </span>
+    `;
+    wrap.appendChild(label);
+  });
+}
+
+function syncCommunicationAudienceControls() {
+  const scope = el('communicationAudienceScope')?.value || 'all';
+  const departmentsWrap = el('communicationDepartmentsWrap');
+  if (!departmentsWrap) return;
+  const shouldShow = scope === 'departments';
+  departmentsWrap.hidden = !shouldShow;
+  departmentsWrap.querySelectorAll('input').forEach((input) => {
+    input.disabled = !shouldShow;
+  });
+}
+
+function resetCommunicationForm() {
+  const form = el('communicationForm');
+  if (!form) return;
+  communicationState.editingId = null;
+  el('communicationAnnouncementId').value = '';
+  el('communicationFormTitle').textContent = 'Publicar comunicado';
+  el('communicationTitle').value = '';
+  el('communicationSummary').value = '';
+  el('communicationContent').value = '';
+  el('communicationType').value = 'announcement';
+  el('communicationPriority').value = 'normal';
+  el('communicationAudienceScope').value = 'all';
+  el('communicationStartsAt').value = '';
+  el('communicationEndsAt').value = '';
+  el('communicationIsActive').checked = true;
+  el('btnCancelCommunicationEdit').style.display = 'none';
+  el('btnSaveCommunication').textContent = 'Salvar comunicado';
+  renderCommunicationDepartmentOptions([]);
+  syncCommunicationAudienceControls();
+}
+
+function populateCommunicationForm(announcement) {
+  if (!announcement) return;
+  communicationState.editingId = Number(announcement.id || 0) || null;
+  el('communicationAnnouncementId').value = String(announcement.id || '');
+  el('communicationFormTitle').textContent = `Editar comunicado #${announcement.id}`;
+  el('communicationTitle').value = announcement.title || '';
+  el('communicationSummary').value = announcement.summary_text || '';
+  el('communicationContent').value = announcement.content_text || '';
+  el('communicationType').value = announcement.announcement_type || 'announcement';
+  el('communicationPriority').value = announcement.priority || 'normal';
+  el('communicationAudienceScope').value = announcement.audience_scope || 'all';
+  el('communicationStartsAt').value = toDateTimeLocalValue(announcement.starts_at);
+  el('communicationEndsAt').value = toDateTimeLocalValue(announcement.ends_at);
+  el('communicationIsActive').checked = announcement.is_active !== false;
+  renderCommunicationDepartmentOptions(announcement.department_ids || []);
+  syncCommunicationAudienceControls();
+  el('btnCancelCommunicationEdit').style.display = '';
+  el('btnSaveCommunication').textContent = 'Salvar alteracoes';
+}
+
+function renderCommunicationCatalogList() {
+  const countLabel = el('communicationCountLabel');
+  const list = el('communicationManageList');
+  if (!countLabel || !list) return;
+
+  const items = Array.isArray(communicationState.catalog) ? communicationState.catalog : [];
+  countLabel.textContent = items.length === 1
+    ? '1 comunicado publicado'
+    : `${items.length} comunicados publicados`;
+
+  if (!items.length) {
+    list.innerHTML = '<div class="intranet-empty-card">Nenhum comunicado publicado ainda.</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  items.forEach((announcement) => {
+    const audience = announcement.audience_scope === 'departments'
+      ? `Departamentos: ${(announcement.department_names || []).join(', ') || '-'}`
+      : 'Todos os usuarios';
+    const schedule = [
+      announcement.starts_at ? formatDate(announcement.starts_at) : 'Agora',
+      announcement.ends_at ? formatDate(announcement.ends_at) : 'Sem fim',
+    ].join(' - ');
+
+    const card = document.createElement('article');
+    card.className = 'intranet-communication-manage-card';
+    card.innerHTML = `
+      <div class="intranet-card-meta">${escapeHtml(announcement.priority || 'normal')} - ${escapeHtml(announcement.announcement_type || 'announcement')}</div>
+      <h4>${escapeHtml(announcement.title || 'Comunicado')}</h4>
+      <p>${escapeHtml(announcement.summary_text || announcement.content_text || '')}</p>
+      <div class="small muted">${escapeHtml(audience)}</div>
+      <div class="small muted">${escapeHtml(schedule)}</div>
+      <div class="intranet-card-actions"></div>
+    `;
+
+    const actions = card.querySelector('.intranet-card-actions');
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateCommunicationForm(announcement);
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger';
+    deleteBtn.textContent = 'Excluir';
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Deseja excluir o comunicado "${announcement.title}"?`)) return;
+      try {
+        await api(`/api/admin/intranet/announcements/${announcement.id}`, { method: 'DELETE' });
+        resetCommunicationForm();
+        await refreshIntranetBootstrap();
+      } catch (err) {
+        alert('Nao foi possivel excluir o comunicado: ' + err.message);
+      }
+    };
+    actions.appendChild(deleteBtn);
+
+    list.appendChild(card);
+  });
+}
+
+async function fetchCommunicationCatalog() {
+  if (!canManageCommunication()) {
+    communicationState.catalog = [];
+    renderCommunicationCatalogList();
+    return;
+  }
+  const { announcements } = await api('/api/admin/intranet/announcements');
+  communicationState.catalog = announcements || [];
+  renderCommunicationCatalogList();
+}
+
 function renderCommunication(intranet) {
   const grid = el('communicationGrid');
   if (!grid) return;
@@ -1679,8 +1997,15 @@ function renderCommunication(intranet) {
     });
   }
 
-  const futureWrap = el('adminFuture');
-  if (futureWrap) futureWrap.style.display = 'none';
+  const managerPanel = el('communicationManagerPanel');
+  if (managerPanel) {
+    managerPanel.hidden = !canManageCommunication();
+    if (canManageCommunication()) {
+      renderCommunicationDepartmentOptions(getSelectedCommunicationDepartmentIds());
+      syncCommunicationAudienceControls();
+      renderCommunicationCatalogList();
+    }
+  }
 }
 
 function applyDocumentFilter() {
@@ -1703,25 +2028,67 @@ async function init() {
 
   await fetchTrainingBootstrap();
   await fetchCalendarBootstrap().catch(() => {});
-  const { user, intranet } = bootstrapData;
   expandedDepartmentSlugs = readExpandedDepartmentPreference();
-  currentViewState = normalizeViewState({ key: 'home', departmentSlug: '', submenuSlug: '' }, intranet);
-  allModuleItems = intranet.modules || [];
-  allDocumentItems = intranet.document_center?.recent_documents || [];
-
   applySidebarPreference();
-  renderSidebar(user, intranet);
-  renderHero(user, intranet);
-  renderDashboard(intranet);
-  renderModules(intranet);
-  renderDepartments(intranet);
-  renderDocuments(intranet);
-  hydrateSalesWorkspace(intranet);
-  renderCommunication(intranet);
-  renderDepartmentWorkspace(intranet);
-  setActiveView(currentViewState.key, currentViewState);
+  applyIntranetSnapshot(bootstrapData, { preserveRoute: false });
+  if (canManageCommunication()) {
+    await fetchCommunicationCatalog().catch(() => {});
+  } else {
+    resetCommunicationForm();
+  }
 
   el('documentSearch').addEventListener('input', applyDocumentFilter);
+  el('communicationAudienceScope')?.addEventListener('change', syncCommunicationAudienceControls);
+  el('btnCancelCommunicationEdit')?.addEventListener('click', () => {
+    resetCommunicationForm();
+  });
+  el('communicationForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!canManageCommunication()) return;
+
+    const announcementId = Number(el('communicationAnnouncementId').value || 0);
+    const audienceScope = el('communicationAudienceScope').value;
+    const payload = {
+      title: el('communicationTitle').value.trim(),
+      summary_text: el('communicationSummary').value.trim(),
+      content_text: el('communicationContent').value.trim(),
+      announcement_type: el('communicationType').value,
+      priority: el('communicationPriority').value,
+      audience_scope: audienceScope,
+      department_ids: audienceScope === 'departments' ? getSelectedCommunicationDepartmentIds() : [],
+      starts_at: el('communicationStartsAt').value || '',
+      ends_at: el('communicationEndsAt').value || '',
+      is_active: el('communicationIsActive').checked,
+    };
+
+    if (!payload.title) {
+      alert('Informe o titulo do comunicado.');
+      return;
+    }
+
+    if (audienceScope === 'departments' && !payload.department_ids.length) {
+      alert('Selecione ao menos um departamento para um comunicado segmentado.');
+      return;
+    }
+
+    try {
+      if (announcementId) {
+        await api(`/api/admin/intranet/announcements/${announcementId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await api('/api/admin/intranet/announcements', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      }
+      resetCommunicationForm();
+      await refreshIntranetBootstrap();
+    } catch (err) {
+      alert('Nao foi possivel salvar o comunicado: ' + err.message);
+    }
+  });
   el('btnNewCalendarEvent')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
   el('btnCalendarReset')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
   el('btnCalendarPrev')?.addEventListener('click', async () => {
@@ -1771,6 +2138,7 @@ async function init() {
             body: JSON.stringify(payload),
           });
       calendarState.selectedEventId = response?.event?.id || eventId || null;
+      await refreshIntranetBootstrap({ route: { key: 'calendar', departmentSlug: '', submenuSlug: '' } });
       await fetchCalendarEvents();
       if (calendarState.selectedEventId) {
         await selectCalendarEvent(calendarState.selectedEventId);
@@ -1788,6 +2156,7 @@ async function init() {
         method: 'POST',
         body: JSON.stringify({ cancel_reason: reason || '' }),
       });
+      await refreshIntranetBootstrap({ route: { key: 'calendar', departmentSlug: '', submenuSlug: '' } });
       await fetchCalendarEvents();
       await selectCalendarEvent(eventId);
     } catch (err) {

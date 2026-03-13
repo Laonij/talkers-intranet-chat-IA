@@ -464,7 +464,100 @@
             <h3 class="intranet-section-title">Base pronta para mural, avisos e canais internos</h3>
           </div>
         </div>
-        <div class="intranet-communication-grid" id="communicationGrid"></div>
+        <div class="intranet-communication-layout">
+          <div class="intranet-communication-main">
+            <div class="intranet-communication-grid" id="communicationGrid"></div>
+          </div>
+
+          <aside class="intranet-communication-manager" id="communicationManagerPanel" hidden>
+            <div class="intranet-side-head">
+              <div>
+                <div class="intranet-side-title" id="communicationFormTitle">Publicar comunicado</div>
+                <div class="small muted" id="communicationCountLabel">Gerencie o mural da Home e os avisos por departamento.</div>
+              </div>
+            </div>
+
+            <form class="intranet-communication-form" id="communicationForm">
+              <input type="hidden" id="communicationAnnouncementId" value="" />
+
+              <div>
+                <label for="communicationTitle">Titulo</label>
+                <input id="communicationTitle" placeholder="Ex.: Treinamento interno desta semana" />
+              </div>
+
+              <div>
+                <label for="communicationSummary">Resumo</label>
+                <input id="communicationSummary" placeholder="Texto curto para a Home e notificacoes" />
+              </div>
+
+              <div>
+                <label for="communicationContent">Conteudo completo</label>
+                <textarea id="communicationContent" rows="4" placeholder="Texto principal do comunicado"></textarea>
+              </div>
+
+              <div class="intranet-communication-form-grid">
+                <div>
+                  <label for="communicationType">Tipo</label>
+                  <select id="communicationType">
+                    <option value="announcement">Comunicado</option>
+                    <option value="event">Evento</option>
+                    <option value="training">Treinamento</option>
+                    <option value="institutional">Institucional</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="communicationPriority">Prioridade</label>
+                  <select id="communicationPriority">
+                    <option value="normal">Normal</option>
+                    <option value="high">Alta</option>
+                    <option value="critical">Critica</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label for="communicationAudienceScope">Publico</label>
+                <select id="communicationAudienceScope">
+                  <option value="all">Todos os usuarios</option>
+                  <option value="departments">Departamentos especificos</option>
+                </select>
+              </div>
+
+              <div id="communicationDepartmentsWrap">
+                <label>Departamentos do comunicado</label>
+                <div class="small muted" style="margin-bottom:10px;">Use quando o publico for segmentado por departamento.</div>
+                <div id="communicationDepartments" class="departments-grid"></div>
+              </div>
+
+              <div class="intranet-communication-form-grid">
+                <div>
+                  <label for="communicationStartsAt">Inicio (opcional)</label>
+                  <input id="communicationStartsAt" type="datetime-local" />
+                </div>
+                <div>
+                  <label for="communicationEndsAt">Fim (opcional)</label>
+                  <input id="communicationEndsAt" type="datetime-local" />
+                </div>
+              </div>
+
+              <label class="admin-check-row">
+                <input id="communicationIsActive" type="checkbox" checked />
+                <span>
+                  <strong>Comunicado ativo</strong>
+                  <small>Comunicados ativos aparecem na Home, na area de comunicacao e nas notificacoes internas.</small>
+                </span>
+              </label>
+
+              <div class="admin-form-actions">
+                <button class="btn" id="btnCancelCommunicationEdit" type="button" style="display:none;">Cancelar edicao</button>
+                <button class="btn primary" id="btnSaveCommunication" type="submit">Salvar comunicado</button>
+              </div>
+            </form>
+
+            <div class="intranet-block-title" style="margin-top:8px;">Comunicados publicados</div>
+            <div id="communicationManageList" class="intranet-communication-manage-list"></div>
+          </aside>
+        </div>
       </section>
 
       <section class="intranet-section" id="adminFuture" style="display:none;">

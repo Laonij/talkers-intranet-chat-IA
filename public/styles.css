@@ -3802,3 +3802,315 @@ body.intranet-sidebar-collapsed .intranet-nav-link-label {
     padding-left:8px;
   }
 }
+
+html,
+body{
+  max-width:100%;
+  overflow-x:hidden;
+}
+
+.app,
+.main,
+.panel,
+.chat-shell,
+.composer,
+.composer-field,
+.sidebar,
+.admin-shell,
+.admin-card-shell,
+.admin-grid,
+.admin-content-grid,
+.admin-panel,
+.admin-side-card,
+.admin-tab-panel,
+.admin-tab-chunk,
+.intranet-shell,
+.intranet-app,
+.intranet-main,
+.intranet-hero,
+.intranet-section,
+.intranet-calendar-layout,
+.intranet-calendar-panel,
+.intranet-calendar-sidebar,
+.intranet-training-grid,
+.intranet-training-layout,
+.intranet-dashboard-layout,
+.intranet-home-grid,
+.intranet-communication-layout,
+.intranet-communication-main,
+.intranet-communication-manager{
+  min-width:0;
+}
+
+.brand-title,
+.brand-sub,
+.title,
+.conversation-title,
+.account-name,
+.account-meta,
+.bubble,
+.composer-uploads,
+.intranet-quick-title,
+.intranet-quick-text,
+.intranet-module-card,
+.intranet-document-card,
+.intranet-communication-card,
+.intranet-dashboard-note,
+.intranet-sales-record,
+.intranet-sales-history-item,
+.admin-state-box,
+.admin-panel .table th,
+.admin-panel .table td{
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+
+.admin-panel .table{
+  width:100%;
+  display:table;
+  table-layout:auto;
+  white-space:normal;
+}
+
+.admin-panel .table th,
+.admin-panel .table td{
+  white-space:normal;
+  vertical-align:top;
+}
+
+.intranet-communication-layout{
+  display:grid;
+  grid-template-columns:minmax(0, 1.15fr) minmax(300px, .85fr);
+  gap:18px;
+  align-items:start;
+}
+
+.intranet-communication-form,
+.intranet-communication-manage-list{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.intranet-communication-manager{
+  border:1px solid #e5e7eb;
+  border-radius:24px;
+  background:#fff;
+  box-shadow:0 18px 40px rgba(15, 23, 42, 0.05);
+  padding:18px;
+}
+
+.intranet-communication-form-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:14px;
+}
+
+.intranet-communication-form textarea{
+  min-height:104px;
+  resize:vertical;
+}
+
+.intranet-communication-manage-card{
+  border:1px solid rgba(15, 23, 42, 0.08);
+  border-radius:18px;
+  background:#fff;
+  padding:14px;
+  box-shadow:0 14px 28px rgba(15,23,42,.04);
+}
+
+.intranet-calendar-view{
+  min-width:0;
+}
+
+.intranet-calendar-week{
+  display:grid;
+  grid-template-columns:repeat(7, minmax(0, 1fr));
+  gap:10px;
+}
+
+.intranet-calendar-week-column{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  min-width:0;
+  border:1px solid #e5e7eb;
+  border-radius:18px;
+  padding:10px;
+  background:#fcfdff;
+}
+
+.intranet-calendar-week-head{
+  width:100%;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#fff;
+  color:#0f172a;
+  text-align:left;
+  padding:10px 12px;
+  font:inherit;
+}
+
+.intranet-calendar-week-head span{
+  color:#64748b;
+  font-size:12px;
+}
+
+.intranet-calendar-week-events{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:0;
+}
+
+.intranet-calendar-week-item,
+.intranet-calendar-day-item{
+  box-shadow:none;
+}
+
+.intranet-calendar-week-empty{
+  padding:8px 4px;
+}
+
+.intranet-calendar-day-view,
+.intranet-calendar-day-list{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
+.intranet-calendar-day-item{
+  width:100%;
+  display:grid;
+  grid-template-columns:minmax(110px, 132px) minmax(0, 1fr);
+  gap:14px;
+  align-items:start;
+  border:1px solid rgba(15, 23, 42, 0.08);
+  border-radius:18px;
+  background:#fff;
+  text-align:left;
+  color:#0f172a;
+  font:inherit;
+  padding:14px;
+}
+
+.intranet-calendar-day-time{
+  font-size:13px;
+  font-weight:600;
+  color:#334155;
+}
+
+.intranet-calendar-day-copy{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.intranet-calendar-day-copy strong{
+  font-size:14px;
+  font-weight:600;
+}
+
+.intranet-calendar-day-copy span,
+.intranet-calendar-day-copy small{
+  color:#64748b;
+}
+
+@media (max-width: 1180px){
+  .intranet-communication-layout{
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width: 960px){
+  .intranet-calendar-week{
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px){
+  .admin-panel .table,
+  .admin-panel .table tbody,
+  .admin-panel .table tr,
+  .admin-panel .table td{
+    display:block;
+    width:100%;
+  }
+
+  .admin-panel .table thead{
+    display:none;
+  }
+
+  .admin-panel .table tbody{
+    display:grid;
+    gap:12px;
+  }
+
+  .admin-panel .table tr{
+    padding:14px;
+    border:1px solid #e5e7eb;
+    border-radius:18px;
+    background:#fff;
+    box-shadow:0 12px 24px rgba(15,23,42,.05);
+  }
+
+  .admin-panel .table td{
+    padding:0;
+    border:none;
+    display:grid;
+    grid-template-columns:minmax(96px, 118px) minmax(0, 1fr);
+    gap:10px;
+    align-items:start;
+  }
+
+  .admin-panel .table td::before{
+    content:attr(data-label);
+    color:#64748b;
+    font-size:11px;
+    font-weight:700;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+  }
+
+  .admin-panel .table td[colspan]{
+    display:block;
+  }
+
+  .admin-panel .table td[colspan]::before{
+    content:none;
+  }
+
+  .admin-inline-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  .admin-inline-actions .btn{
+    min-width:0;
+  }
+
+  .intranet-communication-form-grid,
+  .intranet-calendar-form-grid{
+    grid-template-columns:1fr;
+  }
+
+  .intranet-calendar-day-item{
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width: 640px){
+  .intranet-calendar-week{
+    grid-template-columns:1fr;
+  }
+
+  .admin-panel .table td{
+    grid-template-columns:1fr;
+    gap:4px;
+  }
+}

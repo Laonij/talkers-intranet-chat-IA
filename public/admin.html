@@ -630,7 +630,7 @@
           </div>
         </section>
 
-        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="departments" data-section="announcements">
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="legacy-hidden" data-section="announcements" hidden>
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
               <div class="admin-section-title" id="announcementFormTitle">Comunicados internos</div>
@@ -1277,7 +1277,7 @@ function renderDepartmentTable() {
       try {
         await api(`/api/admin/departments/${department.id}`, { method: 'DELETE' });
         setMsg(`Departamento ${department.name} excluido com sucesso.`);
-        await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadAnnouncements(), loadSystemLogs()]);
+        await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadSystemLogs()]);
       } catch (err) {
         setMsg('Erro: ' + err.message, true);
       }
@@ -1518,6 +1518,31 @@ function renderSystemLogsTable(bodyId, items = [], formatter, emptyText) {
     tr.innerHTML = formatter(item);
     body.appendChild(tr);
   });
+}
+
+function syncResponsiveTableLabels(root = document) {
+  Array.from(root.querySelectorAll('.admin-panel .table')).forEach((table) => {
+    const headers = Array.from(table.querySelectorAll('thead th')).map((header) => header.textContent.trim() || 'Detalhe');
+    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+      Array.from(row.children).forEach((cell, index) => {
+        if (cell.tagName !== 'TD') return;
+        if (cell.hasAttribute('colspan')) {
+          cell.setAttribute('data-label', '');
+          return;
+        }
+        cell.setAttribute('data-label', headers[index] || 'Detalhe');
+      });
+    });
+  });
+}
+
+let responsiveTableObserver = null;
+function startResponsiveTableObserver() {
+  if (responsiveTableObserver) return;
+  const target = document.querySelector('.admin-content-grid') || document.body;
+  responsiveTableObserver = new MutationObserver(() => syncResponsiveTableLabels(target));
+  responsiveTableObserver.observe(target, { childList: true, subtree: true });
+  syncResponsiveTableLabels(target);
 }
 
 async function loadSystemLogs() {
@@ -2422,7 +2447,7 @@ document.getElementById('btnSaveUser').onclick = async () => {
     }
 
     resetUserForm();
-    await Promise.all([loadUsers(), loadDepartments(), loadSubmenus(), loadAnnouncements(), loadSystemLogs()]);
+    await Promise.all([loadUsers(), loadDepartments(), loadSubmenus(), loadSystemLogs()]);
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
   }
@@ -2459,7 +2484,7 @@ document.getElementById('btnSaveDepartment').onclick = async () => {
     }
 
     resetDepartmentForm();
-    await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadAnnouncements(), loadSystemLogs()]);
+    await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadSystemLogs()]);
   } catch (err) {
     setMsg('Erro: ' + err.message, true);
   }
@@ -2773,6 +2798,7 @@ document.getElementById('btnQueueKnowledgeBackfill').onclick = async () => {
 loadSectionState();
 bindSectionToggles();
 syncSectionToggles();
+startResponsiveTableObserver();
 bindAdminTabs();
 setAdminTab('users');
 renderRagSelection();
@@ -2791,7 +2817,6 @@ Promise.all([
   loadDepartments(),
   loadUsers(),
   loadSubmenus(),
-  loadAnnouncements(),
   loadRagStatus(),
   loadRagFiles(),
   loadSystemLogs(),

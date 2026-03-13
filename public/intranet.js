@@ -491,12 +491,15 @@ function renderTrainingCards(training = {}) {
   wrap.innerHTML = '';
 
   const knowledgeCounts = training.knowledge?.counts || {};
-  const pendingReprocess = Math.max(Number(knowledgeCounts.total || 0) - Number(knowledgeCounts.available || 0), 0);
+  const documentMemories = Number(training.memories?.document_total || 0);
   const cards = [
     { label: 'Arquivos', value: Number(knowledgeCounts.total || 0) },
+    { label: 'Processados', value: Number(knowledgeCounts.processed || 0) },
+    { label: 'Analisados', value: Number(knowledgeCounts.analyzed || 0) },
     { label: 'Disponiveis para IA', value: Number(knowledgeCounts.available || 0) },
-    { label: 'Para reprocessar', value: pendingReprocess },
-    { label: 'Memorias', value: Number(training.memories?.total || 0) },
+    { label: 'Memorias documentais', value: documentMemories },
+    { label: 'Usados em respostas', value: Number(knowledgeCounts.documents_used_in_responses || 0) },
+    { label: 'Para reprocessar', value: Number(knowledgeCounts.needs_reprocess || 0) },
   ];
 
   cards.forEach((card) => {

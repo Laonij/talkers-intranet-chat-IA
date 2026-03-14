@@ -1,0 +1,253 @@
+(function () {
+  const DEFAULT_LOCALE = 'pt-BR';
+  const STORAGE_KEY = 'talkers_locale_v1';
+  const COOKIE_KEY = 'talkers_locale';
+  const SUPPORTED_LOCALES = ['pt-BR', 'en', 'es', 'it', 'fr'];
+  const LOCALE_OPTIONS = [
+    { code: 'pt-BR', flag: '🇧🇷', label: 'Português' },
+    { code: 'en', flag: '🇺🇸', label: 'English' },
+    { code: 'es', flag: '🇪🇸', label: 'Español' },
+    { code: 'it', flag: '🇮🇹', label: 'Italiano' },
+    { code: 'fr', flag: '🇫🇷', label: 'Français' },
+  ];
+  const SELECTOR = '[data-i18n], [data-i18n-placeholder], [data-i18n-title], [data-i18n-aria-label]';
+
+  let currentLocale = DEFAULT_LOCALE;
+  const bundles = {};
+  const listeners = new Set();
+
+  function normalizeLocale(locale) {
+    const raw = String(locale || '').trim();
+    if (!raw) return DEFAULT_LOCALE;
+    const normalized = raw.replace(/_/g, '-').toLowerCase();
+    if (normalized === 'pt' || normalized === 'pt-br' || normalized === 'pt-pt') return 'pt-BR';
+    if (normalized.startsWith('en')) return 'en';
+    if (normalized.startsWith('es')) return 'es';
+    if (normalized.startsWith('it')) return 'it';
+    if (normalized.startsWith('fr')) return 'fr';
+    return DEFAULT_LOCALE;
+  }
+
+  function localeToLanguage(locale) {
+    return normalizeLocale(locale).split('-')[0];
+  }
+
+  function getCookie(name) {
+    const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  function setCookie(name, value) {
+    document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+  }
+
+  function getValue(source, key) {
+    return String(key || '')
+      .split('.')
+      .reduce((acc, part) => (acc && Object.prototype.hasOwnProperty.call(acc, part) ? acc[part] : undefined), source);
+  }
+
+  function interpolate(template, params) {
+    return String(template || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
+      const value = params?.[key];
+      return value == null ? '' : String(value);
+    });
+  }
+
+  async function loadLocale(locale) {
+    const safeLocale = normalizeLocale(locale);
+    if (bundles[safeLocale]) return bundles[safeLocale];
+
+    try {
+      const response = await fetch(`/locales/${safeLocale}.json`, { credentials: 'same-origin' });
+      bundles[safeLocale] = response.ok ? await response.json() : {};
+    } catch {
+      bundles[safeLocale] = {};
+    }
+
+    return bundles[safeLocale];
+  }
+
+  function t(key, params = {}, fallback = '') {
+    const safeLocale = normalizeLocale(currentLocale);
+    const localized = getValue(bundles[safeLocale], key);
+    const base = getValue(bundles[DEFAULT_LOCALE], key);
+    const resolved = localized ?? base ?? fallback ?? key;
+    return typeof resolved === 'string' ? interpolate(resolved, params) : resolved;
+  }
+
+  function applyToElement(node) {
+    if (!node || node.nodeType !== 1) return;
+
+    const textKey = node.getAttribute('data-i18n');
+    if (textKey) {
+      node.textContent = t(textKey, {});
+    }
+
+    const placeholderKey = node.getAttribute('data-i18n-placeholder');
+    if (placeholderKey) {
+      node.setAttribute('placeholder', t(placeholderKey, {}));
+    }
+
+    const titleKey = node.getAttribute('data-i18n-title');
+    if (titleKey) {
+      node.setAttribute('title', t(titleKey, {}));
+    }
+
+    const ariaKey = node.getAttribute('data-i18n-aria-label');
+    if (ariaKey) {
+      node.setAttribute('aria-label', t(ariaKey, {}));
+    }
+  }
+
+  function applyTranslations(root = document) {
+    if (!root) return;
+    if (root.matches && root.matches(SELECTOR)) {
+      applyToElement(root);
+    }
+    root.querySelectorAll?.(SELECTOR).forEach(applyToElement);
+  }
+
+  function getLocale() {
+    return normalizeLocale(currentLocale);
+  }
+
+  function buildHeaders() {
+    return { 'X-Talkers-Locale': getLocale() };
+  }
+
+  function notifyLocaleChange() {
+    applyTranslations(document);
+    listeners.forEach((listener) => {
+      try {
+        listener(getLocale());
+      } catch {}
+    });
+  }
+
+  async function setLocale(locale, options = {}) {
+    const safeLocale = normalizeLocale(locale);
+    currentLocale = safeLocale;
+    await loadLocale(DEFAULT_LOCALE);
+    await loadLocale(safeLocale);
+
+    document.documentElement.lang = safeLocale;
+    document.documentElement.setAttribute('data-locale', safeLocale);
+    window.__talkersLocale = safeLocale;
+
+    if (options.persist !== false) {
+      try {
+        localStorage.setItem(STORAGE_KEY, safeLocale);
+      } catch {}
+      setCookie(COOKIE_KEY, safeLocale);
+    }
+
+    if (options.notify !== false) {
+      notifyLocaleChange();
+    } else {
+      applyTranslations(document);
+    }
+
+    return safeLocale;
+  }
+
+  function onChange(listener) {
+    if (typeof listener === 'function') listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  function renderLanguageSwitcher(target, options = {}) {
+    const container = typeof target === 'string' ? document.getElementById(target) : target;
+    if (!container) return null;
+
+    container.innerHTML = '';
+    container.classList.add('language-switcher-host');
+
+    const wrap = document.createElement('div');
+    wrap.className = `language-switcher${options.compact ? ' is-compact' : ''}`;
+
+    const label = document.createElement('label');
+    label.className = 'language-switcher-label';
+    label.textContent = options.showLabel === false ? '🌐' : t('language.label', {}, 'Idioma');
+
+    const select = document.createElement('select');
+    select.className = 'language-switcher-select';
+    select.setAttribute('aria-label', t('language.label', {}, 'Idioma'));
+
+    LOCALE_OPTIONS.forEach((item) => {
+      const option = document.createElement('option');
+      option.value = item.code;
+      option.textContent = `${item.flag} ${item.label}`;
+      select.appendChild(option);
+    });
+    select.value = getLocale();
+    select.addEventListener('change', async () => {
+      await setLocale(select.value);
+    });
+
+    wrap.appendChild(label);
+    wrap.appendChild(select);
+    container.appendChild(wrap);
+
+    onChange((locale) => {
+      label.textContent = options.showLabel === false ? '🌐' : t('language.label', {}, 'Idioma');
+      select.setAttribute('aria-label', t('language.label', {}, 'Idioma'));
+      select.value = locale;
+    });
+
+    return wrap;
+  }
+
+  function formatDate(value, intlOptions = {}) {
+    if (!value) return '';
+    try {
+      return new Intl.DateTimeFormat(getLocale(), intlOptions).format(new Date(value));
+    } catch {
+      return String(value || '');
+    }
+  }
+
+  function getPeriodGreeting(date = new Date()) {
+    const hour = Number(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      hour12: false,
+    }).format(date));
+
+    if (hour < 12) return t('greetings.morning', {}, 'Bom dia');
+    if (hour < 18) return t('greetings.afternoon', {}, 'Boa tarde');
+    return t('greetings.evening', {}, 'Boa noite');
+  }
+
+  async function init() {
+    await loadLocale(DEFAULT_LOCALE);
+    let stored = DEFAULT_LOCALE;
+    try {
+      stored = localStorage.getItem(STORAGE_KEY) || getCookie(COOKIE_KEY) || document.documentElement.lang || DEFAULT_LOCALE;
+    } catch {
+      stored = getCookie(COOKIE_KEY) || document.documentElement.lang || DEFAULT_LOCALE;
+    }
+    await setLocale(stored, { persist: false, notify: false });
+    notifyLocaleChange();
+  }
+
+  const readyPromise = init();
+
+  window.TalkersI18n = {
+    DEFAULT_LOCALE,
+    SUPPORTED_LOCALES,
+    LOCALE_OPTIONS,
+    ready: () => readyPromise,
+    t,
+    getLocale,
+    normalizeLocale,
+    localeToLanguage,
+    buildHeaders,
+    applyTranslations,
+    renderLanguageSwitcher,
+    setLocale,
+    onChange,
+    formatDate,
+    getPeriodGreeting,
+  };
+})();

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -13,19 +13,22 @@
         <div class="admin-header-copy">
           <img class="logo-sm" src="/logo.png" alt="Logo" />
           <div>
-            <div class="admin-page-title">Admin</div>
-            <div class="muted small">Usuarios, permissoes e base de conhecimento</div>
+            <div class="admin-page-title" id="adminPageTitle">Admin</div>
+            <div class="muted small" id="adminPageSubtitle">Usuarios, permissoes e base de conhecimento</div>
           </div>
         </div>
-        <a class="btn" href="/index.html">Voltar</a>
+        <div class="admin-header-actions" style="display:flex; align-items:center; gap:12px;">
+          <div id="adminLanguageSwitcher"></div>
+          <a class="btn" href="/index.html" id="adminBackBtn">Voltar</a>
+        </div>
       </div>
 
       <div class="admin-tabs" id="adminTabs">
-        <button class="admin-tab-btn is-active" type="button" data-admin-tab="users">Usuarios</button>
-        <button class="admin-tab-btn" type="button" data-admin-tab="departments">Departamentos</button>
-        <button class="admin-tab-btn" type="button" data-admin-tab="knowledge">Base de conhecimento</button>
-        <button class="admin-tab-btn" type="button" data-admin-tab="training">Treinamento da IA</button>
-        <button class="admin-tab-btn" type="button" data-admin-tab="logs">Logs do sistema</button>
+        <button class="admin-tab-btn is-active" type="button" data-admin-tab="users" id="adminTabUsers">Usuarios</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="departments" id="adminTabDepartments">Departamentos</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="knowledge" id="adminTabKnowledge">Base de conhecimento</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="training" id="adminTabTraining">Treinamento da IA</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="logs" id="adminTabLogs">Logs do sistema</button>
       </div>
 
       <div class="admin-grid">
@@ -835,6 +838,7 @@
     </div>
   </div>
 
+<script src="/i18n.js"></script>
 <script>
 const RAG_BATCH_SIZE = 1;
 const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
@@ -854,10 +858,14 @@ let systemLogsState = null;
 let collapsedSections = new Set();
 let activeAdminTab = 'users';
 
+const i18n = () => window.TalkersI18n;
+const t = (key, params = {}, fallback = '') => i18n()?.t?.(key, params, fallback) ?? fallback || key;
+const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
+
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
-    ? (opts.headers || {})
-    : { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    ? { ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) }
+    : { 'Content-Type': 'application/json', ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) };
 
   const res = await fetch(path, {
     credentials: 'include',
@@ -881,13 +889,49 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function compareAlpha(a, b) {
+  return String(a || '').localeCompare(String(b || ''), currentLocale(), {
+    sensitivity: 'base',
+    numeric: true,
+  });
+}
+
+function sortAlphabetically(items = [], resolver) {
+  return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
+    const leftValue = resolver ? resolver(left) : left;
+    const rightValue = resolver ? resolver(right) : right;
+    return compareAlpha(leftValue, rightValue);
+  });
+}
+
 function formatDateTime(value) {
   if (!value) return '-';
   try {
-    return new Date(value).toLocaleString('pt-BR');
+    return new Date(value).toLocaleString(currentLocale());
   } catch {
     return String(value || '-');
   }
+}
+
+function applyAdminTranslations() {
+  document.title = `${t('admin.title')} - Talkers IA`;
+  const pageTitle = document.getElementById('adminPageTitle');
+  if (pageTitle) pageTitle.textContent = t('admin.title');
+  const subtitle = document.getElementById('adminPageSubtitle');
+  if (subtitle) subtitle.textContent = t('admin.subtitle');
+  const backBtn = document.getElementById('adminBackBtn');
+  if (backBtn) backBtn.textContent = t('common.back');
+  const tabs = {
+    adminTabUsers: 'admin.tabs.users',
+    adminTabDepartments: 'admin.tabs.departments',
+    adminTabKnowledge: 'admin.tabs.knowledge',
+    adminTabTraining: 'admin.tabs.training',
+    adminTabLogs: 'admin.tabs.logs',
+  };
+  Object.entries(tabs).forEach(([id, key]) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = t(key);
+  });
 }
 
 function formatStageLabel(value = '') {
@@ -1145,7 +1189,10 @@ function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
 }
 
 function getDepartmentOptions(includeInactive = false) {
-  return (departmentCatalog || []).filter((department) => includeInactive || department.is_active !== false);
+  return sortAlphabetically(
+    (departmentCatalog || []).filter((department) => includeInactive || department.is_active !== false),
+    (department) => department?.name || department?.slug || ''
+  );
 }
 
 function renderDepartmentsGrid() {
@@ -1249,7 +1296,7 @@ function renderDepartmentTable() {
     return;
   }
 
-  departmentCatalog.forEach((department) => {
+  sortAlphabetically(departmentCatalog, (department) => department?.name || department?.slug || '').forEach((department) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${department.name}</td>
@@ -1343,7 +1390,10 @@ function renderSubmenuTable() {
     return;
   }
 
-  submenuCatalog.forEach((submenu) => {
+  sortAlphabetically(
+    submenuCatalog,
+    (submenu) => `${submenu?.department_name || ''} ${submenu?.title || submenu?.slug || ''}`
+  ).forEach((submenu) => {
     const department = departmentCatalog.find((item) => Number(item.id) === Number(submenu.department_id));
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -1385,7 +1435,10 @@ function renderSubmenuTable() {
 
 async function loadSubmenus() {
   const { submenus } = await api('/api/admin/department-submenus');
-  submenuCatalog = submenus || [];
+  submenuCatalog = sortAlphabetically(
+    submenus || [],
+    (submenu) => `${submenu?.department_name || ''} ${submenu?.title || submenu?.slug || ''}`
+  );
   renderSubmenuTable();
 }
 
@@ -1747,7 +1800,7 @@ function syncAnnouncementAudienceControls() {
 
 async function loadDepartments() {
   const { departments } = await api('/api/admin/departments');
-  departmentCatalog = departments || [];
+  departmentCatalog = sortAlphabetically(departments || [], (department) => department?.name || department?.slug || '');
   renderDepartmentsGrid();
   renderDepartmentSelect();
   renderDepartmentTable();
@@ -1755,7 +1808,7 @@ async function loadDepartments() {
 
 async function loadUsers() {
   const { users } = await api('/api/admin/users');
-  cachedUsers = users || [];
+  cachedUsers = sortAlphabetically(users || [], (user) => user?.name || user?.email || '');
   const body = document.getElementById('usersBody');
   body.innerHTML = '';
   document.getElementById('usersCountLabel').textContent = cachedUsers.length === 1
@@ -2795,37 +2848,57 @@ document.getElementById('btnQueueKnowledgeBackfill').onclick = async () => {
   }
 };
 
-loadSectionState();
-bindSectionToggles();
-syncSectionToggles();
-startResponsiveTableObserver();
-bindAdminTabs();
-setAdminTab('users');
-renderRagSelection();
-setRagUploadState('Pronto para novos envios.');
-setRagUploadProgress(0, 0, false);
-setSalesImportState('Pronto para importar matriculas e vincular por closer.');
-resetUserForm();
-resetDepartmentForm();
-resetSubmenuForm();
-resetAnnouncementForm();
-syncAnnouncementAudienceControls();
-resetCloserForm();
-updateSalesWorkbookLabels();
+async function initAdmin() {
+  await i18n()?.ready?.();
+  i18n()?.renderLanguageSwitcher?.('adminLanguageSwitcher', { compact: true, showLabel: false });
+  applyAdminTranslations();
+  i18n()?.onChange?.((locale) => {
+    applyAdminTranslations();
+    fetch('/api/me/preferences', {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(i18n()?.buildHeaders?.() || {}),
+      },
+      body: JSON.stringify({ preferred_locale: locale }),
+    }).catch(() => {});
+  });
 
-Promise.all([
-  loadDepartments(),
-  loadUsers(),
-  loadSubmenus(),
-  loadRagStatus(),
-  loadRagFiles(),
-  loadSystemLogs(),
-  loadAiTrainingOverview().catch((err) => {
-    document.getElementById('trainingCountLabel').textContent = 'Painel de treinamento indisponivel no momento';
-    setMsg('Aviso: nao foi possivel carregar o painel de treinamento: ' + err.message, true);
-  }),
-])
-  .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
+  loadSectionState();
+  bindSectionToggles();
+  syncSectionToggles();
+  startResponsiveTableObserver();
+  bindAdminTabs();
+  setAdminTab('users');
+  renderRagSelection();
+  setRagUploadState('Pronto para novos envios.');
+  setRagUploadProgress(0, 0, false);
+  setSalesImportState('Pronto para importar matriculas e vincular por closer.');
+  resetUserForm();
+  resetDepartmentForm();
+  resetSubmenuForm();
+  resetAnnouncementForm();
+  syncAnnouncementAudienceControls();
+  resetCloserForm();
+  updateSalesWorkbookLabels();
+
+  Promise.all([
+    loadDepartments(),
+    loadUsers(),
+    loadSubmenus(),
+    loadRagStatus(),
+    loadRagFiles(),
+    loadSystemLogs(),
+    loadAiTrainingOverview().catch((err) => {
+      document.getElementById('trainingCountLabel').textContent = 'Painel de treinamento indisponivel no momento';
+      setMsg('Aviso: nao foi possivel carregar o painel de treinamento: ' + err.message, true);
+    }),
+  ])
+    .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
+}
+
+initAdmin();
 </script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 ﻿<!doctype html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -13,11 +13,18 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="brand">
-          <img class="logo-sm" src="/logo.png" alt="Logo" />
-          <div class="brand-meta">
+          <div class="brand-main">
+            <img class="logo-sm" src="/logo.png" alt="Logo" />
+            <div class="brand-meta">
             <div class="brand-title">Talkers IA</div>
             <div class="brand-sub" id="userSub">Seu espaco inteligente</div>
           </div>
+        </div>
+          <button class="icon-btn sidebar-collapse-btn" id="btnSidebarCollapse" type="button" aria-label="Recolher menu lateral" title="Recolher menu lateral">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 6l-6 6 6 6" />
+            </svg>
+          </button>
         </div>
 
         <a class="btn intranet-btn" id="btnIntranet" href="/intranet.html" style="display:none;">
@@ -41,7 +48,7 @@
       </div>
 
       <div class="section conversations-section">
-        <div class="section-title">Conversas</div>
+        <div class="section-title" id="chatConversationsTitle">Conversas</div>
         <div class="conversations" id="convList"></div>
       </div>
 
@@ -72,12 +79,14 @@
             </svg>
           </button>
 
-          <div>
-            <div class="topbar-kicker">Assistente da escola</div>
+        <div>
+            <div class="topbar-kicker" id="chatTopbarKicker">Assistente da escola</div>
             <div class="title" id="convTitle">Nova conversa</div>
           </div>
         </div>
-
+        <div class="topbar-actions">
+          <div id="chatLanguageSwitcher"></div>
+        </div>
 
       </div>
 
@@ -85,8 +94,8 @@
         <div class="chat-shell">
           <div class="empty-state" id="emptyState">
             <div class="empty-badge">Talkers IA</div>
-            <h1 class="empty-title">Como posso ajudar hoje?</h1>
-            <p class="empty-subtitle">Crie documentos, planilhas, imagens e audios, consulte a base da empresa e conduza atendimentos com uma experiencia mais parecida com o ChatGPT.</p>
+            <h1 class="empty-title" id="chatEmptyTitle">Como posso ajudar hoje?</h1>
+            <p class="empty-subtitle" id="chatEmptySubtitle">Crie documentos, planilhas, imagens e audios, consulte a base da empresa e conduza atendimentos com uma experiencia mais parecida com o ChatGPT.</p>
             <div class="quick-prompts" id="quickPrompts"></div>
           </div>
 
@@ -116,7 +125,7 @@
             <div class="composer-field">
               <div class="composer-uploads" id="composerUploads" hidden></div>
               <textarea id="msg" placeholder="Envie uma mensagem para a Talkers IA"></textarea>
-              <div class="composer-hint">Enter envia, Shift+Enter quebra linha</div>
+              <div class="composer-hint" id="chatComposerHint">Enter envia, Shift+Enter quebra linha</div>
             </div>
 
             <button class="send-btn" id="btnSend" type="button" aria-label="Enviar mensagem" title="Enviar mensagem">
@@ -131,6 +140,7 @@
     </main>
   </div>
 
+  <script src="/i18n.js"></script>
   <script src="/client.js"></script>
 </body>
 </html>

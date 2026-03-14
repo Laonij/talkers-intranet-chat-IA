@@ -10,6 +10,7 @@ function signSession(user, jwtSecret) {
       department: user.department || "",
       departments: Array.isArray(user.departments) ? user.departments : [],
       can_access_intranet: Boolean(user.can_access_intranet),
+      preferred_locale: user.preferred_locale || "pt-BR",
     },
     jwtSecret,
     { expiresIn: "7d" }

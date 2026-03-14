@@ -23,6 +23,18 @@ const ICONS = {
   general: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>',
 };
 
+const i18n = () => window.TalkersI18n;
+const t = (key, params = {}, fallback = '') => i18n()?.t?.(key, params, fallback) ?? fallback || key;
+const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
+const localeDate = (value, options = {}) => {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat(currentLocale(), options).format(new Date(value));
+  } catch {
+    return String(value || '');
+  }
+};
+
 let bootstrapData = null;
 let allDocumentItems = [];
 let allModuleItems = [];
@@ -51,6 +63,31 @@ let communicationState = {
   catalog: [],
   editingId: null,
 };
+let influencerState = {
+  enabled: false,
+  loading: false,
+  loaded: false,
+  error: '',
+  bootstrap: null,
+  editingId: null,
+  formDraft: null,
+  selectedInfluencerId: null,
+  detail: null,
+  detailLoading: false,
+  detailError: '',
+  formCollapsed: false,
+  filters: {
+    periodType: 'month',
+    from: '',
+    to: '',
+  },
+  analysis: {
+    loading: false,
+    periodType: 'month',
+    result: '',
+    generatedAt: '',
+  },
+};
 const SIDEBAR_STORAGE_KEY = 'talkers_intranet_sidebar_state_v1';
 const VIEW_STORAGE_KEY = 'talkers_intranet_view_state_v1';
 const DEPARTMENT_TREE_STORAGE_KEY = 'talkers_intranet_department_tree_state_v1';
@@ -64,7 +101,9 @@ function renderIcon(name) {
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    headers: opts.body instanceof FormData
+      ? { ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) }
+      : { 'Content-Type': 'application/json', ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) },
     ...opts,
   });
 
@@ -84,9 +123,24 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function compareAlpha(a, b) {
+  return String(a || '').localeCompare(String(b || ''), currentLocale(), {
+    sensitivity: 'base',
+    numeric: true,
+  });
+}
+
+function sortAlphabetically(items = [], resolver) {
+  return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
+    const leftValue = resolver ? resolver(left) : left;
+    const rightValue = resolver ? resolver(right) : right;
+    return compareAlpha(leftValue, rightValue);
+  });
+}
+
 function formatDate(value) {
   try {
-    return new Date(value).toLocaleString('pt-BR');
+    return new Date(value).toLocaleString(currentLocale());
   } catch {
     return '';
   }
@@ -116,9 +170,9 @@ function getPeriodGreeting() {
     hourCycle: 'h23',
   }).format(now));
 
-  if (brazilHour < 12) return 'Bom dia';
-  if (brazilHour < 18) return 'Boa tarde';
-  return 'Boa noite';
+  if (brazilHour < 12) return t('greetings.morning');
+  if (brazilHour < 18) return t('greetings.afternoon');
+  return t('greetings.evening');
 }
 
 function isDesktopSidebarViewport() {
@@ -168,8 +222,8 @@ function syncSidebarButtons() {
   const isDesktop = isDesktopSidebarViewport();
   const expanded = isDesktop ? desktopExpanded : mobileOpen;
   const label = isDesktop
-    ? (expanded ? 'Recolher menu lateral' : 'Expandir menu lateral')
-    : (expanded ? 'Fechar menu lateral' : 'Abrir menu lateral');
+    ? (expanded ? t('common.collapseMenu') : t('common.expandMenu'))
+    : (expanded ? t('common.closeMenu') : t('common.openMenu'));
 
   ['btnIntranetMenu', 'btnSidebarCollapse'].forEach((id) => {
     const button = el(id);
@@ -178,6 +232,176 @@ function syncSidebarButtons() {
     button.setAttribute('aria-label', label);
     button.title = label;
   });
+}
+
+function renderIntranetChrome() {
+  document.title = t('intranet.title');
+  const brandTitle = el('intranetBrandTitle');
+  if (brandTitle) brandTitle.textContent = t('intranet.title');
+  const brandSub = el('intranetBrandSub');
+  if (brandSub) brandSub.textContent = t('intranet.brandSub');
+  const topbarEyebrow = el('intranetTopbarEyebrow');
+  if (topbarEyebrow) topbarEyebrow.textContent = t('intranet.eyebrow');
+  const heroBadge = el('intranetHeroBadge');
+  if (heroBadge) heroBadge.textContent = t('intranet.heroBadge');
+  const overviewEyebrow = el('homeOverviewEyebrow');
+  if (overviewEyebrow) overviewEyebrow.textContent = t('intranet.overviewEyebrow');
+  const overviewTitle = el('homeOverviewTitle');
+  if (overviewTitle) overviewTitle.textContent = t('intranet.overviewTitle');
+  const communicationEyebrow = el('homeCommunicationEyebrow');
+  if (communicationEyebrow) communicationEyebrow.textContent = t('intranet.communicationEyebrow');
+  const communicationTitle = el('homeCommunicationTitle');
+  if (communicationTitle) communicationTitle.textContent = t('intranet.communicationTitle');
+  const quickEyebrow = el('homeQuickEyebrow');
+  if (quickEyebrow) quickEyebrow.textContent = t('intranet.quickEyebrow');
+  const quickTitle = el('homeQuickTitle');
+  if (quickTitle) quickTitle.textContent = t('intranet.quickTitle');
+  const sidebarDepartmentsTitle = el('intranetSidebarDepartmentsTitle');
+  if (sidebarDepartmentsTitle) sidebarDepartmentsTitle.textContent = t('intranet.sidebarDepartments');
+  const sidebarRemindersTitle = el('intranetSidebarRemindersTitle');
+  if (sidebarRemindersTitle) sidebarRemindersTitle.textContent = t('intranet.sidebarReminders');
+  document.querySelectorAll('.intranet-back-btn, .intranet-topbar-actions .btn[href="/index.html"]').forEach((node) => {
+    node.textContent = t('common.backToChat');
+  });
+  const newEventBtn = el('btnNewCalendarEvent');
+  if (newEventBtn) newEventBtn.textContent = t('calendar.newEvent');
+  const prevBtn = el('btnCalendarPrev');
+  if (prevBtn) prevBtn.textContent = t('calendar.previous');
+  const todayBtn = el('btnCalendarToday');
+  if (todayBtn) todayBtn.textContent = t('calendar.today');
+  const nextBtn = el('btnCalendarNext');
+  if (nextBtn) nextBtn.textContent = t('calendar.next');
+  const rangeLabel = el('calendarRangeLabel');
+  if (rangeLabel && !calendarState.range) rangeLabel.textContent = t('common.loading');
+  document.querySelectorAll('#calendarViewSwitch [data-view]').forEach((button) => {
+    const view = button.getAttribute('data-view');
+    button.textContent = t(`calendar.${view}`, {}, button.textContent || view);
+  });
+  const statusFilter = el('calendarStatusFilter');
+  if (statusFilter) {
+    const allOption = statusFilter.querySelector('option[value=""]');
+    const scheduled = statusFilter.querySelector('option[value="scheduled"]');
+    const cancelled = statusFilter.querySelector('option[value="cancelled"]');
+    if (allOption) allOption.textContent = t('common.all');
+    if (scheduled) scheduled.textContent = t('calendar.statusLabel.scheduled');
+    if (cancelled) cancelled.textContent = t('calendar.statusLabel.cancelled');
+  }
+  const meetingMode = el('calendarMeetingMode');
+  if (meetingMode) {
+    const online = meetingMode.querySelector('option[value="online"]');
+    const presencial = meetingMode.querySelector('option[value="presencial"]');
+    const hibrida = meetingMode.querySelector('option[value="hibrida"]');
+    if (online) online.textContent = t('calendar.modeLabel.online');
+    if (presencial) presencial.textContent = t('calendar.modeLabel.presencial');
+    if (hibrida) hibrida.textContent = t('calendar.modeLabel.hibrida');
+  }
+  const fieldMap = [
+    ['label[for="calendarUserFilter"]', t('calendar.user')],
+    ['label[for="calendarTypeFilter"]', t('calendar.type')],
+    ['label[for="calendarModeFilter"]', t('calendar.mode')],
+    ['label[for="calendarStatusFilter"]', t('calendar.status')],
+    ['label[for="calendarSearchInput"]', t('calendar.search')],
+    ['label[for="calendarTitle"]', t('calendar.title')],
+    ['label[for="calendarDescription"]', t('calendar.description')],
+    ['label[for="calendarEventType"]', t('calendar.eventType')],
+    ['label[for="calendarMeetingMode"]', t('calendar.meetingMode')],
+    ['label[for="calendarStartDate"]', t('calendar.startDate')],
+    ['label[for="calendarStartTime"]', t('calendar.startTime')],
+    ['label[for="calendarEndDate"]', t('calendar.endDate')],
+    ['label[for="calendarEndTime"]', t('calendar.endTime')],
+    ['label[for="calendarLocation"]', t('calendar.location')],
+    ['label[for="calendarMeetingLink"]', t('calendar.meetingLink')],
+    ['label[for="calendarNotes"]', t('calendar.notes')],
+  ];
+  fieldMap.forEach(([selector, text]) => {
+    const node = document.querySelector(selector);
+    if (node) node.textContent = text;
+  });
+  const search = el('calendarSearchInput');
+  if (search) search.placeholder = t('calendar.searchPlaceholder');
+  const calendarTitle = el('calendarTitle');
+  if (calendarTitle) calendarTitle.placeholder = t('calendar.defaultEventTitle');
+  const calendarDescription = el('calendarDescription');
+  if (calendarDescription) calendarDescription.placeholder = t('calendar.description');
+  const calendarLocation = el('calendarLocation');
+  if (calendarLocation) calendarLocation.placeholder = t('calendar.location');
+  const calendarMeetingLink = el('calendarMeetingLink');
+  if (calendarMeetingLink) calendarMeetingLink.placeholder = 'https://...';
+  const calendarNotes = el('calendarNotes');
+  if (calendarNotes) calendarNotes.placeholder = t('calendar.notes');
+  const detailsEyebrow = document.querySelector('#calendar .intranet-sales-detail-head .intranet-section-eyebrow');
+  if (detailsEyebrow) detailsEyebrow.textContent = t('calendar.detailsEyebrow', {}, 'Detalhes do compromisso');
+  const allDayStrong = document.querySelector('#calendar .admin-check-row strong');
+  const allDaySmall = document.querySelector('#calendar .admin-check-row small');
+  if (allDayStrong) allDayStrong.textContent = t('calendar.allDay');
+  if (allDaySmall) allDaySmall.textContent = t('calendar.allDayHint');
+  const participantLabel = document.querySelector('#calendarParticipants')?.parentElement?.querySelector('label:not([for])');
+  const participantHint = document.querySelector('#calendarParticipants')?.parentElement?.querySelector('.small.muted');
+  if (participantLabel) participantLabel.textContent = t('calendar.participants');
+  if (participantHint) participantHint.textContent = t('calendar.participantsHint', {}, 'Selecione uma ou mais pessoas. O compromisso aparecerá na agenda de todos os participantes.');
+  const resetBtn = el('btnCalendarReset');
+  if (resetBtn) resetBtn.textContent = t('calendar.reset');
+  const cancelBtn = el('btnCalendarCancelEvent');
+  if (cancelBtn) cancelBtn.textContent = t('calendar.cancelEvent');
+  const saveBtn = el('btnCalendarSave');
+  if (saveBtn) saveBtn.textContent = t('calendar.save');
+  const communicationTitleLabel = document.querySelector('label[for="communicationTitle"]');
+  const communicationSummaryLabel = document.querySelector('label[for="communicationSummary"]');
+  const communicationContentLabel = document.querySelector('label[for="communicationContent"]');
+  const communicationTypeLabel = document.querySelector('label[for="communicationType"]');
+  const communicationPriorityLabel = document.querySelector('label[for="communicationPriority"]');
+  const communicationAudienceLabel = document.querySelector('label[for="communicationAudienceScope"]');
+  const communicationStartsAtLabel = document.querySelector('label[for="communicationStartsAt"]');
+  const communicationEndsAtLabel = document.querySelector('label[for="communicationEndsAt"]');
+  if (communicationTitleLabel) communicationTitleLabel.textContent = t('intranet.communication.fields.title', {}, 'Titulo');
+  if (communicationSummaryLabel) communicationSummaryLabel.textContent = t('intranet.communication.fields.summary', {}, 'Resumo');
+  if (communicationContentLabel) communicationContentLabel.textContent = t('intranet.communication.fields.content', {}, 'Conteudo completo');
+  if (communicationTypeLabel) communicationTypeLabel.textContent = t('intranet.communication.fields.type', {}, 'Tipo');
+  if (communicationPriorityLabel) communicationPriorityLabel.textContent = t('intranet.communication.fields.priority', {}, 'Prioridade');
+  if (communicationAudienceLabel) communicationAudienceLabel.textContent = t('intranet.communication.fields.audience', {}, 'Publico');
+  if (communicationStartsAtLabel) communicationStartsAtLabel.textContent = t('intranet.communication.fields.startsAt', {}, 'Inicio (opcional)');
+  if (communicationEndsAtLabel) communicationEndsAtLabel.textContent = t('intranet.communication.fields.endsAt', {}, 'Fim (opcional)');
+  const communicationTitleInput = el('communicationTitle');
+  const communicationSummaryInput = el('communicationSummary');
+  const communicationContentInput = el('communicationContent');
+  if (communicationTitleInput) communicationTitleInput.placeholder = t('intranet.communication.placeholders.title', {}, 'Ex.: Treinamento interno desta semana');
+  if (communicationSummaryInput) communicationSummaryInput.placeholder = t('intranet.communication.placeholders.summary', {}, 'Texto curto para a Home e notificacoes');
+  if (communicationContentInput) communicationContentInput.placeholder = t('intranet.communication.placeholders.content', {}, 'Texto principal do comunicado');
+  const communicationDepartmentsLabel = document.querySelector('#communicationDepartmentsWrap > label');
+  const communicationDepartmentsHint = document.querySelector('#communicationDepartmentsWrap .small.muted');
+  if (communicationDepartmentsLabel) communicationDepartmentsLabel.textContent = t('intranet.communication.fields.departments', {}, 'Departamentos do comunicado');
+  if (communicationDepartmentsHint) communicationDepartmentsHint.textContent = t('intranet.communication.segmentedDepartmentsHint', {}, 'Use quando o publico for segmentado por departamento.');
+  const communicationActiveStrong = document.querySelector('#communicationIsActive')?.closest('.admin-check-row')?.querySelector('strong');
+  const communicationActiveSmall = document.querySelector('#communicationIsActive')?.closest('.admin-check-row')?.querySelector('small');
+  if (communicationActiveStrong) communicationActiveStrong.textContent = t('intranet.communication.activeTitle', {}, 'Comunicado ativo');
+  if (communicationActiveSmall) communicationActiveSmall.textContent = t('intranet.communication.activeHint', {}, 'Comunicados ativos aparecem na Home, na area de comunicacao e nas notificacoes internas.');
+  const cancelCommunicationBtn = el('btnCancelCommunicationEdit');
+  if (cancelCommunicationBtn) cancelCommunicationBtn.textContent = t('common.cancel');
+  const publishedTitle = document.querySelector('#communicationManageList')?.previousElementSibling;
+  if (publishedTitle && publishedTitle.classList.contains('intranet-block-title')) {
+    publishedTitle.textContent = t('intranet.communication.publishedTitle', {}, 'Comunicados publicados');
+  }
+  const staticSectionMap = [
+    ['#dashboard .intranet-section-eyebrow', t('intranet.routes.dashboardEyebrow', {}, 'BI')],
+    ['#dashboard .intranet-section-title', t('intranet.routes.dashboardTitle', {}, 'Dashboard / BI')],
+    ['#modules .intranet-section-eyebrow', t('intranet.routes.modulesEyebrow', {}, 'Workspace')],
+    ['#modules .intranet-section-title', t('intranet.routes.modulesTitle', {}, 'Modulos')],
+    ['#calendar .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.calendarEyebrow', {}, 'Calendario corporativo')],
+    ['#calendar .intranet-section-head .intranet-section-title', t('intranet.nav.calendar')],
+    ['#departments .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.departmentsEyebrow', {}, 'Areas de trabalho')],
+    ['#departments .intranet-section-head .intranet-section-title', t('intranet.routes.departmentsTitle', {}, 'Departamentos')],
+    ['#documents .intranet-section-eyebrow', t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento')],
+    ['#documents .intranet-section-title', t('intranet.routes.documentsTitle', {}, 'Documentos')],
+    ['#training .intranet-section-eyebrow', t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestao')],
+    ['#training .intranet-section-title', t('intranet.routes.trainingTitle', {}, 'Treinamento IA')],
+    ['#communication .intranet-section-eyebrow', t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados')],
+    ['#communication .intranet-section-title', t('intranet.routes.communicationTitle', {}, 'Comunicacao')],
+  ];
+  staticSectionMap.forEach(([selector, text]) => {
+    const node = document.querySelector(selector);
+    if (node) node.textContent = text;
+  });
+  syncSidebarButtons();
 }
 
 function toggleSidebar() {
@@ -238,14 +462,14 @@ function writeExpandedDepartmentPreference() {
 }
 
 function getVisibleDepartments(intranet) {
-  return Array.isArray(intranet?.departments) ? intranet.departments : [];
+  return sortAlphabetically(intranet?.departments || [], (item) => item?.name || item?.slug || '');
 }
 
 function getGlobalNavigationItems(intranet) {
   const items = [
-    { key: 'home', label: 'Home', icon: 'workspace' },
-    { key: 'calendar', label: 'Agenda', icon: 'calendar' },
-    { key: 'sales', label: 'Painel comercial', icon: 'target', hidden: !Boolean(salesState?.enabled) },
+    { key: 'home', label: t('intranet.nav.home'), icon: 'workspace' },
+    { key: 'calendar', label: t('intranet.nav.calendar'), icon: 'calendar' },
+    { key: 'sales', label: t('intranet.nav.sales'), icon: 'target', hidden: !Boolean(salesState?.enabled) },
   ];
   return items.filter((item) => !item.hidden);
 }
@@ -266,18 +490,18 @@ function getRouteMeta(route = {}, intranet) {
   }
 
   const map = {
-    home: { title: 'Home', eyebrow: 'Painel institucional' },
-    dashboard: { title: 'Dashboard / BI', eyebrow: 'Indicadores' },
-    modules: { title: 'Modulos', eyebrow: 'Fluxos e ferramentas' },
-    calendar: { title: 'Agenda', eyebrow: 'Calendario corporativo' },
-    departments: { title: 'Departamentos', eyebrow: 'Areas de trabalho' },
-    documents: { title: 'Documentos', eyebrow: 'Base de conhecimento' },
-    training: { title: 'Treinamento IA', eyebrow: 'Aprendizado e ingestao' },
-    communication: { title: 'Comunicacao', eyebrow: 'Avisos e comunicados' },
-    sales: { title: 'Painel comercial', eyebrow: 'Operacao comercial' },
+    home: { title: t('intranet.nav.home'), eyebrow: t('intranet.eyebrow') },
+    dashboard: { title: t('intranet.routes.dashboardTitle', {}, 'Dashboard / BI'), eyebrow: t('intranet.routes.dashboardEyebrow', {}, 'BI') },
+    modules: { title: t('intranet.routes.modulesTitle', {}, 'Modulos'), eyebrow: t('intranet.routes.modulesEyebrow', {}, 'Workspace') },
+    calendar: { title: t('intranet.nav.calendar'), eyebrow: t('intranet.routes.calendarEyebrow', {}, 'Calendario corporativo') },
+    departments: { title: t('intranet.routes.departmentsTitle', {}, 'Departamentos'), eyebrow: t('intranet.routes.departmentsEyebrow', {}, 'Areas de trabalho') },
+    documents: { title: t('intranet.routes.documentsTitle', {}, 'Documentos'), eyebrow: t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento') },
+    training: { title: t('intranet.routes.trainingTitle', {}, 'Treinamento IA'), eyebrow: t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestao') },
+    communication: { title: t('intranet.routes.communicationTitle', {}, 'Comunicacao'), eyebrow: t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados') },
+    sales: { title: t('intranet.nav.sales'), eyebrow: t('intranet.routes.salesEyebrow', {}, 'Operacao comercial') },
   };
 
-  return map[route.key] || { title: 'Intranet Talkers', eyebrow: 'Workspace corporativo' };
+  return map[route.key] || { title: t('intranet.title'), eyebrow: t('intranet.eyebrow') };
 }
 
 function normalizeViewState(route = {}, intranet) {
@@ -289,7 +513,7 @@ function normalizeViewState(route = {}, intranet) {
   };
 
   const globalKeys = new Set(getGlobalNavigationItems(intranet).map((item) => item.key));
-  const internalKeys = new Set(['departments']);
+  const internalKeys = new Set();
   if (normalized.key === 'department') {
     const department = visibleDepartments.find((item) => item.slug === normalized.departmentSlug);
     if (!department) return { key: 'home', departmentSlug: '', submenuSlug: '' };
@@ -442,18 +666,18 @@ function renderSidebarUtility(intranet) {
   const items = [
     ...notifications.slice(0, 3).map((item) => ({
       type: item.type || 'notification',
-      title: item.title || 'Atualizacao',
+      title: item.title || t('intranet.generic.update', {}, 'Atualizacao'),
       description: item.description || '',
     })),
     ...upcoming.slice(0, 3).map((item) => ({
       type: 'event',
-      title: item.title || 'Compromisso',
-      description: `${formatDate(item.start_at || item.start_date || '')}${item.meeting_mode_label ? ` - ${item.meeting_mode_label}` : ''}`,
+      title: item.title || t('calendar.defaultEventTitle', {}, 'Compromisso'),
+      description: `${formatDate(item.start_at || item.start_date || '')}${item.meeting_mode ? ` - ${getCalendarModeLabel(item.meeting_mode)}` : item.meeting_mode_label ? ` - ${item.meeting_mode_label}` : ''}`,
     })),
   ].slice(0, 5);
 
   if (!items.length) {
-    feed.innerHTML = '<div class="small muted">Nenhum lembrete, reuniao ou aviso rapido no momento.</div>';
+    feed.innerHTML = `<div class="small muted">${escapeHtml(t('intranet.sidebarUtilityEmpty', {}, 'Nenhum lembrete próximo no momento.'))}</div>`;
     return;
   }
 
@@ -464,7 +688,7 @@ function renderSidebarUtility(intranet) {
     button.innerHTML = `
       <span class="intranet-nav-link-icon">${renderIcon(item.type === 'event' ? 'calendar' : item.type === 'announcement' ? 'megaphone' : 'general')}</span>
       <span class="intranet-side-link-copy">
-        <strong>${escapeHtml(item.title || 'Atualizacao')}</strong>
+        <strong>${escapeHtml(item.title || t('intranet.generic.update', {}, 'Atualizacao'))}</strong>
         <small>${escapeHtml(item.description || '')}</small>
       </span>
     `;
@@ -482,8 +706,8 @@ function renderSidebarUtility(intranet) {
 function renderSidebar(user, intranet) {
   const visibleDepartments = getVisibleDepartments(intranet);
   el('intranetBrandSub').textContent = user.role === 'admin'
-    ? 'Acesso administrativo total'
-    : `${visibleDepartments.length} area(s) liberada(s) - ${user.email || ''}`;
+    ? t('intranet.brandSubAdminAccess', {}, 'Acesso administrativo total')
+    : t('intranet.brandSubUserAccess', { count: visibleDepartments.length, email: user.email || '' }, `${visibleDepartments.length} area(s) liberada(s) - ${user.email || ''}`);
 
   const primaryNav = el('intranetPrimaryNav');
   primaryNav.innerHTML = '';
@@ -503,25 +727,25 @@ function renderSidebar(user, intranet) {
   const departmentNav = el('intranetDepartmentNav');
   departmentNav.innerHTML = '';
   if (!visibleDepartments.length) {
-    departmentNav.innerHTML = '<div class="small muted">Nenhum departamento setorial liberado para este usuario.</div>';
+    departmentNav.innerHTML = `<div class="small muted">${escapeHtml(t('intranet.sidebarNoDepartment', {}, 'Nenhum departamento setorial liberado para este usuario.'))}</div>`;
   } else {
     visibleDepartments.forEach((department) => {
       const group = document.createElement('div');
       group.className = 'intranet-department-group';
       group.setAttribute('data-department-slug', department.slug || '');
-      const submenus = Array.isArray(department.submenus) ? department.submenus : [];
+      const submenus = sortAlphabetically(department.submenus || [], (item) => item?.title || item?.slug || '');
 
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'intranet-department-toggle';
       toggle.innerHTML = `
-        <span class="intranet-nav-link-icon">${renderIcon(department.icon || 'layers')}</span>
-        <span class="intranet-department-toggle-copy">
-          <strong>${escapeHtml(department.name || 'Departamento')}</strong>
-          <small>${submenus.length ? `${submenus.length} submenu(s)` : 'Area principal'}</small>
-        </span>
-        <span class="intranet-department-chevron">${renderIcon('chevron')}</span>
-      `;
+          <span class="intranet-nav-link-icon">${renderIcon(department.icon || 'layers')}</span>
+          <span class="intranet-department-toggle-copy">
+          <strong>${escapeHtml(department.name || t('intranet.departmentDefaultName', {}, 'Departamento'))}</strong>
+          <small>${submenus.length ? t('intranet.departmentSubmenusCount', { count: submenus.length }, `${submenus.length} submenu(s)`) : t('intranet.departmentMainArea', {}, 'Area principal')}</small>
+          </span>
+          <span class="intranet-department-chevron">${renderIcon('chevron')}</span>
+        `;
       toggle.onclick = () => {
         const slug = department.slug || '';
         const isExpanded = expandedDepartmentSlugs.has(slug);
@@ -529,7 +753,7 @@ function renderSidebar(user, intranet) {
 
         if (isExpanded && isCurrentDepartment) {
           toggleDepartmentExpanded(slug, false);
-          setActiveView('departments');
+          setActiveView('home');
           return;
         }
 
@@ -551,7 +775,7 @@ function renderSidebar(user, intranet) {
             <span class="intranet-nav-link-icon">${renderIcon(submenu.icon || department.icon || 'layers')}</span>
             <span class="intranet-side-link-copy">
               <strong>${escapeHtml(submenu.title || 'Submenu')}</strong>
-              <small>${escapeHtml(submenu.description || 'Fluxo interno do departamento')}</small>
+              <small>${escapeHtml(submenu.description || t('intranet.departmentDefaultFlow', {}, 'Fluxo interno do departamento'))}</small>
             </span>
           `;
           button.onclick = () => {
@@ -579,20 +803,20 @@ function renderHomeOverview(user, intranet) {
     const overviewCards = [
       {
         title: `${getPeriodGreeting()}, ${user.name}`,
-        description: 'Esta e a entrada principal da intranet, com contexto institucional, agenda e comunicacao interna.',
-        badge: user.role === 'admin' ? 'Admin' : 'Perfil ativo',
+        description: t('intranet.home.greetingCardDescription'),
+        badge: user.role === 'admin' ? t('intranet.home.greetingBadgeAdmin') : t('intranet.home.greetingBadgeUser'),
       },
       ...(updates || []).slice(0, 4).map((item) => ({
-        title: item.title || 'Atualizacao',
+        title: item.title || t('intranet.generic.update', {}, 'Atualizacao'),
         description: item.description || '',
-        badge: item.label || 'Resumo',
+        badge: item.label || t('intranet.generic.summary', {}, 'Resumo'),
       })),
       {
-        title: 'Proximas reunioes',
+        title: t('intranet.home.nextMeetings'),
         description: intranet.home?.upcoming_events?.[0]
           ? `${intranet.home.upcoming_events[0].title} - ${formatDate(intranet.home.upcoming_events[0].start_at || intranet.home.upcoming_events[0].start_date)}`
-          : 'Nenhuma reuniao agendada para os proximos dias.',
-        badge: `${Number((intranet.home?.upcoming_events || []).length || 0)} evento(s)`,
+          : t('intranet.home.noMeetings'),
+        badge: t('intranet.home.meetingsBadge', { count: Number((intranet.home?.upcoming_events || []).length || 0) }),
       },
     ];
 
@@ -610,17 +834,17 @@ function renderHomeOverview(user, intranet) {
     if (!directionItems.length) {
       directionGrid.innerHTML = `
         <article class="intranet-direction-card is-empty">
-          <div class="intranet-card-meta">Direcao</div>
-          <h4>Nenhum comunicado institucional em destaque</h4>
-          <p>Quando a Direcao ou setores autorizados publicarem comunicados prioritarios, eles aparecerao aqui.</p>
+          <div class="intranet-card-meta">${escapeHtml(t('intranet.direction.origin'))}</div>
+          <h4>${escapeHtml(t('intranet.direction.emptyTitle'))}</h4>
+          <p>${escapeHtml(t('intranet.direction.emptyBody'))}</p>
         </article>
       `;
     } else {
       directionGrid.innerHTML = directionItems.map((item) => `
         <article class="intranet-direction-card${item.is_direction_highlight ? ' is-direction' : ''}">
-          <div class="intranet-direction-pill">${escapeHtml(item.origin_label || 'Direcao')}</div>
-          <div class="intranet-card-meta">${escapeHtml(item.type || 'Comunicado')} - ${escapeHtml(item.priority || 'normal')}</div>
-          <h4>${escapeHtml(item.title || 'Comunicado institucional')}</h4>
+          <div class="intranet-direction-pill">${escapeHtml(item.origin_label || t('intranet.direction.origin'))}</div>
+          <div class="intranet-card-meta">${escapeHtml(item.type || t('intranet.generic.announcement', {}, 'Comunicado'))} - ${escapeHtml(item.priority || 'normal')}</div>
+          <h4>${escapeHtml(item.title || t('intranet.direction.fallbackTitle', {}, 'Comunicado institucional'))}</h4>
           <p>${escapeHtml(item.summary || '')}</p>
           <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
         </article>
@@ -633,12 +857,12 @@ function renderHomeOverview(user, intranet) {
     const directionIds = new Set((Array.isArray(intranet.home?.direction_board) ? intranet.home.direction_board : []).map((item) => Number(item.id || 0)));
     const visibleAnnouncements = announcements.filter((item) => !directionIds.has(Number(item.id || 0)));
     if (!visibleAnnouncements.length) {
-      communicationGrid.innerHTML = '<div class="intranet-empty-card">Nenhum comunicado ativo no mural neste momento.</div>';
+      communicationGrid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.communication.emptyTitle'))}</div>`;
     } else {
       communicationGrid.innerHTML = visibleAnnouncements.map((item) => `
         <article class="intranet-communication-card">
-          <div class="intranet-card-meta">${escapeHtml(item.origin_label || 'Comunicado interno')} - ${escapeHtml(item.priority || 'normal')}</div>
-          <h4>${escapeHtml(item.title || 'Comunicado')}</h4>
+          <div class="intranet-card-meta">${escapeHtml(item.origin_label || t('intranet.communication.defaultOrigin', {}, 'Comunicado interno'))} - ${escapeHtml(item.priority || 'normal')}</div>
+          <h4>${escapeHtml(item.title || t('intranet.generic.announcement', {}, 'Comunicado'))}</h4>
           <p>${escapeHtml(item.summary || '')}</p>
           <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
         </article>
@@ -649,8 +873,8 @@ function renderHomeOverview(user, intranet) {
 
 function renderHero(user, intranet) {
   el('intranetGreeting').textContent = `${getPeriodGreeting()}, ${user.name}`;
-  el('heroTitle').textContent = intranet.home.heroTitle;
-  el('heroDescription').textContent = intranet.home.heroDescription;
+  el('heroTitle').textContent = t('intranet.heroTitle', {}, intranet.home.heroTitle);
+  el('heroDescription').textContent = t('intranet.heroDescription', {}, intranet.home.heroDescription);
 
   const highlights = el('heroHighlights');
   highlights.innerHTML = '';
@@ -718,7 +942,7 @@ function renderModules(intranet, query = '') {
   });
 
   if (!modules.length) {
-    grid.innerHTML = '<div class="intranet-empty-card">Nenhum modulo encontrado para este filtro.</div>';
+    grid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.modules.empty', {}, 'Nenhum modulo encontrado para este filtro.'))}</div>`;
     return;
   }
 
@@ -735,11 +959,11 @@ function renderModules(intranet, query = '') {
     card.innerHTML = `
       <div class="intranet-module-top">
         <span class="intranet-module-icon">${renderIcon(moduleIcon)}</span>
-        <span class="intranet-chip">${escapeHtml(module.department || 'Geral')}</span>
+        <span class="intranet-chip">${escapeHtml(module.department || t('intranet.generic.general', {}, 'Geral'))}</span>
       </div>
       <h4>${escapeHtml(module.title)}</h4>
       <p>${escapeHtml(module.description || '')}</p>
-      <div class="intranet-module-type">${escapeHtml(module.type || 'workspace')}</div>
+      <div class="intranet-module-type">${escapeHtml(module.type || t('intranet.generic.workspace', {}, 'workspace'))}</div>
     `;
     grid.appendChild(card);
   });
@@ -750,16 +974,17 @@ function renderDepartments(intranet) {
   const reminderGrid = el('departmentReminderGrid');
   grid.innerHTML = '';
   if (reminderGrid) reminderGrid.innerHTML = '';
+  const visibleDepartments = getVisibleDepartments(intranet);
 
-  if (!Array.isArray(intranet.departments) || !intranet.departments.length) {
-    grid.innerHTML = '<div class="intranet-empty-card">Nenhum departamento especifico foi liberado para este perfil.</div>';
+  if (!visibleDepartments.length) {
+    grid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.departments.empty', {}, 'Nenhum departamento especifico foi liberado para este perfil.'))}</div>`;
     if (reminderGrid) {
-      reminderGrid.innerHTML = '<div class="intranet-empty-card">Sem lembretes operacionais para este perfil no momento.</div>';
+      reminderGrid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.departments.reminderEmpty', {}, 'Sem lembretes operacionais para este perfil no momento.'))}</div>`;
     }
     return;
   }
 
-  (intranet.departments || []).forEach((department) => {
+  visibleDepartments.forEach((department) => {
     const card = document.createElement('article');
     card.className = 'intranet-department-card';
     const modules = (department.modules || []).map((module) => `<li>${escapeHtml(module.title)}<span>${escapeHtml(module.description || '')}</span></li>`).join('');
@@ -768,7 +993,7 @@ function renderDepartments(intranet) {
         <div class="intranet-department-icon">${renderIcon(department.icon || 'layers')}</div>
         <div>
           <h4>${escapeHtml(department.name)}</h4>
-          <div class="small muted">Nivel atual: ${escapeHtml(department.access_level || 'colaborador')}</div>
+          <div class="small muted">${escapeHtml(t('intranet.departments.currentLevel', { level: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador') }, `Nivel atual: ${department.access_level || 'colaborador'}`))}</div>
         </div>
       </div>
       <p>${escapeHtml(department.description || '')}</p>
@@ -819,6 +1044,232 @@ function renderDepartments(intranet) {
   }
 }
 
+function formatDateOnly(value) {
+  const safe = String(value || '').trim();
+  if (!safe) return '-';
+  try {
+    return new Date(`${safe}T12:00:00-03:00`).toLocaleDateString(currentLocale(), {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'America/Sao_Paulo',
+    });
+  } catch {
+    return safe;
+  }
+}
+
+function formatDateRangeLabel(from = '', to = '') {
+  if (!from && !to) return t('intranet.generic.periodUndefined', {}, 'Periodo nao definido');
+  if (from && to && from !== to) {
+    return `${formatDateOnly(from)} - ${formatDateOnly(to)}`;
+  }
+  return formatDateOnly(from || to || '');
+}
+
+function formatInteger(value) {
+  return new Intl.NumberFormat(currentLocale()).format(Number(value || 0));
+}
+
+function formatCompactInteger(value) {
+  const safe = Number(value || 0);
+  if (!safe) return '0';
+  return new Intl.NumberFormat(currentLocale(), {
+    notation: safe >= 1000 ? 'compact' : 'standard',
+    maximumFractionDigits: safe >= 1000 ? 1 : 0,
+  }).format(safe);
+}
+
+function formatInfluenceTypesList(items = []) {
+  const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  return safeItems.length ? safeItems.join(', ') : t('intranet.generic.notInformed', {}, 'Nao informado');
+}
+
+function getInfluencerInitials(name = '') {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'MK';
+  return parts.slice(0, 2).map((item) => item.charAt(0).toUpperCase()).join('');
+}
+
+function getMarketingPeriodOptions() {
+  return [
+    { value: 'day', label: t('calendar.day') },
+    { value: 'week', label: t('calendar.week') },
+    { value: 'month', label: t('calendar.month') },
+  ];
+}
+
+function getMarketingStatusLabel(status = '') {
+  const safe = String(status || '').trim().toLowerCase();
+  const map = {
+    ativo: 'Ativo',
+    em_teste: 'Em teste',
+    'em teste': 'Em teste',
+    pausado: 'Pausado',
+    encerrado: 'Encerrado',
+  };
+  return map[safe] || (safe ? safe.charAt(0).toUpperCase() + safe.slice(1) : 'Ativo');
+}
+
+function getMarketingInfluencerPeriodFilters() {
+  return {
+    periodType: String(influencerState.filters?.periodType || 'month'),
+    from: String(influencerState.filters?.from || ''),
+    to: String(influencerState.filters?.to || ''),
+  };
+}
+
+function setMarketingInfluencerFilters(filters = {}, options = {}) {
+  influencerState.filters = {
+    periodType: String(filters.periodType || filters.period_type || influencerState.filters?.periodType || 'month'),
+    from: String(filters.from || ''),
+    to: String(filters.to || ''),
+  };
+
+  if (options.syncAnalysis !== false) {
+    influencerState.analysis.periodType = influencerState.filters.periodType;
+  }
+}
+
+function applyMarketingInfluencerFilterValues(period = {}) {
+  const periodType = String(period.period_type || influencerState.filters?.periodType || 'month');
+  const from = String(period.from || influencerState.filters?.from || '');
+  const to = String(period.to || influencerState.filters?.to || '');
+  const filterType = el('influencerFilterPeriodType');
+  const filterFrom = el('influencerFilterFrom');
+  const filterTo = el('influencerFilterTo');
+  const analysisType = el('influencerAnalysisPeriodType');
+  const analysisFrom = el('influencerAnalysisFrom');
+  const analysisTo = el('influencerAnalysisTo');
+
+  if (filterType) filterType.value = periodType;
+  if (filterFrom) filterFrom.value = from;
+  if (filterTo) filterTo.value = to;
+  if (analysisType) analysisType.value = influencerState.analysis.periodType || periodType;
+  if (analysisFrom) analysisFrom.value = from;
+  if (analysisTo) analysisTo.value = to;
+}
+
+function buildMarketingInfluencerQueryString(filters = influencerState.filters) {
+  const params = new URLSearchParams();
+  const periodType = String(filters?.periodType || filters?.period_type || 'month');
+  params.set('period_type', periodType);
+  if (filters?.from) params.set('from', String(filters.from));
+  if (filters?.to) params.set('to', String(filters.to));
+  return params.toString();
+}
+
+function getMarketingInfluencerCards() {
+  return Array.isArray(influencerState.bootstrap?.influencers) ? influencerState.bootstrap.influencers : [];
+}
+
+function getSelectedMarketingInfluencerCard() {
+  return getMarketingInfluencerCards().find((item) => Number(item.id) === Number(influencerState.selectedInfluencerId || 0)) || null;
+}
+
+function resetInfluencerForm() {
+  influencerState.editingId = null;
+  influencerState.formDraft = null;
+  const form = el('influencerForm');
+  if (!form) return;
+  form.reset();
+  const influencerId = el('influencerId');
+  if (influencerId) influencerId.value = '';
+  const formTitle = el('influencerFormTitle');
+  if (formTitle) formTitle.textContent = 'Cadastrar influencer';
+  const submitLabel = el('btnSaveInfluencerLabel');
+  if (submitLabel) submitLabel.textContent = 'Cadastrar';
+}
+
+function populateInfluencerForm(influencer = null) {
+  if (!influencer) {
+    resetInfluencerForm();
+    return;
+  }
+
+  influencerState.editingId = Number(influencer.id || 0) || null;
+  influencerState.formDraft = {
+    id: influencer.id || '',
+    name: influencer.name || '',
+    influence_types: formatInfluenceTypesList(influencer.influence_types || []),
+    contract_type: influencer.contract_type || '',
+    photo_url: influencer.photo_url || '',
+    instagram_url: influencer.instagram_url || '',
+    followers_count: influencer.followers_count || 0,
+    partnership_start_date: influencer.partnership_start_date || '',
+    influencer_status: influencer.influencer_status || 'ativo',
+    notes: influencer.notes || '',
+  };
+  influencerState.formCollapsed = false;
+  renderMarketingInfluencerWorkspace();
+  window.setTimeout(() => {
+    el('influencerName')?.focus();
+  }, 30);
+}
+
+function renderInfluencerMetricBars(items = [], metricKey, label) {
+  const safeItems = [...(Array.isArray(items) ? items : [])]
+    .sort((left, right) => Number(right?.[metricKey] || 0) - Number(left?.[metricKey] || 0));
+  const maxValue = Math.max(...safeItems.map((item) => Number(item?.[metricKey] || 0)), 1);
+
+  return `
+    <article class="influencer-chart-card">
+      <div class="intranet-card-meta">Comparativo</div>
+      <h4>${escapeHtml(label)}</h4>
+      <div class="influencer-chart-list">
+        ${safeItems.length ? safeItems.map((item) => {
+          const value = Number(item?.[metricKey] || 0);
+          const width = Math.max((value / maxValue) * 100, value > 0 ? 8 : 0);
+          return `
+            <div class="influencer-chart-row">
+              <div class="influencer-chart-head">
+                <strong>${escapeHtml(item?.name || 'Influencer')}</strong>
+                <span>${escapeHtml(formatInteger(value))}</span>
+              </div>
+              <div class="influencer-chart-track">
+                <span style="width:${width}%"></span>
+              </div>
+            </div>
+          `;
+        }).join('') : '<div class="intranet-empty-card">Sem dados suficientes para este comparativo.</div>'}
+      </div>
+    </article>
+  `;
+}
+
+function renderInfluencerMonthlyComparison(monthly = []) {
+  const rows = Array.isArray(monthly) ? monthly.slice(-6) : [];
+  return `
+    <article class="influencer-chart-card influencer-chart-card-wide">
+      <div class="intranet-card-meta">Evolucao mensal</div>
+      <h4>Comparativo entre influencers por periodo</h4>
+      <div class="influencer-evolution-list">
+        ${rows.length ? rows.map((entry) => `
+          <div class="influencer-evolution-item">
+            <div class="influencer-evolution-head">
+              <strong>${escapeHtml(entry.label || entry.period_key || 'Periodo')}</strong>
+              <span>${escapeHtml(String((entry.influencers || []).length || 0))} influencer(s)</span>
+            </div>
+            <div class="influencer-evolution-grid">
+              ${(entry.influencers || []).sort((left, right) => Number(right?.enrollments_count || 0) - Number(left?.enrollments_count || 0)).map((item) => `
+                <div class="influencer-evolution-chip">
+                  <strong>${escapeHtml(item.name || 'Influencer')}</strong>
+                  <span>${escapeHtml(formatInteger(item.enrollments_count || 0))} matriculas</span>
+                  <small>${escapeHtml(formatInteger(item.performance_score || 0))} pts</small>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `).join('') : '<div class="intranet-empty-card">A evolucao mensal aparecera conforme os lancamentos forem sendo registrados.</div>'}
+      </div>
+    </article>
+  `;
+}
+
+function isMarketingInfluencerWorkspace(department, submenu) {
+  return String(department?.slug || '') === 'marketing' && String(submenu?.slug || '') === 'influencer';
+}
+
 function setDashboardSectionVisible(isVisible) {
   const section = el('dashboard');
   if (section) section.hidden = !isVisible;
@@ -826,26 +1277,29 @@ function setDashboardSectionVisible(isVisible) {
 
 function renderDepartmentWorkspace(intranet) {
   const section = el('departmentWorkspace');
+  const customWrap = el('departmentWorkspaceCustom');
+  const modulesHead = el('departmentWorkspaceModulesHead');
   if (!section) return;
 
   const { department, submenu } = getDepartmentRouteMeta(intranet, currentViewState.departmentSlug, currentViewState.submenuSlug);
   if (!department) {
     section.hidden = true;
+    if (customWrap) customWrap.hidden = true;
     return;
   }
 
   section.hidden = false;
-  el('departmentWorkspaceEyebrow').textContent = submenu ? department.name : 'Departamento';
-  el('departmentWorkspaceTitle').textContent = submenu?.title || department.name || 'Area departamental';
-  el('departmentWorkspaceDescription').textContent = submenu?.description || department.description || 'Area departamental da intranet.';
+  el('departmentWorkspaceEyebrow').textContent = submenu ? department.name : t('intranet.departmentDefaultName', {}, 'Departamento');
+  el('departmentWorkspaceTitle').textContent = submenu?.title || department.name || t('intranet.departmentWorkspaceTitle', {}, 'Area departamental');
+  el('departmentWorkspaceDescription').textContent = submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Area departamental da intranet.');
 
   const summary = el('departmentWorkspaceSummary');
   summary.innerHTML = '';
   const summaryCards = [
-    { title: 'Nivel atual', description: department.access_level || 'colaborador', badge: 'Permissao' },
-    { title: 'Submenus ativos', description: String((department.submenus || []).length || 0), badge: 'Fluxos' },
-    { title: 'Modulos liberados', description: String((department.modules || []).length || 0), badge: 'Recursos' },
-    { title: submenu ? 'Submenu ativo' : 'Area selecionada', description: submenu?.title || department.name, badge: submenu ? 'Detalhe' : 'Principal' },
+    { title: t('intranet.departmentSummary.currentLevel', {}, 'Nivel atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissao') },
+    { title: t('intranet.departmentSummary.activeSubmenus', {}, 'Submenus ativos'), description: String((department.submenus || []).length || 0), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
+    { title: t('intranet.departmentSummary.availableModules', {}, 'Modulos liberados'), description: String((department.modules || []).length || 0), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+    { title: submenu ? t('intranet.departmentSummary.activeSubmenu', {}, 'Submenu ativo') : t('intranet.departmentSummary.selectedArea', {}, 'Area selecionada'), description: submenu?.title || department.name, badge: submenu ? t('intranet.departmentSummary.detail', {}, 'Detalhe') : t('intranet.departmentSummary.main', {}, 'Principal') },
   ];
   summaryCards.forEach((item) => {
     const card = document.createElement('article');
@@ -860,9 +1314,9 @@ function renderDepartmentWorkspace(intranet) {
 
   const submenusWrap = el('departmentWorkspaceSubmenus');
   submenusWrap.innerHTML = '';
-  const submenus = Array.isArray(department.submenus) ? department.submenus : [];
+  const submenus = sortAlphabetically(department.submenus || [], (item) => item?.title || item?.slug || '');
   if (!submenus.length) {
-    submenusWrap.innerHTML = '<div class="intranet-empty-card">Nenhum submenu configurado para este departamento ainda.</div>';
+    submenusWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.departments.noSubmenus', {}, 'Nenhum submenu configurado para este departamento ainda.'))}</div>`;
   } else {
     submenus.forEach((item) => {
       const card = document.createElement('button');
@@ -870,7 +1324,7 @@ function renderDepartmentWorkspace(intranet) {
       card.className = `intranet-quick-card intranet-submenu-card${currentViewState.submenuSlug === item.slug ? ' is-active' : ''}`;
       card.innerHTML = `
         <div class="intranet-quick-title">${escapeHtml(item.title)}</div>
-        <div class="intranet-quick-text">${escapeHtml(item.description || 'Fluxo interno do departamento')}</div>
+        <div class="intranet-quick-text">${escapeHtml(item.description || t('intranet.departmentDefaultFlow', {}, 'Fluxo interno do departamento'))}</div>
       `;
       card.onclick = () => setActiveView('department', { departmentSlug: department.slug, submenuSlug: item.slug || '' });
       submenusWrap.appendChild(card);
@@ -879,9 +1333,25 @@ function renderDepartmentWorkspace(intranet) {
 
   const modulesWrap = el('departmentWorkspaceModules');
   modulesWrap.innerHTML = '';
-  const modules = Array.isArray(department.modules) ? department.modules : [];
+  const modules = sortAlphabetically(department.modules || [], (item) => item?.title || item?.key || '');
+  const isCustomWorkspace = isMarketingInfluencerWorkspace(department, submenu);
+  if (customWrap) customWrap.hidden = !isCustomWorkspace;
+  if (modulesHead) modulesHead.hidden = isCustomWorkspace;
+  modulesWrap.hidden = isCustomWorkspace;
+
+  if (isCustomWorkspace) {
+    renderMarketingInfluencerWorkspace();
+    if (!influencerState.bootstrap && !influencerState.loading) {
+      fetchMarketingInfluencerBootstrap({
+        filters: getMarketingInfluencerPeriodFilters(),
+        preserveSelection: true,
+      });
+    }
+    return;
+  }
+
   if (!modules.length) {
-    modulesWrap.innerHTML = '<div class="intranet-empty-card">Nenhum modulo liberado para esta area no momento.</div>';
+    modulesWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.departments.noModules', {}, 'Nenhum modulo liberado para esta area no momento.'))}</div>`;
   } else {
     modules.forEach((module) => {
       const card = document.createElement('article');
@@ -889,14 +1359,603 @@ function renderDepartmentWorkspace(intranet) {
       card.innerHTML = `
         <div class="intranet-module-top">
           <span class="intranet-module-icon">${renderIcon(module.icon || department.icon || 'workspace')}</span>
-          <span class="intranet-chip">${escapeHtml(department.name || 'Departamento')}</span>
+          <span class="intranet-chip">${escapeHtml(department.name || t('intranet.departmentDefaultName', {}, 'Departamento'))}</span>
         </div>
-        <h4>${escapeHtml(module.title || 'Modulo')}</h4>
+        <h4>${escapeHtml(module.title || t('intranet.generic.module', {}, 'Modulo'))}</h4>
         <p>${escapeHtml(module.description || '')}</p>
-        <div class="intranet-module-type">${escapeHtml(module.type || 'workspace')}</div>
+        <div class="intranet-module-type">${escapeHtml(module.type || t('intranet.generic.workspace', {}, 'workspace'))}</div>
       `;
       modulesWrap.appendChild(card);
     });
+  }
+}
+
+function renderMarketingInfluencerWorkspace() {
+  const customWrap = el('departmentWorkspaceCustom');
+  if (!customWrap || customWrap.hidden) return;
+
+  if (influencerState.loading && !influencerState.bootstrap) {
+    customWrap.innerHTML = '<div class="intranet-empty-card">Carregando workspace de influencers...</div>';
+    return;
+  }
+
+  if (influencerState.error && !influencerState.bootstrap) {
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(influencerState.error)}</div>`;
+    return;
+  }
+
+  const bootstrap = influencerState.bootstrap || {};
+  const cards = getMarketingInfluencerCards();
+  const selectedCard = getSelectedMarketingInfluencerCard();
+  const detail = influencerState.detail || {};
+  const summary = bootstrap.summary || {};
+  const comparison = bootstrap.comparison || {};
+  const suggestions = bootstrap.suggestions || {};
+  const detailSummary = detail.summary || selectedCard?.metrics_summary || {};
+  const period = bootstrap.period || {
+    period_type: influencerState.filters?.periodType || 'month',
+    from: influencerState.filters?.from || '',
+    to: influencerState.filters?.to || '',
+    label: formatDateRangeLabel(influencerState.filters?.from, influencerState.filters?.to),
+  };
+  const comparisonItems = Array.isArray(comparison.items) ? comparison.items : [];
+  const metricHistory = Array.isArray(detail.metric_history) ? detail.metric_history : [];
+  const detailHistory = Array.isArray(detail.history) ? detail.history : [];
+  const analysisText = influencerState.analysis.result || 'Selecione um periodo e clique em "Analisar" para receber uma leitura comparativa da IA sobre o desempenho das influencers.';
+  const formDraft = influencerState.formDraft || {};
+
+  customWrap.innerHTML = `
+    <section class="influencer-workspace">
+      <div class="influencer-toolbar">
+        <div>
+          <div class="intranet-section-eyebrow">Marketing</div>
+          <h3 class="intranet-section-title">Gestao de influencers e leitura comparativa</h3>
+          <p class="small muted">Cadastre as parceiras, lance a performance manualmente, compare indicadores e use a IA como apoio para decidir os proximos passos.</p>
+        </div>
+        <div class="influencer-toolbar-actions">
+          <div>
+            <label for="influencerFilterPeriodType">Periodo</label>
+            <select id="influencerFilterPeriodType">
+              ${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label for="influencerFilterFrom">De</label>
+            <input id="influencerFilterFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" />
+          </div>
+          <div>
+            <label for="influencerFilterTo">Ate</label>
+            <input id="influencerFilterTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" />
+          </div>
+          <button class="btn" type="button" id="btnRefreshInfluencerWorkspace">${influencerState.loading ? 'Atualizando...' : 'Atualizar'}</button>
+        </div>
+      </div>
+
+      <div class="intranet-home-grid influencer-summary-grid">
+        <article class="intranet-quick-card intranet-home-overview-card">
+          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.total_influencers || 0))}</div>
+          <div class="intranet-quick-text">Influencers cadastradas</div>
+          <div class="intranet-home-overview-meta">Base atual</div>
+        </article>
+        <article class="intranet-quick-card intranet-home-overview-card">
+          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.followers_total || 0))}</div>
+          <div class="intranet-quick-text">Seguidores monitorados</div>
+          <div class="intranet-home-overview-meta">Total consolidado</div>
+        </article>
+        <article class="intranet-quick-card intranet-home-overview-card">
+          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.enrollments_total || 0))}</div>
+          <div class="intranet-quick-text">Matriculas atribuidas</div>
+          <div class="intranet-home-overview-meta">${escapeHtml(period.label || 'Periodo atual')}</div>
+        </article>
+        <article class="intranet-quick-card intranet-home-overview-card">
+          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.launches_total || 0))}</div>
+          <div class="intranet-quick-text">Lancamentos de performance</div>
+          <div class="intranet-home-overview-meta">Historico operacional</div>
+        </article>
+      </div>
+
+      <article class="influencer-form-card">
+        <button class="influencer-section-toggle" type="button" id="btnToggleInfluencerForm" aria-expanded="${influencerState.formCollapsed ? 'false' : 'true'}">
+          <span>
+            <strong id="influencerFormTitle">${escapeHtml(influencerState.editingId ? 'Editar influencer' : 'Cadastrar influencer')}</strong>
+            <small>Bloco recolhivel para manter a tela organizada.</small>
+          </span>
+          <span class="influencer-section-toggle-icon">${renderIcon('chevron')}</span>
+        </button>
+        <div class="influencer-form-body${influencerState.formCollapsed ? ' is-collapsed' : ''}" id="influencerFormBody">
+          <form id="influencerForm" class="influencer-form-grid">
+            <input type="hidden" id="influencerId" value="${escapeHtml(formDraft.id || influencerState.editingId || '')}" />
+            <div>
+              <label for="influencerName">Nome do influencer</label>
+              <input id="influencerName" placeholder="Ex.: Maria Andrade" value="${escapeHtml(formDraft.name || '')}" />
+            </div>
+            <div>
+              <label for="influencerTypes">Tipos de influencia</label>
+              <input id="influencerTypes" placeholder="Ex.: Reels, Stories, Conteudo educacional" list="influencerTypesSuggestions" value="${escapeHtml(formDraft.influence_types || '')}" />
+              <datalist id="influencerTypesSuggestions">
+                ${(suggestions.influence_types || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join('')}
+              </datalist>
+            </div>
+            <div>
+              <label for="influencerContractType">Tipo de contrato</label>
+              <select id="influencerContractType">
+                <option value="">Selecione</option>
+                ${(suggestions.contract_types || []).map((item) => `<option value="${escapeHtml(item)}"${item === (formDraft.contract_type || '') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label for="influencerPhotoUrl">Foto (URL)</label>
+              <input id="influencerPhotoUrl" type="url" placeholder="https://..." value="${escapeHtml(formDraft.photo_url || '')}" />
+            </div>
+            <div>
+              <label for="influencerInstagram">Link do Instagram</label>
+              <input id="influencerInstagram" type="url" placeholder="https://instagram.com/..." value="${escapeHtml(formDraft.instagram_url || '')}" />
+            </div>
+            <div>
+              <label for="influencerFollowers">Quantidade de seguidores</label>
+              <input id="influencerFollowers" type="number" min="0" step="1" placeholder="0" value="${escapeHtml(formDraft.followers_count ?? '')}" />
+            </div>
+            <div>
+              <label for="influencerStartDate">Data de inicio da parceria</label>
+              <input id="influencerStartDate" type="date" value="${escapeHtml(formDraft.partnership_start_date || '')}" />
+            </div>
+            <div>
+              <label for="influencerStatus">Status</label>
+              <select id="influencerStatus">
+                ${(suggestions.statuses || ['ativo', 'em_teste', 'pausado', 'encerrado']).map((item) => `<option value="${escapeHtml(item)}"${item === (formDraft.influencer_status || 'ativo') ? ' selected' : ''}>${escapeHtml(getMarketingStatusLabel(item))}</option>`).join('')}
+              </select>
+            </div>
+            <div class="influencer-form-span">
+              <label for="influencerNotes">Observacoes internas</label>
+              <textarea id="influencerNotes" rows="3" placeholder="Anotacoes internas do Marketing sobre a parceria, posicionamento ou proximos passos">${escapeHtml(formDraft.notes || '')}</textarea>
+            </div>
+            <div class="influencer-form-actions influencer-form-span">
+              <button class="btn" type="button" id="btnResetInfluencerForm">Limpar</button>
+              <button class="btn primary" type="submit"><span id="btnSaveInfluencerLabel">${escapeHtml(influencerState.editingId ? 'Salvar' : 'Cadastrar')}</span></button>
+            </div>
+          </form>
+        </div>
+      </article>
+
+      <section class="influencer-card-section">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Base cadastrada</div>
+            <h4 class="intranet-section-title">Influencers cadastradas</h4>
+          </div>
+          <div class="small muted">${escapeHtml(period.label || 'Periodo atual')}</div>
+        </div>
+        <div class="influencer-list-grid">
+          ${cards.length ? cards.map((item) => `
+            <article class="influencer-card${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' is-active' : ''}">
+              <div class="influencer-card-head">
+                ${item.photo_url ? `<img class="influencer-avatar" src="${escapeHtml(item.photo_url)}" alt="${escapeHtml(item.name || 'Influencer')}" />` : `<div class="influencer-avatar influencer-avatar-fallback">${escapeHtml(getInfluencerInitials(item.name || 'Influencer'))}</div>`}
+                <div class="influencer-card-copy">
+                  <h4>${escapeHtml(item.name || 'Influencer')}</h4>
+                  <div class="small muted">${escapeHtml(formatInfluenceTypesList(item.influence_types || []))}</div>
+                </div>
+                <span class="intranet-chip">${escapeHtml(getMarketingStatusLabel(item.influencer_status))}</span>
+              </div>
+              <div class="influencer-card-metrics">
+                <div><strong>${escapeHtml(item.contract_type || '-')}</strong><span>Contrato</span></div>
+                <div><strong>${escapeHtml(formatCompactInteger(item.followers_count || 0))}</strong><span>Seguidores</span></div>
+                <div><strong>${escapeHtml(formatInteger(item.metrics_summary?.enrollments_count || 0))}</strong><span>Matriculas</span></div>
+                <div><strong>${escapeHtml(formatInteger(item.metrics_summary?.performance_score || 0))}</strong><span>Pontuacao</span></div>
+              </div>
+              <div class="small muted">${escapeHtml(item.instagram_url || 'Instagram nao informado')}</div>
+              <div class="small muted">Parceria desde ${escapeHtml(formatDateOnly(item.partnership_start_date || ''))}</div>
+              <div class="intranet-card-actions">
+                <button class="btn" type="button" data-influencer-view="${escapeHtml(item.id)}">Ver mais</button>
+                <button class="btn" type="button" data-influencer-edit="${escapeHtml(item.id)}">Editar cadastro</button>
+              </div>
+            </article>
+          `).join('') : '<div class="intranet-empty-card">Nenhuma influencer cadastrada ainda. Use o bloco acima para iniciar a base de Marketing.</div>'}
+        </div>
+      </section>
+
+      <div class="influencer-detail-layout">
+        <section class="influencer-detail-panel">
+          <div class="intranet-section-head">
+            <div>
+              <div class="intranet-section-eyebrow">Relatorio individual</div>
+              <h4 class="intranet-section-title">${escapeHtml(selectedCard?.name || 'Selecione uma influencer')}</h4>
+            </div>
+            ${selectedCard ? `<button class="btn" type="button" data-influencer-edit="${escapeHtml(selectedCard.id)}">Editar cadastro</button>` : ''}
+          </div>
+          ${selectedCard && influencerState.detailLoading ? '<div class="small muted">Carregando relatorio detalhado...</div>' : ''}
+          ${selectedCard && influencerState.detailError ? `<div class="small muted">${escapeHtml(influencerState.detailError)}</div>` : ''}
+          ${selectedCard ? `
+            <div class="influencer-detail-summary">
+              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.posts_count || 0))}</strong><span>Postagens</span></article>
+              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.reels_count || 0))}</strong><span>Reels</span></article>
+              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.stories_count || 0))}</strong><span>Stories</span></article>
+              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.views_count || 0))}</strong><span>Views</span></article>
+              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.enrollments_count || 0))}</strong><span>Matriculas</span></article>
+              <article class="intranet-sales-card"><strong>${escapeHtml(detailSummary.performance_label || 'Acompanhar')}</strong><span>Desempenho geral</span></article>
+            </div>
+            <div class="influencer-detail-meta">
+              <div><strong>Periodo consultado</strong><span>${escapeHtml(detail.period?.label || period.label || '-')}</span></div>
+              <div><strong>Historico registrado</strong><span>${escapeHtml(formatInteger(detailSummary.launches_total || 0))} lancamento(s)</span></div>
+              <div><strong>Dias com atividade</strong><span>${escapeHtml(formatInteger(detailSummary.reported_days_total || 0))}</span></div>
+              <div><strong>Instagram</strong><span>${escapeHtml(selectedCard.instagram_url || '-')}</span></div>
+            </div>
+            <div class="influencer-detail-columns">
+              <div>
+                <div class="intranet-block-title">Historico de performance</div>
+                <div class="influencer-history-list">
+                  ${metricHistory.length ? metricHistory.map((item) => `
+                    <article class="influencer-history-card">
+                      <div class="influencer-history-head">
+                        <strong>${escapeHtml(item.period_label || formatDateRangeLabel(item.period_start, item.period_end))}</strong>
+                        <span>${escapeHtml(item.period_type || 'month')}</span>
+                      </div>
+                      <div class="influencer-history-stats">
+                        <span>${escapeHtml(formatInteger(item.posts_count || 0))} posts</span>
+                        <span>${escapeHtml(formatInteger(item.reels_count || 0))} reels</span>
+                        <span>${escapeHtml(formatInteger(item.stories_count || 0))} stories</span>
+                        <span>${escapeHtml(formatInteger(item.views_count || 0))} views</span>
+                        <span>${escapeHtml(formatInteger(item.enrollments_count || 0))} matriculas</span>
+                      </div>
+                      ${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}
+                    </article>
+                  `).join('') : '<div class="intranet-empty-card">Ainda nao ha lancamentos de performance para esta influencer.</div>'}
+                </div>
+              </div>
+              <div>
+                <div class="intranet-block-title">Historico de atualizacoes</div>
+                <div class="influencer-history-list">
+                  ${detailHistory.length ? detailHistory.map((item) => `
+                    <article class="influencer-history-card">
+                      <div class="influencer-history-head">
+                        <strong>${escapeHtml(item.action || 'Atualizacao')}</strong>
+                        <span>${escapeHtml(formatDate(item.created_at || ''))}</span>
+                      </div>
+                      <div class="small muted">${escapeHtml(item.actor_name || 'Sistema')}</div>
+                      <p>${escapeHtml(item.field_name ? `${item.field_name}: ${item.old_value || '-'} -> ${item.new_value || '-'}` : JSON.stringify(item.detail || {}))}</p>
+                    </article>
+                  `).join('') : '<div class="intranet-empty-card">Nenhum log administrativo registrado para esta influencer ainda.</div>'}
+                </div>
+              </div>
+            </div>
+          ` : '<div class="intranet-empty-card">Clique em "Ver mais" em uma influencer para abrir o relatorio detalhado, registrar performance e acompanhar o historico.</div>'}
+        </section>
+
+        <aside class="influencer-metric-panel">
+          <div class="intranet-section-head">
+            <div>
+              <div class="intranet-section-eyebrow">Lancamento manual</div>
+              <h4 class="intranet-section-title">Performance operacional</h4>
+            </div>
+          </div>
+          ${selectedCard ? `
+            <form id="influencerMetricForm" class="influencer-metric-form">
+              <div class="small muted">Lancamento para <strong>${escapeHtml(selectedCard.name || 'Influencer')}</strong></div>
+              <div class="influencer-form-grid influencer-metric-grid">
+                <div>
+                  <label for="metricPeriodType">Periodo</label>
+                  <select id="metricPeriodType">
+                    ${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('')}
+                  </select>
+                </div>
+                <div>
+                  <label for="metricPeriodStart">Data inicial</label>
+                  <input id="metricPeriodStart" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" />
+                </div>
+                <div>
+                  <label for="metricPeriodEnd">Data final</label>
+                  <input id="metricPeriodEnd" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" />
+                </div>
+                <div>
+                  <label for="metricPosts">Postagens</label>
+                  <input id="metricPosts" type="number" min="0" step="1" value="0" />
+                </div>
+                <div>
+                  <label for="metricReels">Reels</label>
+                  <input id="metricReels" type="number" min="0" step="1" value="0" />
+                </div>
+                <div>
+                  <label for="metricStories">Stories</label>
+                  <input id="metricStories" type="number" min="0" step="1" value="0" />
+                </div>
+                <div>
+                  <label for="metricViews">Views</label>
+                  <input id="metricViews" type="number" min="0" step="1" value="0" />
+                </div>
+                <div>
+                  <label for="metricEnrollments">Matriculas atribuidas</label>
+                  <input id="metricEnrollments" type="number" min="0" step="1" value="0" />
+                </div>
+                <div class="influencer-form-span">
+                  <label for="metricNotes">Observacoes</label>
+                  <textarea id="metricNotes" rows="3" placeholder="Anote contexto da campanha, particularidades do periodo ou observacoes operacionais"></textarea>
+                </div>
+              </div>
+              <div class="influencer-form-actions">
+                <button class="btn primary" type="submit">Salvar lancamento</button>
+              </div>
+            </form>
+          ` : '<div class="intranet-empty-card">Selecione uma influencer para registrar postagens, reels, stories, views e matriculas do periodo.</div>'}
+        </aside>
+      </div>
+
+      <section class="influencer-chart-section">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Comparativo</div>
+            <h4 class="intranet-section-title">Graficos comparativos por influencer</h4>
+          </div>
+          <div class="small muted">${escapeHtml(period.label || 'Periodo atual')}</div>
+        </div>
+        <div class="influencer-chart-grid">
+          ${renderInfluencerMetricBars(comparisonItems, 'enrollments_count', 'Matriculas por influencer')}
+          ${renderInfluencerMetricBars(comparisonItems, 'posts_count', 'Postagens por influencer')}
+          ${renderInfluencerMetricBars(comparisonItems, 'reels_count', 'Reels por influencer')}
+          ${renderInfluencerMetricBars(comparisonItems, 'stories_count', 'Stories por influencer')}
+          ${renderInfluencerMetricBars(comparisonItems, 'views_count', 'Views por influencer')}
+          ${renderInfluencerMetricBars(comparisonItems, 'performance_score', 'Desempenho geral')}
+          ${renderInfluencerMonthlyComparison(comparison.monthly_evolution || [])}
+        </div>
+      </section>
+
+      <section class="influencer-analysis-box">
+        <div class="intranet-section-head">
+          <div>
+            <div class="intranet-section-eyebrow">Analise com IA</div>
+            <h4 class="intranet-section-title">Leitura comparativa e recomendacao operacional</h4>
+          </div>
+        </div>
+        <div class="influencer-analysis-toolbar">
+          <div>
+            <label for="influencerAnalysisPeriodType">Periodo</label>
+            <select id="influencerAnalysisPeriodType">
+              ${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.analysis.periodType || influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label for="influencerAnalysisFrom">De</label>
+            <input id="influencerAnalysisFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" />
+          </div>
+          <div>
+            <label for="influencerAnalysisTo">Ate</label>
+            <input id="influencerAnalysisTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" />
+          </div>
+          <div>
+            <label for="influencerAnalysisFocus">Foco</label>
+            <select id="influencerAnalysisFocus">
+              <option value="">Comparativo geral</option>
+              ${cards.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' selected' : ''}>${escapeHtml(item.name || 'Influencer')}</option>`).join('')}
+            </select>
+          </div>
+          <button class="btn primary" type="button" id="btnRunInfluencerAnalysis" ${cards.length ? '' : 'disabled'}>${influencerState.analysis.loading ? 'Analisando...' : 'Analisar'}</button>
+        </div>
+        <div class="influencer-analysis-result" id="influencerAnalysisResult">${escapeHtml(analysisText)}</div>
+        <div class="small muted">${influencerState.analysis.generatedAt ? `Ultima analise em ${escapeHtml(formatDate(influencerState.analysis.generatedAt))}` : 'A IA usa os dados registrados para sugerir proximos passos, reforco de parceria ou necessidade de revisao.'}</div>
+      </section>
+    </section>
+  `;
+
+  applyMarketingInfluencerFilterValues(period);
+  if (selectedCard) {
+    const metricPeriodType = el('metricPeriodType');
+    if (metricPeriodType) metricPeriodType.value = influencerState.filters?.periodType || period.period_type || 'month';
+  }
+
+  el('btnToggleInfluencerForm')?.addEventListener('click', () => {
+    influencerState.formCollapsed = !influencerState.formCollapsed;
+    renderMarketingInfluencerWorkspace();
+  });
+  el('btnResetInfluencerForm')?.addEventListener('click', () => {
+    resetInfluencerForm();
+  });
+  el('btnRefreshInfluencerWorkspace')?.addEventListener('click', async () => {
+    const filters = {
+      periodType: el('influencerFilterPeriodType')?.value || influencerState.filters?.periodType || 'month',
+      from: el('influencerFilterFrom')?.value || '',
+      to: el('influencerFilterTo')?.value || '',
+    };
+    await fetchMarketingInfluencerBootstrap({ filters, preserveSelection: true });
+  });
+  el('influencerForm')?.addEventListener('submit', handleInfluencerFormSubmit);
+  el('influencerMetricForm')?.addEventListener('submit', handleInfluencerMetricSubmit);
+  el('btnRunInfluencerAnalysis')?.addEventListener('click', handleInfluencerAnalysis);
+
+  Array.from(customWrap.querySelectorAll('[data-influencer-view]')).forEach((button) => {
+    button.addEventListener('click', async () => {
+      const influencerId = Number(button.getAttribute('data-influencer-view') || 0);
+      if (!influencerId) return;
+      influencerState.selectedInfluencerId = influencerId;
+      renderMarketingInfluencerWorkspace();
+      await fetchMarketingInfluencerDetail(influencerId);
+    });
+  });
+
+  Array.from(customWrap.querySelectorAll('[data-influencer-edit]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      const influencerId = Number(button.getAttribute('data-influencer-edit') || 0);
+      const influencer = getMarketingInfluencerCards().find((item) => Number(item.id) === influencerId) || null;
+      if (!influencer) return;
+      populateInfluencerForm(influencer);
+    });
+  });
+}
+
+async function fetchMarketingInfluencerBootstrap(options = {}) {
+  influencerState.loading = true;
+  influencerState.error = '';
+  influencerState.detailError = '';
+  renderMarketingInfluencerWorkspace();
+
+  try {
+    const nextFilters = options.filters || getMarketingInfluencerPeriodFilters();
+    const queryString = buildMarketingInfluencerQueryString(nextFilters);
+    const { marketing } = await api(`/api/intranet/marketing/influencers/bootstrap?${queryString}`);
+    const payload = marketing || {};
+    influencerState.enabled = Boolean(payload.enabled !== false);
+    influencerState.loaded = true;
+    influencerState.bootstrap = payload;
+    influencerState.loading = false;
+    setMarketingInfluencerFilters({
+      periodType: payload.period?.period_type || nextFilters.periodType || 'month',
+      from: payload.period?.from || nextFilters.from || '',
+      to: payload.period?.to || nextFilters.to || '',
+    });
+
+    const cards = Array.isArray(payload.influencers) ? payload.influencers : [];
+    const preserveSelection = options.preserveSelection !== false;
+    const preferredId = Number(options.selectedInfluencerId || influencerState.selectedInfluencerId || 0);
+    if (preserveSelection && preferredId && cards.some((item) => Number(item.id) === preferredId)) {
+      influencerState.selectedInfluencerId = preferredId;
+    } else {
+      influencerState.selectedInfluencerId = cards[0]?.id || null;
+    }
+
+    renderMarketingInfluencerWorkspace();
+    if (options.loadDetail === false || !influencerState.selectedInfluencerId) {
+      influencerState.detail = null;
+      return;
+    }
+    await fetchMarketingInfluencerDetail(influencerState.selectedInfluencerId, { quiet: true });
+  } catch (err) {
+    influencerState.loading = false;
+    influencerState.loaded = true;
+    influencerState.error = err.message || 'Erro ao carregar a area de influencers.';
+    influencerState.bootstrap = null;
+    influencerState.detail = null;
+    influencerState.detailLoading = false;
+    renderMarketingInfluencerWorkspace();
+  }
+}
+
+async function fetchMarketingInfluencerDetail(influencerId, options = {}) {
+  const safeId = Number(influencerId || 0);
+  if (!safeId) {
+    influencerState.detail = null;
+    renderMarketingInfluencerWorkspace();
+    return;
+  }
+
+  influencerState.detailLoading = true;
+  influencerState.detailError = '';
+  if (!options.quiet) renderMarketingInfluencerWorkspace();
+
+  try {
+    const queryString = buildMarketingInfluencerQueryString(getMarketingInfluencerPeriodFilters());
+    const payload = await api(`/api/intranet/marketing/influencers/${safeId}?${queryString}`);
+    influencerState.detail = payload;
+    influencerState.selectedInfluencerId = safeId;
+    influencerState.detailLoading = false;
+    renderMarketingInfluencerWorkspace();
+  } catch (err) {
+    influencerState.detailLoading = false;
+    influencerState.detailError = err.message || 'Nao foi possivel carregar o relatorio da influencer.';
+    renderMarketingInfluencerWorkspace();
+  }
+}
+
+async function handleInfluencerFormSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('influencerId')?.value || 0) || null,
+    name: el('influencerName')?.value.trim() || '',
+    influence_types: el('influencerTypes')?.value || '',
+    contract_type: el('influencerContractType')?.value || '',
+    photo_url: el('influencerPhotoUrl')?.value.trim() || '',
+    instagram_url: el('influencerInstagram')?.value.trim() || '',
+    followers_count: Number(el('influencerFollowers')?.value || 0),
+    partnership_start_date: el('influencerStartDate')?.value || '',
+    influencer_status: el('influencerStatus')?.value || 'ativo',
+    notes: el('influencerNotes')?.value.trim() || '',
+  };
+
+  if (!payload.name) {
+    alert('Informe o nome da influencer.');
+    return;
+  }
+
+  try {
+    const { influencer } = await api('/api/intranet/marketing/influencers', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    resetInfluencerForm();
+    influencerState.formCollapsed = true;
+    influencerState.selectedInfluencerId = influencer?.id || influencerState.selectedInfluencerId;
+    await fetchMarketingInfluencerBootstrap({
+      filters: getMarketingInfluencerPeriodFilters(),
+      preserveSelection: true,
+      selectedInfluencerId: influencerState.selectedInfluencerId,
+    });
+  } catch (err) {
+    alert('Nao foi possivel salvar a influencer: ' + err.message);
+  }
+}
+
+async function handleInfluencerMetricSubmit(event) {
+  event.preventDefault();
+  const influencerId = Number(influencerState.selectedInfluencerId || 0);
+  if (!influencerId) {
+    alert('Selecione uma influencer para registrar a performance.');
+    return;
+  }
+
+  const payload = {
+    period_type: el('metricPeriodType')?.value || 'month',
+    period_start: el('metricPeriodStart')?.value || '',
+    period_end: el('metricPeriodEnd')?.value || '',
+    posts_count: Number(el('metricPosts')?.value || 0),
+    reels_count: Number(el('metricReels')?.value || 0),
+    stories_count: Number(el('metricStories')?.value || 0),
+    views_count: Number(el('metricViews')?.value || 0),
+    enrollments_count: Number(el('metricEnrollments')?.value || 0),
+    notes: el('metricNotes')?.value.trim() || '',
+    source_type: 'manual',
+  };
+
+  if (!payload.period_start) {
+    alert('Informe ao menos a data inicial do lancamento.');
+    return;
+  }
+
+  try {
+    await api(`/api/intranet/marketing/influencers/${influencerId}/metrics`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    await fetchMarketingInfluencerBootstrap({
+      filters: getMarketingInfluencerPeriodFilters(),
+      preserveSelection: true,
+      selectedInfluencerId: influencerId,
+    });
+  } catch (err) {
+    alert('Nao foi possivel registrar a performance: ' + err.message);
+  }
+}
+
+async function handleInfluencerAnalysis() {
+  influencerState.analysis.loading = true;
+  renderMarketingInfluencerWorkspace();
+
+  try {
+    const payload = {
+      period_type: el('influencerAnalysisPeriodType')?.value || influencerState.filters?.periodType || 'month',
+      from: el('influencerAnalysisFrom')?.value || influencerState.filters?.from || '',
+      to: el('influencerAnalysisTo')?.value || influencerState.filters?.to || '',
+      influencer_id: Number(el('influencerAnalysisFocus')?.value || 0) || null,
+    };
+    const response = await api('/api/intranet/marketing/influencers/analyze', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    influencerState.analysis.loading = false;
+    influencerState.analysis.periodType = payload.period_type;
+    influencerState.analysis.result = response.analysis_text || 'Nao foi possivel gerar a analise.';
+    influencerState.analysis.generatedAt = response.generated_at || new Date().toISOString();
+    renderMarketingInfluencerWorkspace();
+  } catch (err) {
+    influencerState.analysis.loading = false;
+    influencerState.analysis.result = `Nao foi possivel analisar este periodo: ${err.message}`;
+    influencerState.analysis.generatedAt = new Date().toISOString();
+    renderMarketingInfluencerWorkspace();
   }
 }
 
@@ -1201,10 +2260,11 @@ function addMonths(dateKey, amount) {
 
 function formatCalendarDateLabel(dateKey) {
   try {
-    return new Date(`${dateKey}T12:00:00-03:00`).toLocaleDateString('pt-BR', {
+    return new Date(`${dateKey}T12:00:00-03:00`).toLocaleDateString(currentLocale(), {
       weekday: 'short',
       day: '2-digit',
       month: 'short',
+      timeZone: 'America/Sao_Paulo',
     });
   } catch {
     return dateKey || '';
@@ -1214,7 +2274,7 @@ function formatCalendarDateLabel(dateKey) {
 function formatCalendarRangeLabel(range = {}) {
   if (calendarState.view === 'month' && range.from) {
     try {
-      return new Date(`${range.from}T12:00:00-03:00`).toLocaleDateString('pt-BR', {
+      return new Date(`${range.from}T12:00:00-03:00`).toLocaleDateString(currentLocale(), {
         month: 'long',
         year: 'numeric',
         timeZone: 'America/Sao_Paulo',
@@ -1224,15 +2284,15 @@ function formatCalendarRangeLabel(range = {}) {
 
   const from = range.from ? formatCalendarDateLabel(range.from) : '';
   const to = range.to ? formatCalendarDateLabel(range.to) : '';
-  if (!from && !to) return 'Agenda';
+  if (!from && !to) return t('calendar.defaultAgenda');
   if (from === to) return from;
   return `${from} - ${to}`;
 }
 
 function getCalendarModeLabel(mode = '') {
-  if (mode === 'presencial') return 'Presencial';
-  if (mode === 'hibrida') return 'Hibrida';
-  return 'Online';
+  if (mode === 'presencial') return t('calendar.modeLabel.presencial');
+  if (mode === 'hibrida') return t('calendar.modeLabel.hibrida');
+  return t('calendar.modeLabel.online');
 }
 
 function getEventTypeMeta(eventTypeId) {
@@ -1249,10 +2309,10 @@ function renderCalendarSummary() {
   const nextWeek = addDays(today, 7);
   const events = Array.isArray(calendarState.events) ? calendarState.events : [];
   const cards = [
-    { label: 'No periodo', value: events.length },
-    { label: 'Hoje', value: events.filter((item) => item.start_date === today).length },
-    { label: 'Esta semana', value: events.filter((item) => item.start_date >= today && item.start_date <= nextWeek).length },
-    { label: 'Meus compromissos', value: events.filter((item) => (item.participants || []).some((participant) => Number(participant.user_id || 0) === currentUserId)).length },
+    { label: t('calendar.summary.inPeriod'), value: events.length },
+    { label: t('calendar.summary.today'), value: events.filter((item) => item.start_date === today).length },
+    { label: t('calendar.summary.thisWeek'), value: events.filter((item) => item.start_date >= today && item.start_date <= nextWeek).length },
+    { label: t('calendar.summary.myEvents'), value: events.filter((item) => (item.participants || []).some((participant) => Number(participant.user_id || 0) === currentUserId)).length },
   ];
 
   cards.forEach((card) => {
@@ -1270,8 +2330,8 @@ function renderCalendarTypeOptions() {
   const previousForm = eventTypeSelect?.value || '';
 
   if (typeSelect) {
-    typeSelect.innerHTML = '<option value="">Todos</option>';
-    (calendarState.eventTypes || []).forEach((item) => {
+    typeSelect.innerHTML = `<option value="">${escapeHtml(t('common.all'))}</option>`;
+    sortAlphabetically(calendarState.eventTypes || [], (item) => item?.name || '').forEach((item) => {
       const option = document.createElement('option');
       option.value = String(item.id);
       option.textContent = item.name;
@@ -1283,8 +2343,8 @@ function renderCalendarTypeOptions() {
   }
 
   if (eventTypeSelect) {
-    eventTypeSelect.innerHTML = '<option value="">Selecione</option>';
-    (calendarState.eventTypes || []).forEach((item) => {
+    eventTypeSelect.innerHTML = `<option value="">${escapeHtml(t('common.select'))}</option>`;
+    sortAlphabetically(calendarState.eventTypes || [], (item) => item?.name || '').forEach((item) => {
       const option = document.createElement('option');
       option.value = String(item.id);
       option.textContent = item.name;
@@ -1300,8 +2360,8 @@ function renderCalendarUserOptions() {
   const userSelect = el('calendarUserFilter');
   if (!userSelect) return;
   const previous = userSelect.value;
-  userSelect.innerHTML = '<option value="">Todos</option>';
-  (calendarState.users || []).forEach((item) => {
+  userSelect.innerHTML = `<option value="">${escapeHtml(t('common.all'))}</option>`;
+  sortAlphabetically(calendarState.users || [], (item) => item?.name || item?.email || '').forEach((item) => {
     const option = document.createElement('option');
     option.value = String(item.id);
     option.textContent = `${item.name}${item.department ? ` - ${item.department}` : ''}`;
@@ -1317,7 +2377,7 @@ function renderCalendarParticipants() {
   if (!wrap) return;
   wrap.innerHTML = '';
 
-  (calendarState.users || []).forEach((user) => {
+  sortAlphabetically(calendarState.users || [], (item) => item?.name || item?.email || '').forEach((user) => {
     const label = document.createElement('label');
     label.className = 'department-check';
     label.innerHTML = `
@@ -1351,13 +2411,13 @@ function renderCalendarHistory(history = []) {
   const wrap = el('calendarHistoryList');
   if (!wrap) return;
   if (!Array.isArray(history) || !history.length) {
-    wrap.innerHTML = '<div class="intranet-empty-card">Nenhum historico registrado ainda para este compromisso.</div>';
+    wrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('calendar.noHistory'))}</div>`;
     return;
   }
   wrap.innerHTML = history.map((item) => `
     <div class="intranet-sales-history-item">
-      <strong>${escapeHtml(item.action || 'Atualizacao')}</strong>
-      <div class="small muted">${escapeHtml(formatDate(item.created_at))} - ${escapeHtml(item.actor_name || 'Sistema')}</div>
+      <strong>${escapeHtml(item.action || t('intranet.generic.update', {}, 'Atualizacao'))}</strong>
+      <div class="small muted">${escapeHtml(formatDate(item.created_at))} - ${escapeHtml(item.actor_name || t('intranet.generic.system', {}, 'Sistema'))}</div>
       <div>${escapeHtml(item.field_name || '')}${item.old_value || item.new_value ? `: ${escapeHtml(item.old_value || '-')} -> ${escapeHtml(item.new_value || '-')}` : ''}</div>
     </div>
   `).join('');
@@ -1368,7 +2428,7 @@ function resetCalendarEditor(dateKey = '') {
   if (!form) return;
   form.reset();
   el('calendarEventId').value = '';
-  el('calendarEditorTitle').textContent = 'Novo compromisso';
+  el('calendarEditorTitle').textContent = t('calendar.editorNew');
   el('btnCalendarCancelEvent').style.display = 'none';
   const baseDate = dateKey || calendarState.baseDate || getTodayDateKey();
   el('calendarStartDate').value = baseDate;
@@ -1389,7 +2449,7 @@ function fillCalendarEditor(event = null, history = []) {
     return;
   }
   el('calendarEventId').value = String(event.id || '');
-  el('calendarEditorTitle').textContent = event.title || 'Compromisso';
+  el('calendarEditorTitle').textContent = event.title || t('calendar.defaultEventTitle');
   el('calendarTitle').value = event.title || '';
   el('calendarDescription').value = event.description || '';
   el('calendarEventType').value = event.event_type_id ? String(event.event_type_id) : '';
@@ -1448,7 +2508,11 @@ function buildCalendarMonthGrid(events = []) {
   return `
     <div class="intranet-calendar-month">
       <div class="intranet-calendar-weekdays">
-        ${['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'].map((label) => `<div>${label}</div>`).join('')}
+        ${Array.from({ length: 7 }, (_, index) => {
+          const base = new Date('2026-03-08T12:00:00-03:00');
+          base.setDate(base.getDate() + index);
+          return `<div>${escapeHtml(new Intl.DateTimeFormat(currentLocale(), { weekday: 'short', timeZone: 'America/Sao_Paulo' }).format(base))}</div>`;
+        }).join('')}
       </div>
       <div class="intranet-calendar-grid">
         ${days.map((dateKey) => {
@@ -1466,10 +2530,10 @@ function buildCalendarMonthGrid(events = []) {
               <div class="intranet-calendar-day-events">
                 ${items.slice(0, 4).map((item) => `
                   <button class="intranet-calendar-event-chip" type="button" data-event-id="${escapeHtml(item.id)}">
-                    <span>${escapeHtml(item.start_time || '')}</span>${escapeHtml(item.title || 'Compromisso')}
+                    <span>${escapeHtml(item.start_time || '')}</span>${escapeHtml(item.title || t('calendar.defaultEventTitle'))}
                   </button>
                 `).join('')}
-                ${items.length > 4 ? `<div class="small muted">+ ${items.length - 4} compromisso(s)</div>` : ''}
+                ${items.length > 4 ? `<div class="small muted">${escapeHtml(t('calendar.moreEvents', { count: items.length - 4 }))}</div>` : ''}
               </div>
             </div>
           `;
@@ -1483,7 +2547,7 @@ function sortCalendarEvents(events = []) {
   return [...events].sort((left, right) => {
     const leftKey = `${left.start_date || ''} ${left.all_day ? '00:00' : (left.start_time || '00:00')} ${left.title || ''}`;
     const rightKey = `${right.start_date || ''} ${right.all_day ? '00:00' : (right.start_time || '00:00')} ${right.title || ''}`;
-    return leftKey.localeCompare(rightKey, 'pt-BR');
+    return leftKey.localeCompare(rightKey, currentLocale());
   });
 }
 
@@ -1521,14 +2585,14 @@ function buildCalendarWeekGrid(events = []) {
           <section class="intranet-calendar-week-column${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}">
             <button class="intranet-calendar-week-head${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}" type="button" data-date="${escapeHtml(dateKey)}">
               <strong>${escapeHtml(formatCalendarDateLabel(dateKey))}</strong>
-              <span>${items.length} compromisso(s)</span>
+              <span>${escapeHtml(t('calendar.moreEvents', { count: items.length }).replace(/^\+\s*/, ''))}</span>
             </button>
             <div class="intranet-calendar-week-events">
               ${items.length ? items.map((item) => `
                 <button class="intranet-calendar-event-chip intranet-calendar-week-item" type="button" data-event-id="${escapeHtml(item.id)}">
-                  <span>${escapeHtml(item.all_day ? 'Dia inteiro' : (item.start_time || ''))}</span>${escapeHtml(item.title || 'Compromisso')}
+                  <span>${escapeHtml(item.all_day ? t('calendar.fullDay') : (item.start_time || ''))}</span>${escapeHtml(item.title || t('calendar.defaultEventTitle'))}
                 </button>
-              `).join('') : '<div class="small muted intranet-calendar-week-empty">Sem eventos</div>'}
+              `).join('') : `<div class="small muted intranet-calendar-week-empty">${escapeHtml(t('calendar.emptyWeek'))}</div>`}
             </div>
           </section>
         `;
@@ -1538,14 +2602,14 @@ function buildCalendarWeekGrid(events = []) {
 }
 
 function buildCalendarDayView(events = []) {
-  const title = calendarState.range?.from ? formatCalendarDateLabel(calendarState.range.from) : 'Dia selecionado';
+  const title = calendarState.range?.from ? formatCalendarDateLabel(calendarState.range.from) : t('calendar.selectedDay', {}, 'Dia selecionado');
   const sortedEvents = sortCalendarEvents(events);
 
   if (!sortedEvents.length) {
     return `
       <div class="intranet-calendar-day-view">
         <div class="intranet-block-title">${escapeHtml(title)}</div>
-        <div class="intranet-empty-card">Nenhum compromisso encontrado para este dia.</div>
+        <div class="intranet-empty-card">${escapeHtml(t('calendar.noEventsDay'))}</div>
       </div>
     `;
   }
@@ -1556,10 +2620,10 @@ function buildCalendarDayView(events = []) {
       <div class="intranet-calendar-day-list">
         ${sortedEvents.map((item) => `
           <button class="intranet-calendar-day-item" type="button" data-event-id="${escapeHtml(item.id)}">
-            <div class="intranet-calendar-day-time">${escapeHtml(item.all_day ? 'Dia inteiro' : `${item.start_time || ''} - ${item.end_time || ''}`)}</div>
+            <div class="intranet-calendar-day-time">${escapeHtml(item.all_day ? t('calendar.fullDay') : `${item.start_time || ''} - ${item.end_time || ''}`)}</div>
             <div class="intranet-calendar-day-copy">
-              <strong>${escapeHtml(item.title || 'Compromisso')}</strong>
-              <span>${escapeHtml(item.event_type_name || 'Agenda')} - ${escapeHtml(getCalendarModeLabel(item.meeting_mode))}</span>
+              <strong>${escapeHtml(item.title || t('calendar.defaultEventTitle'))}</strong>
+              <span>${escapeHtml(item.event_type_name || t('calendar.defaultAgenda'))} - ${escapeHtml(getCalendarModeLabel(item.meeting_mode))}</span>
               <small>${escapeHtml(item.location || item.meeting_link || item.description || '')}</small>
             </div>
           </button>
@@ -1571,7 +2635,7 @@ function buildCalendarDayView(events = []) {
 
 function buildCalendarListView(events = []) {
   if (!events.length) {
-    return '<div class="intranet-empty-card">Nenhum compromisso encontrado para este periodo.</div>';
+    return `<div class="intranet-empty-card">${escapeHtml(t('calendar.noEventsPeriod'))}</div>`;
   }
   const grouped = new Map();
   events.forEach((event) => {
@@ -1588,10 +2652,10 @@ function buildCalendarListView(events = []) {
           ${items.map((item) => `
             <button class="intranet-calendar-list-item" type="button" data-event-id="${escapeHtml(item.id)}">
               <div>
-                <strong>${escapeHtml(item.title || 'Compromisso')}</strong>
-                <div class="small muted">${escapeHtml(item.event_type_name || 'Agenda')} - ${escapeHtml(getCalendarModeLabel(item.meeting_mode))}</div>
+                <strong>${escapeHtml(item.title || t('calendar.defaultEventTitle'))}</strong>
+                <div class="small muted">${escapeHtml(item.event_type_name || t('calendar.defaultAgenda'))} - ${escapeHtml(getCalendarModeLabel(item.meeting_mode))}</div>
               </div>
-              <span>${escapeHtml(item.all_day ? 'Dia inteiro' : `${item.start_time || ''} - ${item.end_time || ''}`)}</span>
+              <span>${escapeHtml(item.all_day ? t('calendar.fullDay') : `${item.start_time || ''} - ${item.end_time || ''}`)}</span>
             </button>
           `).join('')}
         </div>
@@ -1648,7 +2712,7 @@ async function selectCalendarEvent(eventId) {
     const { event, history } = await api(`/api/intranet/calendar/events/${eventId}`);
     fillCalendarEditor(event, history || []);
   } catch (err) {
-    alert('Nao foi possivel carregar o compromisso: ' + err.message);
+    alert(t('calendar.loadError', { error: err.message }, `Nao foi possivel carregar o compromisso: ${err.message}`));
   }
 }
 
@@ -1712,7 +2776,7 @@ async function fetchCalendarBootstrap() {
 
   const modeSelect = el('calendarModeFilter');
   if (modeSelect) {
-    modeSelect.innerHTML = '<option value="">Todos</option>' + (calendar?.meeting_modes || []).map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`).join('');
+    modeSelect.innerHTML = `<option value="">${escapeHtml(t('common.all'))}</option>` + (calendar?.meeting_modes || []).map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(getCalendarModeLabel(item.key) || item.label)}</option>`).join('');
   }
 
   resetCalendarEditor(calendarState.baseDate);
@@ -1950,7 +3014,7 @@ function getCommunicationDepartments() {
       const left = Number(a?.sort_order || a?.sortOrder || 0);
       const right = Number(b?.sort_order || b?.sortOrder || 0);
       if (left !== right) return left - right;
-      return String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR');
+      return String(a?.name || '').localeCompare(String(b?.name || ''), currentLocale());
     });
 }
 
@@ -1970,8 +3034,8 @@ function renderCommunicationDepartmentOptions(selectedIds = []) {
     label.innerHTML = `
       <input type="checkbox" value="${escapeHtml(department.id)}" ${selected.has(String(department.id)) ? 'checked' : ''} />
       <span>
-        <strong>${escapeHtml(department.name || 'Departamento')}</strong>
-        <small>${escapeHtml(department.description || 'Comunicado segmentado para esta area.')}</small>
+        <strong>${escapeHtml(department.name || t('intranet.departmentDefaultName', {}, 'Departamento'))}</strong>
+        <small>${escapeHtml(department.description || t('intranet.communication.segmentedDepartmentHint', {}, 'Comunicado segmentado para esta area.'))}</small>
       </span>
     `;
     wrap.appendChild(label);
@@ -1994,7 +3058,7 @@ function resetCommunicationForm() {
   if (!form) return;
   communicationState.editingId = null;
   el('communicationAnnouncementId').value = '';
-  el('communicationFormTitle').textContent = 'Publicar comunicado';
+  el('communicationFormTitle').textContent = t('intranet.communication.publishTitle', {}, 'Publicar comunicado');
   el('communicationTitle').value = '';
   el('communicationSummary').value = '';
   el('communicationContent').value = '';
@@ -2005,7 +3069,7 @@ function resetCommunicationForm() {
   el('communicationEndsAt').value = '';
   el('communicationIsActive').checked = true;
   el('btnCancelCommunicationEdit').style.display = 'none';
-  el('btnSaveCommunication').textContent = 'Salvar comunicado';
+  el('btnSaveCommunication').textContent = t('intranet.communication.save', {}, 'Salvar comunicado');
   renderCommunicationDepartmentOptions([]);
   syncCommunicationAudienceControls();
 }
@@ -2014,7 +3078,7 @@ function populateCommunicationForm(announcement) {
   if (!announcement) return;
   communicationState.editingId = Number(announcement.id || 0) || null;
   el('communicationAnnouncementId').value = String(announcement.id || '');
-  el('communicationFormTitle').textContent = `Editar comunicado #${announcement.id}`;
+  el('communicationFormTitle').textContent = t('intranet.communication.editTitle', { id: announcement.id }, `Editar comunicado #${announcement.id}`);
   el('communicationTitle').value = announcement.title || '';
   el('communicationSummary').value = announcement.summary_text || '';
   el('communicationContent').value = announcement.content_text || '';
@@ -2027,7 +3091,7 @@ function populateCommunicationForm(announcement) {
   renderCommunicationDepartmentOptions(announcement.department_ids || []);
   syncCommunicationAudienceControls();
   el('btnCancelCommunicationEdit').style.display = '';
-  el('btnSaveCommunication').textContent = 'Salvar alteracoes';
+  el('btnSaveCommunication').textContent = t('intranet.communication.saveChanges', {}, 'Salvar alteracoes');
 }
 
 function renderCommunicationCatalogList() {
@@ -2037,29 +3101,29 @@ function renderCommunicationCatalogList() {
 
   const items = Array.isArray(communicationState.catalog) ? communicationState.catalog : [];
   countLabel.textContent = items.length === 1
-    ? '1 comunicado publicado'
-    : `${items.length} comunicados publicados`;
+    ? t('intranet.communication.onePublished', {}, '1 comunicado publicado')
+    : t('intranet.communication.manyPublished', { count: items.length }, `${items.length} comunicados publicados`);
 
   if (!items.length) {
-    list.innerHTML = '<div class="intranet-empty-card">Nenhum comunicado publicado ainda.</div>';
+    list.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.communication.nonePublished', {}, 'Nenhum comunicado publicado ainda.'))}</div>`;
     return;
   }
 
   list.innerHTML = '';
   items.forEach((announcement) => {
     const audience = announcement.audience_scope === 'departments'
-      ? `Departamentos: ${(announcement.department_names || []).join(', ') || '-'}`
-      : 'Todos os usuarios';
+      ? t('intranet.communication.departmentsAudience', { departments: (announcement.department_names || []).join(', ') || '-' }, `Departamentos: ${(announcement.department_names || []).join(', ') || '-'}`)
+      : t('intranet.communication.allUsers', {}, 'Todos os usuarios');
     const schedule = [
-      announcement.starts_at ? formatDate(announcement.starts_at) : 'Agora',
-      announcement.ends_at ? formatDate(announcement.ends_at) : 'Sem fim',
+      announcement.starts_at ? formatDate(announcement.starts_at) : t('intranet.generic.now', {}, 'Agora'),
+      announcement.ends_at ? formatDate(announcement.ends_at) : t('intranet.generic.noEnd', {}, 'Sem fim'),
     ].join(' - ');
 
     const card = document.createElement('article');
     card.className = 'intranet-communication-manage-card';
     card.innerHTML = `
       <div class="intranet-card-meta">${escapeHtml(announcement.priority || 'normal')} - ${escapeHtml(announcement.announcement_type || 'announcement')}</div>
-      <h4>${escapeHtml(announcement.title || 'Comunicado')}</h4>
+      <h4>${escapeHtml(announcement.title || t('intranet.generic.announcement', {}, 'Comunicado'))}</h4>
       <p>${escapeHtml(announcement.summary_text || announcement.content_text || '')}</p>
       <div class="small muted">${escapeHtml(audience)}</div>
       <div class="small muted">${escapeHtml(schedule)}</div>
@@ -2071,22 +3135,22 @@ function renderCommunicationCatalogList() {
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.className = 'btn';
-    editBtn.textContent = 'Editar';
+    editBtn.textContent = t('common.edit');
     editBtn.onclick = () => populateCommunicationForm(announcement);
     actions.appendChild(editBtn);
 
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'btn danger';
-    deleteBtn.textContent = 'Excluir';
+    deleteBtn.textContent = t('common.delete');
     deleteBtn.onclick = async () => {
-      if (!confirm(`Deseja excluir o comunicado "${announcement.title}"?`)) return;
+      if (!confirm(t('intranet.communication.deleteConfirm', { title: announcement.title }, `Deseja excluir o comunicado "${announcement.title}"?`))) return;
       try {
         await api(`/api/admin/intranet/announcements/${announcement.id}`, { method: 'DELETE' });
         resetCommunicationForm();
         await refreshIntranetBootstrap();
       } catch (err) {
-        alert('Nao foi possivel excluir o comunicado: ' + err.message);
+        alert(t('intranet.communication.deleteError', { error: err.message }, `Nao foi possivel excluir o comunicado: ${err.message}`));
       }
     };
     actions.appendChild(deleteBtn);
@@ -2113,14 +3177,14 @@ function renderCommunication(intranet) {
 
   const items = intranet.communication?.mural || [];
   if (!items.length) {
-    grid.innerHTML = '<div class="intranet-empty-card">Nenhum comunicado ativo foi publicado ainda.</div>';
+    grid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.communication.emptyTitle'))}</div>`;
   } else {
     items.forEach((item) => {
       const card = document.createElement('article');
       card.className = 'intranet-communication-card';
       card.innerHTML = `
         <div class="intranet-card-meta">${escapeHtml(item.priority || 'normal')} - ${escapeHtml(item.type || 'announcement')}</div>
-        <h4>${escapeHtml(item.title || 'Comunicado')}</h4>
+        <h4>${escapeHtml(item.title || t('intranet.generic.announcement', {}, 'Comunicado'))}</h4>
         <p>${escapeHtml(item.description || '')}</p>
         <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
       `;
@@ -2146,6 +3210,35 @@ function applyDocumentFilter() {
 }
 
 async function init() {
+  await i18n()?.ready?.();
+  i18n()?.renderLanguageSwitcher?.('intranetLanguageSwitcher', { compact: true, showLabel: false });
+  renderIntranetChrome();
+  i18n()?.onChange?.((locale) => {
+    renderIntranetChrome();
+    if (bootstrapData) {
+      applyIntranetSnapshot(bootstrapData, { preserveRoute: true, route: currentViewState });
+      if (canManageCommunication()) {
+        renderCommunicationCatalogList();
+      }
+      if (calendarState.enabled) {
+        renderCalendarTypeOptions();
+        renderCalendarUserOptions();
+        renderCalendarViewButtons();
+        if (calendarState.range) el('calendarRangeLabel').textContent = formatCalendarRangeLabel(calendarState.range || {});
+        renderCalendarSummary();
+        renderCalendarView();
+      }
+    }
+    fetch('/api/me/preferences', {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(i18n()?.buildHeaders?.() || {}),
+      },
+      body: JSON.stringify({ preferred_locale: locale }),
+    }).catch(() => {});
+  });
   try {
     bootstrapData = await api('/api/intranet/bootstrap');
   } catch (err) {
@@ -2153,8 +3246,12 @@ async function init() {
       window.location.href = '/index.html';
       return;
     }
-    alert('Nao foi possivel carregar a intranet: ' + err.message);
+    alert(t('intranet.loadError', { error: err.message }, `Nao foi possivel carregar a intranet: ${err.message}`));
     return;
+  }
+
+  if (bootstrapData?.user?.preferred_locale && bootstrapData.user.preferred_locale !== currentLocale()) {
+    await i18n()?.setLocale?.(bootstrapData.user.preferred_locale, { persist: false });
   }
 
   await fetchTrainingBootstrap();
@@ -2193,12 +3290,12 @@ async function init() {
     };
 
     if (!payload.title) {
-      alert('Informe o titulo do comunicado.');
+      alert(t('intranet.communication.titleRequired', {}, 'Informe o titulo do comunicado.'));
       return;
     }
 
     if (audienceScope === 'departments' && !payload.department_ids.length) {
-      alert('Selecione ao menos um departamento para um comunicado segmentado.');
+      alert(t('intranet.communication.departmentsRequired', {}, 'Selecione ao menos um departamento para um comunicado segmentado.'));
       return;
     }
 
@@ -2217,7 +3314,7 @@ async function init() {
       resetCommunicationForm();
       await refreshIntranetBootstrap();
     } catch (err) {
-      alert('Nao foi possivel salvar o comunicado: ' + err.message);
+      alert(t('intranet.communication.saveError', { error: err.message }, `Nao foi possivel salvar o comunicado: ${err.message}`));
     }
   });
   el('btnNewCalendarEvent')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
@@ -2273,13 +3370,13 @@ async function init() {
         await selectCalendarEvent(calendarState.selectedEventId);
       }
     } catch (err) {
-      alert('Nao foi possivel salvar o compromisso: ' + err.message);
+      alert(t('calendar.saveError', { error: err.message }, `Nao foi possivel salvar o compromisso: ${err.message}`));
     }
   });
   el('btnCalendarCancelEvent')?.addEventListener('click', async () => {
     const eventId = Number(el('calendarEventId').value || 0);
     if (!eventId) return;
-    const reason = window.prompt('Motivo do cancelamento (opcional):', '');
+    const reason = window.prompt(t('calendar.cancelReasonPrompt', {}, 'Motivo do cancelamento (opcional):'), '');
     try {
       await api(`/api/intranet/calendar/events/${eventId}/cancel`, {
         method: 'POST',
@@ -2289,7 +3386,7 @@ async function init() {
       await fetchCalendarEvents();
       await selectCalendarEvent(eventId);
     } catch (err) {
-      alert('Nao foi possivel cancelar o compromisso: ' + err.message);
+      alert(t('calendar.cancelError', { error: err.message }, `Nao foi possivel cancelar o compromisso: ${err.message}`));
     }
   });
   el('btnRefreshSales')?.addEventListener('click', fetchSalesRecords);
@@ -2322,7 +3419,7 @@ async function init() {
       renderSalesRecordsGrid();
       renderSalesDetail(record, history || []);
     } catch (err) {
-      alert('Nao foi possivel salvar a atualizacao: ' + err.message);
+      alert(t('intranet.generic.saveError', { error: err.message }, `Nao foi possivel salvar a atualizacao: ${err.message}`));
     }
   });
   el('btnIntranetMenu')?.addEventListener('click', toggleSidebar);

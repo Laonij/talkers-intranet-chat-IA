@@ -4,17 +4,29 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const { URLSearchParams } = require("url");
 const cookieParser = require("cookie-parser");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
 const jwt = require("jsonwebtoken");
 
 const { DATA_DIR, DB_CLIENT, migrate, get, all, run, uploadsDir, kbDir, logEvent, searchDocuments } = require("./db");
-const { detectLanguage, formatDailyGreeting, getLanguageLabel, normalizeLanguageCode, normalizeText: normalizeLanguageText } = require("./lib/language");
+const {
+  DEFAULT_LOCALE,
+  detectLanguage,
+  formatDailyGreeting,
+  getLanguageLabel,
+  localeToLanguage,
+  normalizeLanguageCode,
+  normalizeLocaleCode,
+  normalizeText: normalizeLanguageText,
+} = require("./lib/language");
+const { evaluateEducationalModeration } = require("./lib/moderation");
 const { chunkTextSemantically, cosineSimilarity, extractKeywords, hashText, normalizeSemanticText, parseEmbedding } = require("./lib/semantic");
 const {
   DEPARTMENT_DEFINITIONS,
   buildDepartmentSeedRows,
+  buildDepartmentSubmenuSeedRows,
   buildIntranetWorkspace,
   sanitizeDepartment,
   sanitizeDepartmentList,
@@ -81,6 +93,13 @@ const TONE_PROFILE_MAP = {
   despojado: 'despojado, natural e fluido',
   persuasivo: 'persuasivo, comercial e orientado a conversao',
 };
+const DEFAULT_CONVERSATION_TITLES = new Set([
+  'nova conversa',
+  'new conversation',
+  'nueva conversacion',
+  'nuova conversazione',
+  'nouvelle conversation',
+]);
 const FIXED_DEPARTMENT_BY_EMAIL = {
   'julia@talkers.com': ['RH'],
   'laura@talkers.com': ['Administrativo'],
@@ -88,6 +107,9 @@ const FIXED_DEPARTMENT_BY_EMAIL = {
 const SALES_VIEW_DEPARTMENTS = new Set(['comercial', 'gestao', 'administrativo', 'financeiro', 'atendimento']);
 const SALES_EDITABLE_FIELDS = ['operational_status', 'follow_up_notes', 'next_action', 'next_action_date', 'observations'];
 const SALES_SOURCE_KEY = 'matriculas-novas';
+const MARKETING_INFLUENCER_STATUSES = new Set(['ativo', 'em teste', 'pausado', 'encerrado']);
+const MARKETING_INFLUENCE_TYPE_SUGGESTIONS = ['Stories', 'Reels', 'Postagens', 'UGC', 'Presenca em evento', 'Campanha local'];
+const MARKETING_CONTRACT_TYPE_SUGGESTIONS = ['Permuta', 'Contrato mensal', 'Campanha pontual', 'Comissao', 'Teste'];
 
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
@@ -266,7 +288,15 @@ async function ensureFixedDepartments() {
   }
 }
 
-async function maybeInsertDailyGreeting(conversationId, user) {
+function getRequestLocale(req, fallback = DEFAULT_LOCALE) {
+  const headerLocale = String(req.headers["x-talkers-locale"] || "").trim();
+  const cookieLocale = String(req.cookies?.talkers_locale || "").trim();
+  const queryLocale = String(req.query?.locale || "").trim();
+  const userLocale = String(req.currentUser?.preferred_locale || req.user?.preferred_locale || "").trim();
+  return normalizeLocaleCode(headerLocale || cookieLocale || queryLocale || userLocale || fallback);
+}
+
+async function maybeInsertDailyGreeting(conversationId, user, locale = DEFAULT_LOCALE) {
   const todayKey = brazilDateKey();
   const priorGreetings = await all(
     `SELECT m.meta_json
@@ -287,12 +317,14 @@ async function maybeInsertDailyGreeting(conversationId, user) {
 
   if (hasGreetingToday) return null;
 
-  const greeting = formatDailyGreeting(user.name || 'Usuario');
+  const safeLocale = normalizeLocaleCode(locale || user?.preferred_locale || DEFAULT_LOCALE);
+  const greeting = formatDailyGreeting(user.name || 'Usuario', safeLocale);
   const meta = JSON.stringify({
     daily_greeting: true,
     greeting_date: todayKey,
     structured: false,
-    response_language: 'pt',
+    response_language: localeToLanguage(safeLocale),
+    response_locale: safeLocale,
   });
 
   await run(
@@ -373,6 +405,10 @@ function clearSessionCookie(req, res) {
 function titleFromMessage(text) {
   const title = String(text || "").trim().split("\n")[0].slice(0, 60);
   return title || "Nova conversa";
+}
+
+function isDefaultConversationTitle(value = "") {
+  return DEFAULT_CONVERSATION_TITLES.has(String(value || "").trim().toLowerCase());
 }
 
 function sanitizeFilename(filename = "arquivo") {
@@ -870,6 +906,7 @@ async function hydrateUserRecord(user) {
     departments,
     department_details: details,
     can_access_intranet: coerceDbBoolean(user.can_access_intranet),
+    preferred_locale: normalizeLocaleCode(user.preferred_locale || DEFAULT_LOCALE),
   };
 }
 
@@ -923,6 +960,46 @@ async function ensureDepartmentCatalog() {
          metadata_json=excluded.metadata_json,
          updated_at=datetime('now')`,
       [row.slug, row.name, row.description, row.icon, row.isActive ? 1 : 0, row.sortOrder, row.metadataJson]
+    );
+  }
+}
+
+async function ensureDepartmentSubmenus() {
+  const seeds = buildDepartmentSubmenuSeedRows();
+  if (!seeds.length) return;
+
+  const departments = await listDepartmentCatalog({ includeInactive: true });
+  const departmentBySlug = new Map(
+    departments.map((department) => [String(department.slug || '').trim(), department]).filter((entry) => entry[0])
+  );
+
+  for (const seed of seeds) {
+    const department = departmentBySlug.get(String(seed.departmentSlug || '').trim());
+    if (!department?.id) continue;
+
+    await run(
+      `INSERT INTO department_submenus (department_id, title, slug, description, icon, view_key, sort_order, is_active, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(department_id, slug) DO UPDATE SET
+         title=excluded.title,
+         description=excluded.description,
+         icon=excluded.icon,
+         view_key=excluded.view_key,
+         sort_order=excluded.sort_order,
+         is_active=excluded.is_active,
+         metadata_json=excluded.metadata_json,
+         updated_at=datetime('now')`,
+      [
+        department.id,
+        seed.title,
+        seed.slug,
+        seed.description || null,
+        seed.icon || 'layers',
+        seed.viewKey || seed.slug,
+        Number(seed.sortOrder || 0),
+        seed.isActive ? 1 : 0,
+        seed.metadataJson || '{}',
+      ]
     );
   }
 }
@@ -1264,6 +1341,14 @@ async function saveCloser(payload = {}, actorUserId = null) {
 
 function getUserDepartmentKeySet(user = {}) {
   return new Set((user.departments || []).map((item) => normalizeDepartmentValue(item)).filter(Boolean));
+}
+
+function userHasDepartmentAccess(user = {}, departmentValue = "") {
+  if (!user) return false;
+  if (user.role === "admin") return true;
+  const departmentKey = normalizeDepartmentValue(departmentValue);
+  if (!departmentKey) return false;
+  return getUserDepartmentKeySet(user).has(departmentKey);
 }
 
 async function getSalesAccessScope(user) {
@@ -2360,12 +2445,12 @@ function normalizeQuery(value = "") {
   return normalizeSemanticText(String(value || "")).slice(0, 500);
 }
 
-function detectConversationLanguage(userText = "", history = []) {
+function detectConversationLanguage(userText = "", history = [], fallbackLanguage = "pt") {
   const joined = [
     String(userText || "").trim(),
     ...(history || []).slice(-4).map((item) => String(item?.content || "").trim()),
   ].filter(Boolean).join("\n");
-  return normalizeLanguageCode(detectLanguage(joined || userText || "", "pt"));
+  return normalizeLanguageCode(detectLanguage(joined || userText || "", fallbackLanguage));
 }
 
 function analyzeConversationIntent(userText = "", userLanguage = "pt", options = {}) {
@@ -4416,7 +4501,7 @@ async function openaiReply({ conversationId, userId, userText, contextText, base
 
 async function getUserById(userId) {
   const user = await get(
-    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, created_at FROM users WHERE id=?",
+    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, created_at FROM users WHERE id=?",
     [userId]
   );
   return hydrateUserRecord(user);
@@ -4424,7 +4509,7 @@ async function getUserById(userId) {
 
 async function getUserByEmail(email) {
   const user = await get(
-    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, created_at FROM users WHERE email=?",
+    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, created_at FROM users WHERE email=?",
     [email]
   );
   return hydrateUserRecord(user);
@@ -4575,6 +4660,808 @@ async function buildIntranetPayload(userId) {
   };
 }
 
+const MARKETING_PERIOD_TYPES = new Set(["day", "week", "month"]);
+
+function parseDelimitedValues(value) {
+  if (Array.isArray(value)) return value;
+  const safe = String(value || "").trim();
+  if (!safe) return [];
+  return safe.split(/[\n,;]+/g).map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeMarketingInfluencerStatus(value = "") {
+  const normalized = normalizeBusinessText(String(value || "").trim()).replace(/\s+/g, " ").trim();
+  if (!normalized) return "ativo";
+
+  const lookup = new Map([
+    ["ativo", "ativo"],
+    ["ativa", "ativo"],
+    ["em teste", "em teste"],
+    ["teste", "em teste"],
+    ["pausado", "pausado"],
+    ["pausada", "pausado"],
+    ["encerrado", "encerrado"],
+    ["encerrada", "encerrado"],
+  ]);
+
+  return lookup.get(normalized) || (MARKETING_INFLUENCER_STATUSES.has(normalized) ? normalized : "ativo");
+}
+
+function normalizeMarketingPeriodType(value = "") {
+  const normalized = normalizeBusinessText(String(value || "").trim()).replace(/\s+/g, " ").trim();
+  if (!normalized) return "month";
+
+  const lookup = new Map([
+    ["dia", "day"],
+    ["diario", "day"],
+    ["daily", "day"],
+    ["day", "day"],
+    ["semana", "week"],
+    ["semanal", "week"],
+    ["weekly", "week"],
+    ["week", "week"],
+    ["mes", "month"],
+    ["mensal", "month"],
+    ["monthly", "month"],
+    ["month", "month"],
+  ]);
+
+  return lookup.get(normalized) || "month";
+}
+
+function normalizeDateKeyInput(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(safe)) return safe;
+  const parsed = new Date(safe);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return brazilDateKey(parsed);
+}
+
+function buildMarketingPeriodRange(query = {}) {
+  const periodType = normalizeMarketingPeriodType(query.period_type || query.periodType || "month");
+  let from = normalizeDateKeyInput(query.from || query.start_date || "");
+  let to = normalizeDateKeyInput(query.to || query.end_date || "");
+
+  const anchor = normalizeDateKeyInput(query.base_date || from || to || brazilDateKey());
+  const base = new Date(`${anchor}T12:00:00-03:00`);
+
+  if (!from || !to) {
+    const start = new Date(base);
+    const end = new Date(base);
+
+    if (periodType === "month") {
+      start.setDate(1);
+      end.setMonth(end.getMonth() + 1, 0);
+    } else if (periodType === "week") {
+      start.setDate(start.getDate() - start.getDay());
+      end.setDate(start.getDate() + 6);
+    }
+
+    from = brazilDateKey(start);
+    to = brazilDateKey(end);
+  }
+
+  if (to < from) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+
+  const label = `${formatDateBrazil(`${from}T12:00:00-03:00`)} - ${formatDateBrazil(`${to}T12:00:00-03:00`)}`;
+  return { period_type: periodType, from, to, label };
+}
+
+function normalizeMarketingInfluenceTypes(value) {
+  const seen = new Set();
+  const out = [];
+
+  for (const item of parseDelimitedValues(value)) {
+    const normalized = String(item || "").trim();
+    const key = normalizeBusinessText(normalized);
+    if (!normalized || !key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+
+  return out;
+}
+
+function normalizeInstagramUrl(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return null;
+
+  let normalized = safe;
+  if (normalized.startsWith("@")) {
+    normalized = `https://instagram.com/${normalized.slice(1)}`;
+  } else if (!/^https?:\/\//i.test(normalized)) {
+    normalized = `https://${normalized}`;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    if (!/instagram\.com$/i.test(parsed.hostname) && !/www\.instagram\.com$/i.test(parsed.hostname)) {
+      throw new Error("instagram_invalid_host");
+    }
+    return parsed.toString();
+  } catch {
+    throw new Error("invalid_instagram_url");
+  }
+}
+
+function normalizeMarketingFollowersCount(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.round(numeric);
+}
+
+function normalizeMarketingMetricCount(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.round(numeric);
+}
+
+function calculateMarketingPerformanceScore(metric = {}) {
+  const posts = normalizeMarketingMetricCount(metric.posts_count);
+  const reels = normalizeMarketingMetricCount(metric.reels_count);
+  const stories = normalizeMarketingMetricCount(metric.stories_count);
+  const views = normalizeMarketingMetricCount(metric.views_count);
+  const enrollments = normalizeMarketingMetricCount(metric.enrollments_count);
+  return Math.round((posts * 3) + (reels * 5) + (stories * 2) + (views / 400) + (enrollments * 40));
+}
+
+function mapMarketingInfluencerRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    influence_types: Array.isArray(safeJsonParse(row.influence_types_json || "[]"))
+      ? safeJsonParse(row.influence_types_json || "[]")
+      : [],
+    followers_count: Number(row.followers_count || 0),
+    influencer_status: normalizeMarketingInfluencerStatus(row.influencer_status || "ativo"),
+  };
+}
+
+function mapMarketingInfluencerMetricRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    posts_count: normalizeMarketingMetricCount(row.posts_count),
+    reels_count: normalizeMarketingMetricCount(row.reels_count),
+    stories_count: normalizeMarketingMetricCount(row.stories_count),
+    views_count: normalizeMarketingMetricCount(row.views_count),
+    enrollments_count: normalizeMarketingMetricCount(row.enrollments_count),
+    performance_score: normalizeMarketingMetricCount(row.performance_score),
+    period_type: normalizeMarketingPeriodType(row.period_type || "month"),
+    source_type: String(row.source_type || "manual").trim() || "manual",
+  };
+}
+
+function getMarketingPerformanceLabel(score = 0) {
+  const safeScore = Number(score || 0);
+  if (safeScore >= 120) return "Excelente";
+  if (safeScore >= 80) return "Bom potencial";
+  if (safeScore >= 45) return "Acompanhar";
+  return "Baixo retorno";
+}
+
+async function getDepartmentBySlug(slug = "") {
+  const safeSlug = String(slug || "").trim();
+  if (!safeSlug) return null;
+  const row = await get(
+    `SELECT id, slug, name, description, icon, is_active, sort_order, metadata_json, created_at, updated_at
+       FROM departments
+      WHERE lower(slug)=lower(?)
+      LIMIT 1`,
+    [safeSlug]
+  );
+  return mapDepartmentRow(row);
+}
+
+async function resolveMarketingScope(user) {
+  const department = await getDepartmentBySlug("marketing");
+  if (!department?.id) {
+    throw new Error("marketing_department_not_found");
+  }
+
+  const allowed = userHasDepartmentAccess(user, "marketing");
+  if (!allowed) {
+    throw new Error("marketing_access_denied");
+  }
+
+  return { department, canManage: true };
+}
+
+async function listMarketingInfluencersRows(departmentId, options = {}) {
+  const params = [departmentId];
+  const where = ["department_id=?"];
+  const search = String(options.search || "").trim();
+  const status = String(options.status || "").trim();
+  const limit = Math.min(400, Math.max(1, Number(options.limit || 200)));
+
+  if (search) {
+    where.push("(lower(name) LIKE lower(?) OR lower(contract_type) LIKE lower(?) OR lower(instagram_url) LIKE lower(?))");
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  if (status) {
+    where.push("lower(influencer_status)=lower(?)");
+    params.push(normalizeMarketingInfluencerStatus(status));
+  }
+
+  params.push(limit);
+  const rows = await all(
+    `SELECT mi.id, mi.department_id, mi.name, mi.influence_types_json, mi.contract_type, mi.photo_url, mi.instagram_url,
+            mi.followers_count, mi.partnership_start_date, mi.influencer_status, mi.notes, mi.created_by, mi.updated_by,
+            mi.created_at, mi.updated_at,
+            uc.name AS created_by_name, uu.name AS updated_by_name
+       FROM marketing_influencers mi
+  LEFT JOIN users uc ON uc.id = mi.created_by
+  LEFT JOIN users uu ON uu.id = mi.updated_by
+      WHERE ${where.join(" AND ")}
+      ORDER BY lower(mi.name) ASC, mi.id DESC
+      LIMIT ?`,
+    params
+  );
+  return rows.map(mapMarketingInfluencerRow).filter(Boolean);
+}
+
+async function getMarketingInfluencerRow(influencerId) {
+  const row = await get(
+    `SELECT mi.id, mi.department_id, mi.name, mi.influence_types_json, mi.contract_type, mi.photo_url, mi.instagram_url,
+            mi.followers_count, mi.partnership_start_date, mi.influencer_status, mi.notes, mi.created_by, mi.updated_by,
+            mi.created_at, mi.updated_at,
+            uc.name AS created_by_name, uu.name AS updated_by_name
+       FROM marketing_influencers mi
+  LEFT JOIN users uc ON uc.id = mi.created_by
+  LEFT JOIN users uu ON uu.id = mi.updated_by
+      WHERE mi.id=?
+      LIMIT 1`,
+    [influencerId]
+  );
+  return mapMarketingInfluencerRow(row);
+}
+
+async function listMarketingMetricsForInfluencers(influencerIds = [], range = {}) {
+  const safeIds = Array.isArray(influencerIds)
+    ? influencerIds.map((value) => Number(value || 0)).filter(Boolean)
+    : [];
+  if (!safeIds.length) return [];
+
+  const from = normalizeDateKeyInput(range.from || "");
+  const to = normalizeDateKeyInput(range.to || "");
+  const params = [...safeIds];
+  const where = [`mim.influencer_id IN (${safeIds.map(() => "?").join(", ")})`];
+
+  if (from) {
+    where.push("COALESCE(mim.period_end, mim.period_start) >= ?");
+    params.push(from);
+  }
+  if (to) {
+    where.push("mim.period_start <= ?");
+    params.push(to);
+  }
+
+  const rows = await all(
+    `SELECT mim.id, mim.influencer_id, mim.period_type, mim.period_start, mim.period_end, mim.posts_count, mim.reels_count,
+            mim.stories_count, mim.views_count, mim.enrollments_count, mim.performance_score, mim.notes, mim.source_type,
+            mim.created_by, mim.updated_by, mim.created_at, mim.updated_at,
+            uc.name AS created_by_name, uu.name AS updated_by_name
+       FROM marketing_influencer_metrics mim
+  LEFT JOIN users uc ON uc.id = mim.created_by
+  LEFT JOIN users uu ON uu.id = mim.updated_by
+      WHERE ${where.join(" AND ")}
+      ORDER BY mim.period_start DESC, mim.id DESC`,
+    params
+  );
+  return rows.map(mapMarketingInfluencerMetricRow).filter(Boolean);
+}
+
+async function getMarketingEntityHistory(entityType, entityId) {
+  const rows = await all(
+    `SELECT l.id, l.entity_type, l.entity_id, l.action, l.field_name, l.old_value, l.new_value, l.origin, l.detail_json, l.created_at,
+            l.actor_user_id, u.name AS actor_name
+       FROM entity_change_log l
+  LEFT JOIN users u ON u.id = l.actor_user_id
+      WHERE l.entity_type=? AND l.entity_id=?
+      ORDER BY datetime(l.created_at) DESC, l.id DESC`,
+    [entityType, entityId]
+  );
+  return rows.map((row) => ({ ...row, detail: safeJsonParse(row.detail_json || "{}") || null }));
+}
+
+function summarizeMarketingMetrics(metrics = []) {
+  const safeMetrics = Array.isArray(metrics) ? metrics : [];
+  const dayLabels = new Set();
+  const monthlyTotals = new Map();
+  let posts = 0;
+  let reels = 0;
+  let stories = 0;
+  let views = 0;
+  let enrollments = 0;
+  let performanceTotal = 0;
+
+  safeMetrics.forEach((metric) => {
+    posts += normalizeMarketingMetricCount(metric.posts_count);
+    reels += normalizeMarketingMetricCount(metric.reels_count);
+    stories += normalizeMarketingMetricCount(metric.stories_count);
+    views += normalizeMarketingMetricCount(metric.views_count);
+    enrollments += normalizeMarketingMetricCount(metric.enrollments_count);
+    performanceTotal += normalizeMarketingMetricCount(metric.performance_score);
+
+    const start = normalizeDateKeyInput(metric.period_start || "");
+    const end = normalizeDateKeyInput(metric.period_end || metric.period_start || "");
+    if (start) dayLabels.add(start);
+    if (end && end !== start) dayLabels.add(end);
+
+    const monthKey = String(start || end || "").slice(0, 7);
+    if (monthKey) {
+      if (!monthlyTotals.has(monthKey)) {
+        monthlyTotals.set(monthKey, {
+          period_key: monthKey,
+          label: formatDateBrazil(`${monthKey}-01T12:00:00-03:00`),
+          posts_count: 0,
+          reels_count: 0,
+          stories_count: 0,
+          views_count: 0,
+          enrollments_count: 0,
+          performance_score: 0,
+        });
+      }
+      const bucket = monthlyTotals.get(monthKey);
+      bucket.posts_count += normalizeMarketingMetricCount(metric.posts_count);
+      bucket.reels_count += normalizeMarketingMetricCount(metric.reels_count);
+      bucket.stories_count += normalizeMarketingMetricCount(metric.stories_count);
+      bucket.views_count += normalizeMarketingMetricCount(metric.views_count);
+      bucket.enrollments_count += normalizeMarketingMetricCount(metric.enrollments_count);
+      bucket.performance_score += normalizeMarketingMetricCount(metric.performance_score);
+    }
+  });
+
+  const launchesTotal = safeMetrics.length;
+  const averageScore = launchesTotal ? Math.round(performanceTotal / launchesTotal) : 0;
+
+  return {
+    launches_total: launchesTotal,
+    posts_count: posts,
+    reels_count: reels,
+    stories_count: stories,
+    views_count: views,
+    enrollments_count: enrollments,
+    performance_score_total: performanceTotal,
+    performance_score: averageScore,
+    performance_label: getMarketingPerformanceLabel(averageScore),
+    reported_days_total: dayLabels.size,
+    reported_days: Array.from(dayLabels).sort((left, right) => left.localeCompare(right, "pt-BR")),
+    monthly_evolution: Array.from(monthlyTotals.values()).sort((left, right) => left.period_key.localeCompare(right.period_key, "pt-BR")),
+  };
+}
+
+function buildMarketingInfluencerCards(influencers = [], metrics = []) {
+  const metricsByInfluencer = new Map();
+  for (const metric of metrics) {
+    const key = Number(metric.influencer_id || 0);
+    if (!metricsByInfluencer.has(key)) metricsByInfluencer.set(key, []);
+    metricsByInfluencer.get(key).push(metric);
+  }
+
+  return influencers.map((influencer) => {
+    const summary = summarizeMarketingMetrics(metricsByInfluencer.get(Number(influencer.id || 0)) || []);
+    return {
+      ...influencer,
+      metrics_summary: summary,
+      last_period_label: summary.monthly_evolution.at(-1)?.label || "",
+    };
+  });
+}
+
+function buildMarketingComparisonPayload(influencerCards = []) {
+  const items = (Array.isArray(influencerCards) ? influencerCards : []).map((item) => ({
+    id: item.id,
+    name: item.name,
+    influencer_status: item.influencer_status || "ativo",
+    followers_count: Number(item.followers_count || 0),
+    posts_count: Number(item.metrics_summary?.posts_count || 0),
+    reels_count: Number(item.metrics_summary?.reels_count || 0),
+    stories_count: Number(item.metrics_summary?.stories_count || 0),
+    views_count: Number(item.metrics_summary?.views_count || 0),
+    enrollments_count: Number(item.metrics_summary?.enrollments_count || 0),
+    performance_score: Number(item.metrics_summary?.performance_score || 0),
+  }));
+
+  const maxima = {
+    followers_count: Math.max(...items.map((item) => item.followers_count), 1),
+    posts_count: Math.max(...items.map((item) => item.posts_count), 1),
+    reels_count: Math.max(...items.map((item) => item.reels_count), 1),
+    stories_count: Math.max(...items.map((item) => item.stories_count), 1),
+    views_count: Math.max(...items.map((item) => item.views_count), 1),
+    enrollments_count: Math.max(...items.map((item) => item.enrollments_count), 1),
+    performance_score: Math.max(...items.map((item) => item.performance_score), 1),
+  };
+
+  const monthlyBuckets = new Map();
+  influencerCards.forEach((influencer) => {
+    const series = influencer.metrics_summary?.monthly_evolution || [];
+    series.forEach((entry) => {
+      if (!monthlyBuckets.has(entry.period_key)) {
+        monthlyBuckets.set(entry.period_key, {
+          period_key: entry.period_key,
+          label: entry.label,
+          influencers: [],
+        });
+      }
+      monthlyBuckets.get(entry.period_key).influencers.push({
+        influencer_id: influencer.id,
+        name: influencer.name,
+        enrollments_count: Number(entry.enrollments_count || 0),
+        posts_count: Number(entry.posts_count || 0),
+        reels_count: Number(entry.reels_count || 0),
+        stories_count: Number(entry.stories_count || 0),
+        views_count: Number(entry.views_count || 0),
+        performance_score: Number(entry.performance_score || 0),
+      });
+    });
+  });
+
+  return {
+    items,
+    maxima,
+    monthly_evolution: Array.from(monthlyBuckets.values())
+      .sort((left, right) => left.period_key.localeCompare(right.period_key, "pt-BR"))
+      .slice(-6),
+  };
+}
+
+async function buildMarketingInfluencerBootstrap(user, query = {}) {
+  const scope = await resolveMarketingScope(user);
+  const period = buildMarketingPeriodRange(query);
+  const influencers = await listMarketingInfluencersRows(scope.department.id, {
+    search: query.search,
+    status: query.status,
+    limit: query.limit,
+  });
+  const metrics = await listMarketingMetricsForInfluencers(influencers.map((item) => item.id), period);
+  const cards = buildMarketingInfluencerCards(influencers, metrics);
+  const comparison = buildMarketingComparisonPayload(cards);
+  const totalFollowers = cards.reduce((acc, item) => acc + Number(item.followers_count || 0), 0);
+  const totalEnrollments = cards.reduce((acc, item) => acc + Number(item.metrics_summary?.enrollments_count || 0), 0);
+  const totalViews = cards.reduce((acc, item) => acc + Number(item.metrics_summary?.views_count || 0), 0);
+  const totalLaunches = cards.reduce((acc, item) => acc + Number(item.metrics_summary?.launches_total || 0), 0);
+
+  return {
+    enabled: true,
+    department: {
+      id: scope.department.id,
+      name: scope.department.name,
+      slug: scope.department.slug,
+    },
+    period,
+    suggestions: {
+      influence_types: MARKETING_INFLUENCE_TYPE_SUGGESTIONS,
+      contract_types: MARKETING_CONTRACT_TYPE_SUGGESTIONS,
+      statuses: Array.from(MARKETING_INFLUENCER_STATUSES),
+    },
+    summary: {
+      total_influencers: cards.length,
+      active_influencers: cards.filter((item) => item.influencer_status === "ativo").length,
+      followers_total: totalFollowers,
+      launches_total: totalLaunches,
+      views_total: totalViews,
+      enrollments_total: totalEnrollments,
+    },
+    influencers: cards,
+    comparison,
+  };
+}
+
+async function buildMarketingInfluencerDetail(user, influencerId, query = {}) {
+  await resolveMarketingScope(user);
+  const influencer = await getMarketingInfluencerRow(influencerId);
+  if (!influencer) throw new Error("not_found");
+  if (!userHasDepartmentAccess(user, "marketing")) throw new Error("marketing_access_denied");
+
+  const period = buildMarketingPeriodRange(query);
+  const metrics = await listMarketingMetricsForInfluencers([influencer.id], period);
+  const summary = summarizeMarketingMetrics(metrics);
+  const history = await getMarketingEntityHistory("marketing_influencer", influencer.id);
+
+  return {
+    influencer,
+    period,
+    summary,
+    metric_history: metrics.map((metric) => ({
+      ...metric,
+      period_label: metric.period_start === metric.period_end
+        ? formatDateBrazil(`${metric.period_start}T12:00:00-03:00`)
+        : `${formatDateBrazil(`${metric.period_start}T12:00:00-03:00`)} - ${formatDateBrazil(`${metric.period_end}T12:00:00-03:00`)}`,
+    })),
+    history,
+  };
+}
+
+async function saveMarketingInfluencer(payload = {}, actorUser) {
+  const scope = await resolveMarketingScope(actorUser);
+  const influencerId = Number(payload.id || 0);
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0);
+  const name = String(payload.name || "").trim();
+  const influenceTypes = normalizeMarketingInfluenceTypes(payload.influence_types || payload.influence_types_json || []);
+  const contractType = String(payload.contract_type || "").trim();
+  const photoUrl = String(payload.photo_url || "").trim() || null;
+  const instagramUrl = normalizeInstagramUrl(payload.instagram_url || "");
+  const followersCount = normalizeMarketingFollowersCount(payload.followers_count);
+  const partnershipStartDate = normalizeDateKeyInput(payload.partnership_start_date || "");
+  const influencerStatus = normalizeMarketingInfluencerStatus(payload.influencer_status || "ativo");
+  const notes = String(payload.notes || "").trim() || null;
+
+  if (!name) throw new Error("missing_influencer_name");
+
+  const conflict = await get(
+    `SELECT id
+       FROM marketing_influencers
+      WHERE department_id=?
+        AND lower(name)=lower(?)
+        AND id<>?
+      LIMIT 1`,
+    [scope.department.id, name, influencerId || 0]
+  );
+  if (conflict) throw new Error("marketing_influencer_name_conflict");
+
+  if (influencerId) {
+    await run(
+      `UPDATE marketing_influencers
+          SET name=?, influence_types_json=?, contract_type=?, photo_url=?, instagram_url=?, followers_count=?,
+              partnership_start_date=?, influencer_status=?, notes=?, updated_by=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        name,
+        safeJsonStringify(influenceTypes, "[]"),
+        contractType || null,
+        photoUrl,
+        instagramUrl,
+        followersCount,
+        partnershipStartDate || null,
+        influencerStatus,
+        notes,
+        actorId || null,
+        influencerId,
+      ]
+    );
+
+    await logEntityChange({
+      entityType: "marketing_influencer",
+      entityId: influencerId,
+      action: "updated",
+      actorUserId: actorId || null,
+      origin: "manual_edit",
+      detail: { source: "marketing_workspace", name, influencer_status: influencerStatus },
+    });
+  } else {
+    const created = await run(
+      `INSERT INTO marketing_influencers
+         (department_id, name, influence_types_json, contract_type, photo_url, instagram_url, followers_count,
+          partnership_start_date, influencer_status, notes, created_by, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        scope.department.id,
+        name,
+        safeJsonStringify(influenceTypes, "[]"),
+        contractType || null,
+        photoUrl,
+        instagramUrl,
+        followersCount,
+        partnershipStartDate || null,
+        influencerStatus,
+        notes,
+        actorId || null,
+        actorId || null,
+      ]
+    );
+
+    await logEntityChange({
+      entityType: "marketing_influencer",
+      entityId: created.lastID,
+      action: "created",
+      actorUserId: actorId || null,
+      origin: "manual_create",
+      detail: { source: "marketing_workspace", name, influencer_status: influencerStatus },
+    });
+
+    return getMarketingInfluencerRow(created.lastID);
+  }
+
+  return getMarketingInfluencerRow(influencerId);
+}
+
+async function createMarketingInfluencerMetric(influencerId, payload = {}, actorUser) {
+  await resolveMarketingScope(actorUser);
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0);
+  const influencer = await getMarketingInfluencerRow(influencerId);
+  if (!influencer) throw new Error("not_found");
+
+  const periodType = normalizeMarketingPeriodType(payload.period_type || "month");
+  const periodStart = normalizeDateKeyInput(payload.period_start || payload.date || "");
+  const periodEnd = normalizeDateKeyInput(payload.period_end || payload.period_start || payload.date || "");
+  const postsCount = normalizeMarketingMetricCount(payload.posts_count);
+  const reelsCount = normalizeMarketingMetricCount(payload.reels_count);
+  const storiesCount = normalizeMarketingMetricCount(payload.stories_count);
+  const viewsCount = normalizeMarketingMetricCount(payload.views_count);
+  const enrollmentsCount = normalizeMarketingMetricCount(payload.enrollments_count);
+  const notes = String(payload.notes || "").trim() || null;
+  const sourceType = String(payload.source_type || "manual").trim() || "manual";
+
+  if (!periodStart) throw new Error("missing_metric_period_start");
+  const safePeriodEnd = periodEnd || periodStart;
+  if (safePeriodEnd < periodStart) throw new Error("metric_period_invalid");
+
+  const performanceScore = calculateMarketingPerformanceScore({
+    posts_count: postsCount,
+    reels_count: reelsCount,
+    stories_count: storiesCount,
+    views_count: viewsCount,
+    enrollments_count: enrollmentsCount,
+  });
+
+  const created = await run(
+    `INSERT INTO marketing_influencer_metrics
+       (influencer_id, period_type, period_start, period_end, posts_count, reels_count, stories_count, views_count,
+        enrollments_count, performance_score, notes, source_type, created_by, updated_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      influencer.id,
+      periodType,
+      periodStart,
+      safePeriodEnd,
+      postsCount,
+      reelsCount,
+      storiesCount,
+      viewsCount,
+      enrollmentsCount,
+      performanceScore,
+      notes,
+      sourceType,
+      actorId || null,
+      actorId || null,
+    ]
+  );
+
+  await logEntityChange({
+    entityType: "marketing_influencer_metric",
+    entityId: created.lastID,
+    action: "created",
+    actorUserId: actorId || null,
+    origin: sourceType === "manual" ? "manual_entry" : sourceType,
+    detail: {
+      influencer_id: influencer.id,
+      influencer_name: influencer.name,
+      period_type: periodType,
+      period_start: periodStart,
+      period_end: safePeriodEnd,
+      performance_score: performanceScore,
+    },
+  });
+
+  return get(
+    `SELECT mim.id, mim.influencer_id, mim.period_type, mim.period_start, mim.period_end, mim.posts_count, mim.reels_count,
+            mim.stories_count, mim.views_count, mim.enrollments_count, mim.performance_score, mim.notes, mim.source_type,
+            mim.created_by, mim.updated_by, mim.created_at, mim.updated_at,
+            uc.name AS created_by_name, uu.name AS updated_by_name
+       FROM marketing_influencer_metrics mim
+  LEFT JOIN users uc ON uc.id = mim.created_by
+  LEFT JOIN users uu ON uu.id = mim.updated_by
+      WHERE mim.id=?`,
+    [created.lastID]
+  ).then(mapMarketingInfluencerMetricRow);
+}
+
+function buildMarketingAnalysisFallback(summary = {}, comparison = {}, period = {}, influencer = null) {
+  const items = Array.isArray(comparison.items) ? [...comparison.items] : [];
+  items.sort((left, right) => Number(right.enrollments_count || 0) - Number(left.enrollments_count || 0));
+  const leader = items[0] || null;
+  const weakest = items.at(-1) || null;
+  const rangeLabel = period.label || "periodo selecionado";
+  const paragraphs = [];
+
+  if (influencer) {
+    const performance = Number(influencer.performance_score || 0);
+    const enrollments = Number(influencer.enrollments_count || 0);
+    const views = Number(influencer.views_count || 0);
+    let recommendation = "acompanhar mais de perto";
+    if (enrollments >= 8 || performance >= 100) recommendation = "continuar investimento";
+    else if (enrollments >= 4 || performance >= 60) recommendation = "segurar mais um mes";
+    else if (views >= 4000) recommendation = "ajustar tipo de campanha";
+    else recommendation = "rever estrategia";
+
+    paragraphs.push(`Analise de ${influencer.name} em ${rangeLabel}: ${influencer.name} registrou ${enrollments} matricula(s), ${views} views e score medio ${performance}. A recomendacao operacional agora e ${recommendation}.`);
+    if (performance < 45) {
+      paragraphs.push("O retorno ainda esta abaixo do desejado. Vale revisar formato de conteudo, briefing e aderencia da campanha antes de renovar no mesmo modelo.");
+    } else if (performance >= 80) {
+      paragraphs.push("O desempenho indica boa tracao. Vale reforcar a parceria, manter frequencia e testar campanhas com CTA mais direto para conversao.");
+    }
+    return paragraphs.join("\n\n");
+  }
+
+  paragraphs.push(`Leitura geral do periodo ${rangeLabel}: ${summary.total_influencers || 0} influencer(s) acompanhadas, ${summary.enrollments_total || 0} matricula(s) atribuidas e ${summary.views_total || 0} views registradas.`);
+  if (leader) {
+    paragraphs.push(`${leader.name} lidera o recorte com ${leader.enrollments_count} matricula(s), ${leader.reels_count} reels e score ${leader.performance_score}. Vale manter a parceria ativa e observar o formato que mais converte.`);
+  }
+  if (weakest && weakest.id !== leader?.id) {
+    paragraphs.push(`${weakest.name} aparece com menor retorno relativo neste recorte. Recomendo rever estrategia, acompanhar mais de perto e decidir se faz sentido insistir, pausar ou testar outra campanha.`);
+  }
+  return paragraphs.join("\n\n");
+}
+
+async function requestOpenAIPlainText(systemText, userText) {
+  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) return "";
+
+  try {
+    const resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        input: [
+          { role: "system", content: [{ type: "input_text", text: String(systemText || "").trim() }] },
+          { role: "user", content: [{ type: "input_text", text: String(userText || "").trim() }] },
+        ],
+      }),
+    });
+
+    if (!resp.ok) {
+      console.log("Falha analise OpenAI marketing:", resp.status, await resp.text());
+      return "";
+    }
+
+    const data = await resp.json();
+    return String(data?.output_text || "").trim();
+  } catch (err) {
+    console.log("Erro analise OpenAI marketing:", err?.message || err);
+    return "";
+  }
+}
+
+async function buildMarketingInfluencerAnalysis(user, payload = {}) {
+  await resolveMarketingScope(user);
+  const period = buildMarketingPeriodRange(payload);
+  const bootstrap = await buildMarketingInfluencerBootstrap(user, period);
+  const influencerId = Number(payload.influencer_id || 0);
+  const selected = influencerId
+    ? bootstrap.influencers.find((item) => Number(item.id) === influencerId) || null
+    : null;
+
+  const fallback = buildMarketingAnalysisFallback(bootstrap.summary, bootstrap.comparison, bootstrap.period, selected ? {
+    name: selected.name,
+    performance_score: selected.metrics_summary?.performance_score || 0,
+    enrollments_count: selected.metrics_summary?.enrollments_count || 0,
+    views_count: selected.metrics_summary?.views_count || 0,
+  } : null);
+
+  const systemText = [
+    "Voce e uma analista de marketing da escola Talkers.",
+    "Responda em portugues do Brasil.",
+    "Analise o desempenho de influencers de forma objetiva, comparativa e operacional.",
+    "Traga diagnostico, pontos fortes, pontos fracos, recomendacao pratica e proximo passo.",
+    "Nao invente dados fora do resumo enviado.",
+  ].join(" ");
+
+  const userText = [
+    `Periodo: ${bootstrap.period.label}.`,
+    selected ? `Influencer foco: ${selected.name}.` : "Analise comparativa geral entre as influencers.",
+    `Resumo geral: ${safeJsonStringify(bootstrap.summary, "{}")}.`,
+    `Comparativo: ${safeJsonStringify(bootstrap.comparison.items, "[]")}.`,
+  ].join("\n");
+
+  const aiText = await requestOpenAIPlainText(systemText, userText);
+  return {
+    period: bootstrap.period,
+    analysis_text: aiText || fallback,
+    generated_at: new Date().toISOString(),
+    influencer_id: selected?.id || null,
+  };
+}
+
 async function requireIntranetAccess(req, res, next) {
   const user = await getUserById(req.user.sub);
   if (!user) return res.status(401).json({ error: 'not_authenticated' });
@@ -4650,6 +5537,12 @@ app.post("/api/login", async (req, res) => {
   const sessionUser = await getUserById(user.id) || user;
   const token = signSession(sessionUser, JWT_SECRET);
   setSessionCookie(req, res, token);
+  res.cookie("talkers_locale", normalizeLocaleCode(sessionUser?.preferred_locale || DEFAULT_LOCALE), {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: isHttps(req),
+    maxAge: 365 * 24 * 60 * 60 * 1000,
+  });
 
   await logEvent(user.id, "login", { email });
   res.json({ ok: true });
@@ -4657,6 +5550,11 @@ app.post("/api/login", async (req, res) => {
 
 app.post("/api/logout", requireAuth(JWT_SECRET), async (req, res) => {
   clearSessionCookie(req, res);
+  res.clearCookie("talkers_locale", {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: isHttps(req),
+  });
   await logEvent(req.user.sub, "logout", {});
   res.json({ ok: true });
 });
@@ -4668,19 +5566,39 @@ app.get("/logout", (req, res) => {
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => {
   const user = await getUserById(req.user.sub);
+  const requestLocale = getRequestLocale(req, user?.preferred_locale || DEFAULT_LOCALE);
 
   res.json({
-    user: user || {
-      id: req.user.sub,
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-      department: req.user.department || '',
-      departments: Array.isArray(req.user.departments) ? req.user.departments : [],
-      department_details: [],
-      can_access_intranet: parseBooleanInput(req.user.can_access_intranet),
-    },
+    user: user
+      ? {
+          ...user,
+          preferred_locale: requestLocale || user.preferred_locale || DEFAULT_LOCALE,
+        }
+      : {
+          id: req.user.sub,
+          name: req.user.name,
+          email: req.user.email,
+          role: req.user.role,
+          department: req.user.department || '',
+          departments: Array.isArray(req.user.departments) ? req.user.departments : [],
+          department_details: [],
+          can_access_intranet: parseBooleanInput(req.user.can_access_intranet),
+          preferred_locale: requestLocale,
+        },
   });
+});
+
+app.patch("/api/me/preferences", requireAuth(JWT_SECRET), async (req, res) => {
+  const preferredLocale = normalizeLocaleCode(req.body?.preferred_locale || DEFAULT_LOCALE);
+  await run("UPDATE users SET preferred_locale=? WHERE id=?", [preferredLocale, req.user.sub]);
+  res.cookie("talkers_locale", preferredLocale, {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: isHttps(req),
+    maxAge: 365 * 24 * 60 * 60 * 1000,
+  });
+  const user = await getUserById(req.user.sub);
+  res.json({ ok: true, user });
 });
 
 app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
@@ -4695,6 +5613,7 @@ app.post("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
   const title = String(req.body?.title || "Nova conversa").trim() || "Nova conversa";
   const requested = req.body?.mode === "empresa" ? "empresa" : "geral";
   const mode = req.user.role === "admin" ? requested : "geral";
+  const requestLocale = getRequestLocale(req);
 
   const created = await run(
     "INSERT INTO conversations (user_id, title, mode) VALUES (?, ?, ?)",
@@ -4702,10 +5621,10 @@ app.post("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
   );
 
   const freshUser = await get(
-    "SELECT id, name, email, role, department FROM users WHERE id=?",
+    "SELECT id, name, email, role, department, preferred_locale FROM users WHERE id=?",
     [req.user.sub]
   );
-  await maybeInsertDailyGreeting(created.lastID, freshUser || req.user);
+  await maybeInsertDailyGreeting(created.lastID, freshUser || req.user, requestLocale);
 
   res.json({ conversation_id: created.lastID });
 });
@@ -4804,8 +5723,10 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   if (!conv) return res.status(404).json({ error: "not_found" });
 
   const currentUser = await getUserById(req.user.sub);
-  await maybeInsertDailyGreeting(id, currentUser || req.user);
-  if (conv.title === "Nova conversa") {
+  const requestLocale = getRequestLocale(req, currentUser?.preferred_locale || DEFAULT_LOCALE);
+  const requestLanguage = normalizeLanguageCode(localeToLanguage(requestLocale));
+  await maybeInsertDailyGreeting(id, currentUser || req.user, requestLocale);
+  if (isDefaultConversationTitle(conv.title)) {
     await run("UPDATE conversations SET title=? WHERE id=?", [titleFromMessage(text), id]);
   }
 
@@ -4815,10 +5736,28 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   );
 
   const topicSnapshot = await getConversationTopicSnapshot(id, text, 12);
-  const userLanguage = detectConversationLanguage(text, topicSnapshot.history);
+  const userLanguage = detectConversationLanguage(text, topicSnapshot.history, requestLanguage);
   const responseProfile = analyzeConversationIntent(text, userLanguage, {
     departments: currentUser?.departments || [],
   });
+  const moderation = evaluateEducationalModeration(text, {
+    locale: requestLocale,
+    userLanguage,
+  });
+  if (moderation.blocked) {
+    const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
+      response_language: userLanguage,
+      response_locale: requestLocale,
+      moderated: true,
+      moderation_category: moderation.category,
+    });
+    await run(
+      "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
+      [id, moderation.message, JSON.stringify(moderationMetaObject)]
+    );
+    await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
+    return res.json({ reply: moderation.message, meta: moderationMetaObject });
+  }
   const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift
     ? []
     : await getRelevantMemoryEntries(req.user.sub, id, text, 4);
@@ -6932,6 +7871,81 @@ app.patch('/api/intranet/sales/records/:id', requireAuth(JWT_SECRET), requireInt
     res.status(400).json({ error: err?.message || 'sales_record_update_failed' });
   }
 });
+
+app.get("/api/intranet/marketing/influencers/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const marketing = await buildMarketingInfluencerBootstrap(user, req.query || {});
+    res.json({ marketing });
+  } catch (err) {
+    if (err?.message === "marketing_access_denied") {
+      return res.status(403).json({ error: "marketing_access_denied" });
+    }
+    if (err?.message === "marketing_department_not_found") {
+      return res.status(404).json({ error: "marketing_department_not_found" });
+    }
+    res.status(400).json({ error: err?.message || "marketing_bootstrap_failed" });
+  }
+});
+
+app.post("/api/intranet/marketing/influencers", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const influencer = await saveMarketingInfluencer(req.body || {}, user);
+    res.json({ ok: true, influencer });
+  } catch (err) {
+    if (err?.message === "marketing_access_denied") {
+      return res.status(403).json({ error: "marketing_access_denied" });
+    }
+    res.status(400).json({ error: err?.message || "marketing_influencer_create_failed" });
+  }
+});
+
+app.get("/api/intranet/marketing/influencers/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const detail = await buildMarketingInfluencerDetail(user, Number(req.params.id), req.query || {});
+    res.json(detail);
+  } catch (err) {
+    if (err?.message === "not_found") {
+      return res.status(404).json({ error: "not_found" });
+    }
+    if (err?.message === "marketing_access_denied") {
+      return res.status(403).json({ error: "marketing_access_denied" });
+    }
+    res.status(400).json({ error: err?.message || "marketing_influencer_detail_failed" });
+  }
+});
+
+app.post("/api/intranet/marketing/influencers/:id/metrics", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const metric = await createMarketingInfluencerMetric(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, metric });
+  } catch (err) {
+    if (err?.message === "not_found") {
+      return res.status(404).json({ error: "not_found" });
+    }
+    if (err?.message === "marketing_access_denied") {
+      return res.status(403).json({ error: "marketing_access_denied" });
+    }
+    res.status(400).json({ error: err?.message || "marketing_metric_create_failed" });
+  }
+});
+
+app.post("/api/intranet/marketing/influencers/analyze", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const analysis = await buildMarketingInfluencerAnalysis(user, req.body || {});
+    res.json({ ok: true, ...analysis });
+  } catch (err) {
+    if (err?.message === "marketing_access_denied") {
+      return res.status(403).json({ error: "marketing_access_denied" });
+    }
+    res.status(400).json({ error: err?.message || "marketing_analysis_failed" });
+  }
+});
+
 app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
   const payload = await buildIntranetPayload(req.user.sub);
   res.json(payload || { user: null, intranet: null, department_catalog: [] });
@@ -6974,6 +7988,7 @@ async function startServer() {
   await migrate();
   await ensureAdmin();
   await ensureDepartmentCatalog();
+  await ensureDepartmentSubmenus();
   await ensureCalendarEventTypes();
   await syncLegacyUserDepartmentData();
   await ensureFixedDepartments();

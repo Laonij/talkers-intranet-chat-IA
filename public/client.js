@@ -1,42 +1,16 @@
 ﻿const el = (id) => document.getElementById(id);
 
+const i18n = () => window.TalkersI18n;
+const t = (key, params = {}, fallback = '') => i18n()?.t?.(key, params, fallback) ?? fallback || key;
+const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
+
 const QUICK_PROMPTS = [
-  {
-    icon: "document",
-    label: "Gerar documento",
-    hint: "Crie comunicados, contratos e textos organizados.",
-    prompt: "Gere um documento profissional sobre este tema:",
-  },
-  {
-    icon: "spreadsheet",
-    label: "Criar planilha",
-    hint: "Monte tabelas com colunas prontas para uso.",
-    prompt: "Crie uma planilha organizada com os principais campos para:",
-  },
-  {
-    icon: "audio",
-    label: "Transcrever audio",
-    hint: "Analise audio enviado ou gravado no navegador.",
-    prompt: "Analise e transcreva o audio enviado, depois faca um resumo objetivo.",
-  },
-  {
-    icon: "image",
-    label: "Gerar imagem",
-    hint: "Produza imagens para escola, marketing e materiais.",
-    prompt: "Gere uma imagem realista e profissional de:",
-  },
-  {
-    icon: "graduation",
-    label: "Comunicado escolar",
-    hint: "Crie avisos claros e acolhedores para alunos e familias.",
-    prompt: "Crie um comunicado escolar claro e acolhedor sobre:",
-  },
-  {
-    icon: "brain",
-    label: "Consultar base interna",
-    hint: "Pesquise documentos e conhecimento da empresa.",
-    prompt: "Consulte a base interna e me responda sobre:",
-  },
+  { icon: "document", key: "document" },
+  { icon: "spreadsheet", key: "spreadsheet" },
+  { icon: "audio", key: "audio" },
+  { icon: "image", key: "image" },
+  { icon: "graduation", key: "school" },
+  { icon: "brain", key: "knowledge" },
 ];
 
 function renderIconSvg(iconName) {
@@ -68,6 +42,7 @@ let recordingStream = null;
 let recordingChunks = [];
 let pendingComposerFiles = [];
 let isSendingMessage = false;
+const CHAT_SIDEBAR_STORAGE_KEY = "talkers_chat_sidebar_state_v1";
 
 const MAX_COMPOSER_FILE_BYTES = 25 * 1024 * 1024;
 
@@ -76,8 +51,8 @@ async function api(path, opts = {}) {
     credentials: "include",
     headers:
       opts.body instanceof FormData
-        ? undefined
-        : { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ? { ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) }
+        : { "Content-Type": "application/json", ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) },
     ...opts,
   });
 
@@ -100,7 +75,7 @@ async function api(path, opts = {}) {
 
 function formatDate(iso) {
   try {
-    return new Date(iso).toLocaleDateString("pt-BR");
+    return new Date(iso).toLocaleDateString(currentLocale());
   } catch {
     return "";
   }
@@ -111,6 +86,13 @@ function normalizeText(value) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function compareAlpha(a, b) {
+  return String(a || "").localeCompare(String(b || ""), currentLocale(), {
+    sensitivity: "base",
+    numeric: true,
+  });
 }
 
 function getUserInitial(name = "") {
@@ -148,13 +130,13 @@ function getFileEmoji(meta) {
 function getFileKindLabel(meta) {
   const mime = String(meta?.mimetype || "").toLowerCase();
   const name = normalizeText(meta?.filename || "");
-  if (mime.startsWith("image/")) return "Imagem";
-  if (mime.startsWith("audio/")) return "Audio";
-  if (mime.includes("pdf") || name.endsWith(".pdf")) return "PDF";
-  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return "Planilha";
-  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return "Documento";
-  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return "Apresentacao";
-  return "Arquivo";
+  if (mime.startsWith("image/")) return t("chat.fileKinds.image");
+  if (mime.startsWith("audio/")) return t("chat.fileKinds.audio");
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return t("chat.fileKinds.pdf");
+  if (mime.includes("spreadsheet") || /\.xlsx?$/.test(name)) return t("chat.fileKinds.spreadsheet");
+  if (mime.includes("wordprocessing") || /\.docx?$/.test(name)) return t("chat.fileKinds.document");
+  if (mime.includes("presentation") || /\.pptx?$/.test(name)) return t("chat.fileKinds.presentation");
+  return t("chat.fileKinds.file");
 }
 
 function formatBytes(value) {
@@ -252,7 +234,7 @@ function renderPendingComposerFiles() {
     preview.className = item.isImage ? "composer-upload-thumb" : "composer-upload-icon";
     if (item.isImage) {
       preview.src = item.objectUrl;
-      preview.alt = item.file?.name || "imagem";
+      preview.alt = item.file?.name || t("chat.fileKinds.image");
     } else {
       preview.innerHTML = renderIconSvg(item.emoji);
     }
@@ -262,7 +244,7 @@ function renderPendingComposerFiles() {
 
     const name = document.createElement("div");
     name.className = "composer-upload-name";
-    name.textContent = item.file?.name || "arquivo";
+    name.textContent = item.file?.name || t("chat.fileKinds.file");
 
     const meta = document.createElement("div");
     meta.className = "composer-upload-meta";
@@ -271,7 +253,7 @@ function renderPendingComposerFiles() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "composer-upload-remove";
-    remove.setAttribute("aria-label", `Remover ${item.file?.name || "arquivo"}`);
+    remove.setAttribute("aria-label", t("chat.removeFile", { name: item.file?.name || t("chat.fileKinds.file") }));
     remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12" /><path d="M18 6 6 18" /></svg>';
     remove.onclick = () => removePendingComposerFile(item.id);
 
@@ -311,7 +293,10 @@ function queueComposerFiles(files) {
 
   if (oversized.length) {
     const previewNames = oversized.slice(0, 3).join(", ");
-    alert(`${oversized.length} arquivo(s) acima de 25 MB foram ignorados${previewNames ? `: ${previewNames}` : ""}.`);
+    alert(t("chat.oversizeIgnored", {
+      count: oversized.length,
+      names: previewNames ? `: ${previewNames}` : "",
+    }));
   }
 
   const msgEl = el("msg");
@@ -323,7 +308,7 @@ function updateConversationTitle() {
   if (!titleBox) return;
 
   const conv = conversations.find((item) => item.id === currentConvId);
-  titleBox.textContent = conv?.title || "Nova conversa";
+  titleBox.textContent = conv?.title || t("chat.newConversation");
 }
 
 function renderUser() {
@@ -331,11 +316,11 @@ function renderUser() {
 
   const sub = el("userSub");
   if (sub) {
-    sub.textContent = me.role === "admin" ? "Painel administrativo" : "Assistente da escola";
+    sub.textContent = me.role === "admin" ? t("chat.brandSubAdmin") : t("chat.brandSubUser");
   }
 
   const accountName = el("accountName");
-  if (accountName) accountName.textContent = me.name || "Usuario";
+  if (accountName) accountName.textContent = me.name || "User";
 
   const accountMeta = el("accountMeta");
   if (accountMeta) {
@@ -358,6 +343,54 @@ function renderUser() {
   if (adminBtn) {
     adminBtn.style.display = me.role === "admin" ? "" : "none";
   }
+}
+
+function renderChatChrome() {
+  document.title = "Talkers IA";
+  const newChatLabel = el("btnNewChat")?.querySelector("span");
+  if (newChatLabel) newChatLabel.textContent = t("chat.newConversation");
+
+  const intranetLabel = el("btnIntranet")?.querySelector("span");
+  if (intranetLabel) intranetLabel.textContent = t("chat.intranet");
+
+  const conversationsTitle = el("chatConversationsTitle");
+  if (conversationsTitle) conversationsTitle.textContent = t("chat.conversations");
+
+  const topbarKicker = el("chatTopbarKicker");
+  if (topbarKicker) topbarKicker.textContent = t("chat.assistantKicker");
+
+  const emptyTitle = el("chatEmptyTitle");
+  if (emptyTitle) emptyTitle.textContent = t("chat.emptyTitle");
+
+  const emptySubtitle = el("chatEmptySubtitle");
+  if (emptySubtitle) emptySubtitle.textContent = t("chat.emptySubtitle");
+
+  const composer = el("msg");
+  if (composer) composer.setAttribute("placeholder", t("chat.placeholder"));
+
+  const composerHint = el("chatComposerHint");
+  if (composerHint) composerHint.textContent = t("chat.hint");
+
+  const attachBtn = el("btnAttach");
+  if (attachBtn) {
+    attachBtn.title = t("chat.attach");
+    attachBtn.setAttribute("aria-label", t("chat.attach"));
+  }
+
+  const sendBtn = el("btnSend");
+  if (sendBtn) {
+    sendBtn.title = t("chat.send");
+    sendBtn.setAttribute("aria-label", t("chat.send"));
+  }
+
+  const adminBtn = el("adminBtn");
+  if (adminBtn) adminBtn.textContent = t("chat.admin");
+
+  const logoutBtn = el("btnLogout");
+  if (logoutBtn) logoutBtn.textContent = t("chat.logout");
+
+  setRecordState(Boolean(mediaRecorder && mediaRecorder.state === "recording"));
+  syncSidebarToggleButtons();
 }
 
 function clearChat() {
@@ -385,17 +418,17 @@ async function copyText(text, button) {
       clearTimeout(button._copyTimer);
       button.classList.add("is-copied");
       button.innerHTML = renderIconSvg("check");
-      button.setAttribute("aria-label", "Copiado");
-      button.setAttribute("title", "Copiado");
+      button.setAttribute("aria-label", t("chat.copied", {}, "Copied"));
+      button.setAttribute("title", t("chat.copied", {}, "Copied"));
       button._copyTimer = setTimeout(() => {
         button.classList.remove("is-copied");
         button.innerHTML = renderIconSvg("copy");
-        button.setAttribute("aria-label", "Copiar");
-        button.setAttribute("title", "Copiar");
+        button.setAttribute("aria-label", t("chat.copy"));
+        button.setAttribute("title", t("chat.copy"));
       }, 1200);
     }
   } catch {
-    alert("Nao foi possivel copiar o texto.");
+    alert(t("chat.copyFailed"));
   }
 }
 
@@ -582,8 +615,8 @@ function createCopyButton(text, extraClass = "") {
   copyBtn.className = `copy-btn icon-copy-btn${extraClass ? ` ${extraClass}` : ""}`;
   copyBtn.type = "button";
   copyBtn.innerHTML = renderIconSvg("copy");
-  copyBtn.setAttribute("aria-label", "Copiar");
-  copyBtn.setAttribute("title", "Copiar");
+  copyBtn.setAttribute("aria-label", t("chat.copy"));
+  copyBtn.setAttribute("title", t("chat.copy"));
   copyBtn.onclick = () => copyText(text, copyBtn);
   return copyBtn;
 }
@@ -679,12 +712,12 @@ function appendFileCard(bubble, meta) {
     imageLink.href = previewUrl;
     imageLink.target = "_blank";
     imageLink.rel = "noopener";
-    imageLink.setAttribute("aria-label", `Abrir ${meta.filename || "imagem"}`);
+    imageLink.setAttribute("aria-label", t("chat.openImage"));
 
     const img = document.createElement("img");
     img.className = "file-thumb";
     img.src = previewUrl;
-    img.alt = meta.filename || "imagem";
+    img.alt = meta.filename || t("chat.fileKinds.image");
     imageLink.appendChild(img);
     preview.appendChild(imageLink);
   } else {
@@ -709,7 +742,7 @@ function appendFileCard(bubble, meta) {
   fileName.href = previewUrl;
   fileName.target = "_blank";
   fileName.rel = "noopener";
-  fileName.textContent = meta.filename || "arquivo";
+  fileName.textContent = meta.filename || t("chat.fileKinds.file");
 
   const metaLine = document.createElement("div");
   metaLine.className = "file-meta";
@@ -722,13 +755,13 @@ function appendFileCard(bubble, meta) {
   openLink.href = previewUrl;
   openLink.target = "_blank";
   openLink.rel = "noopener";
-  openLink.textContent = isAudio ? "Ouvir" : isImg ? "Abrir imagem" : "Abrir arquivo";
+  openLink.textContent = isAudio ? t("chat.listen") : isImg ? t("chat.openImage") : t("chat.openFile");
   actions.appendChild(openLink);
 
   const downloadLink = document.createElement("a");
   downloadLink.href = downloadUrl;
-  downloadLink.setAttribute("download", meta.filename || "arquivo");
-  downloadLink.textContent = isAudio ? "Baixar audio" : isImg ? "Baixar imagem" : "Baixar arquivo";
+  downloadLink.setAttribute("download", meta.filename || t("chat.fileKinds.file"));
+  downloadLink.textContent = isAudio ? t("chat.downloadAudio") : isImg ? t("chat.downloadImage") : t("chat.downloadFile");
   actions.appendChild(downloadLink);
 
   top.appendChild(typePill);
@@ -859,7 +892,7 @@ function renderConversations() {
 
     const title = document.createElement("div");
     title.className = "conv-title";
-    title.textContent = c.title || "Nova conversa";
+    title.textContent = c.title || t("chat.newConversation");
 
     const meta = document.createElement("div");
     meta.className = "conv-meta";
@@ -868,13 +901,13 @@ function renderConversations() {
     const del = document.createElement("button");
     del.className = "conv-del";
     del.type = "button";
-    del.title = "Apagar conversa";
-    del.setAttribute("aria-label", "Apagar conversa");
+    del.title = t("chat.deleteConversation");
+    del.setAttribute("aria-label", t("chat.deleteConversation"));
     del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9v8" /><path d="M15 9v8" /><path d="M4 7h16" /><path d="M10 4h4" /><path d="M6 7l1 12h10l1-12" /></svg>';
 
     del.onclick = async (e) => {
       e.stopPropagation();
-      if (!confirm("Apagar esta conversa? Isso nao pode ser desfeito.")) return;
+      if (!confirm(t("chat.deleteConversation"))) return;
 
       try {
         await api(`/api/conversations/${c.id}`, { method: "DELETE" });
@@ -888,7 +921,7 @@ function renderConversations() {
           updateConversationTitle();
         }
       } catch (err) {
-        alert("Erro ao apagar conversa: " + err.message);
+        alert(t("chat.deleteConversationError", { error: err.message }));
       }
     };
 
@@ -920,7 +953,7 @@ async function ensureConversation() {
 
   const data = await api("/api/conversations", {
     method: "POST",
-    body: JSON.stringify({ title: "Nova conversa" }),
+    body: JSON.stringify({ title: t("chat.newConversation") }),
   });
 
   currentConvId = data.conversation_id;
@@ -1000,7 +1033,7 @@ async function sendTextOnlyMessage(text) {
     scrollChat();
   } catch (err) {
     typing?.remove();
-    addMessage("assistant", "Erro: " + err.message);
+    addMessage("assistant", t("chat.errorPrefix") + err.message);
     scrollChat();
   } finally {
     isSendingMessage = false;
@@ -1072,7 +1105,7 @@ async function sendMessageWithAttachments(text) {
       await openConversation(convId);
       await loadConversations();
       const firstError = uploadResult.errors[0];
-      throw new Error(`Erro ao enviar "${firstError.name}": ${firstError.message}`);
+      throw new Error(t("chat.uploadFailed", { name: firstError.name, error: firstError.message }));
     }
 
     if (text) {
@@ -1098,7 +1131,7 @@ async function sendMessageWithAttachments(text) {
       await openConversation(currentConvId);
       await loadConversations();
     }
-    alert(err.message || "Nao foi possivel enviar a mensagem com anexos.");
+    alert(err.message || t("chat.sendAttachmentsFailed"));
   } finally {
     isSendingMessage = false;
     setComposerBusy(false);
@@ -1129,18 +1162,21 @@ function setupQuickPrompts() {
   wrap.innerHTML = "";
 
   for (const item of QUICK_PROMPTS) {
+    const label = t(`chat.quickPrompts.${item.key}.label`);
+    const hint = t(`chat.quickPrompts.${item.key}.hint`);
+    const prompt = t(`chat.quickPrompts.${item.key}.prompt`);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "prompt-card";
     button.innerHTML = `
       <div class="prompt-icon">${renderIconSvg(item.icon)}</div>
       <div class="prompt-copy">
-        <div class="prompt-title">${item.label}</div>
-        <div class="prompt-hint">${item.hint}</div>
+        <div class="prompt-title">${label}</div>
+        <div class="prompt-hint">${hint}</div>
       </div>
     `;
     button.onclick = () => {
-      msgEl.value = item.prompt;
+      msgEl.value = prompt;
       msgEl.focus();
       autoResizeTextarea();
       msgEl.setSelectionRange(msgEl.value.length, msgEl.value.length);
@@ -1153,7 +1189,7 @@ function setRecordState(isRecording) {
   const btn = el("btnRecord");
   if (!btn) return;
   btn.classList.toggle("recording", Boolean(isRecording));
-  btn.title = isRecording ? "Parar gravacao" : "Gravar audio";
+  btn.title = isRecording ? t("chat.recordStop") : t("chat.recordStart");
   btn.setAttribute("aria-label", btn.title);
 }
 
@@ -1214,7 +1250,7 @@ async function setupRecorder() {
     } catch (err) {
       stopRecordingStream();
       setRecordState(false);
-      alert("Nao foi possivel acessar o microfone: " + err.message);
+      alert(t("chat.microphoneError", { error: err.message }));
     }
   };
 }
@@ -1260,18 +1296,93 @@ function setupAttachments() {
 
 function openSidebar() {
   document.body.classList.add("sidebar-open");
+  syncSidebarToggleButtons();
 }
 
 function closeSidebar() {
   document.body.classList.remove("sidebar-open");
+  syncSidebarToggleButtons();
+}
+
+function isDesktopSidebarViewport() {
+  return window.innerWidth > 960;
+}
+
+function readSidebarPreference() {
+  try {
+    const raw = localStorage.getItem(CHAT_SIDEBAR_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return Boolean(parsed?.collapsed);
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarPreference(isCollapsed) {
+  try {
+    localStorage.setItem(CHAT_SIDEBAR_STORAGE_KEY, JSON.stringify({ collapsed: Boolean(isCollapsed) }));
+  } catch {}
+}
+
+function setSidebarCollapsed(isCollapsed) {
+  const shouldCollapse = Boolean(isCollapsed) && isDesktopSidebarViewport();
+  document.body.classList.toggle("sidebar-collapsed", shouldCollapse);
+  syncSidebarToggleButtons();
+}
+
+function syncSidebarToggleButtons() {
+  const isDesktop = isDesktopSidebarViewport();
+  const expanded = isDesktop
+    ? !document.body.classList.contains("sidebar-collapsed")
+    : document.body.classList.contains("sidebar-open");
+  const label = isDesktop
+    ? (expanded ? t("common.collapseMenu") : t("common.expandMenu"))
+    : (expanded ? t("common.closeMenu") : t("common.openMenu"));
+
+  [el("btnSidebar"), el("btnSidebarCollapse")].forEach((button) => {
+    if (!button) return;
+    button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  });
+}
+
+function applySidebarPreference() {
+  if (isDesktopSidebarViewport()) {
+    closeSidebar();
+    setSidebarCollapsed(readSidebarPreference());
+  } else {
+    document.body.classList.remove("sidebar-collapsed");
+  }
+  syncSidebarToggleButtons();
+}
+
+function toggleSidebar() {
+  if (isDesktopSidebarViewport()) {
+    const nextCollapsed = !document.body.classList.contains("sidebar-collapsed");
+    setSidebarCollapsed(nextCollapsed);
+    writeSidebarPreference(nextCollapsed);
+    return;
+  }
+
+  if (document.body.classList.contains("sidebar-open")) {
+    closeSidebar();
+  } else {
+    openSidebar();
+  }
 }
 
 function setupSidebarToggle() {
   const btnSidebar = el("btnSidebar");
+  const btnSidebarCollapse = el("btnSidebarCollapse");
   const backdrop = el("backdrop");
 
   if (btnSidebar) {
-    btnSidebar.onclick = () => openSidebar();
+    btnSidebar.onclick = () => toggleSidebar();
+  }
+
+  if (btnSidebarCollapse) {
+    btnSidebarCollapse.onclick = () => toggleSidebar();
   }
 
   if (backdrop) {
@@ -1279,18 +1390,46 @@ function setupSidebarToggle() {
   }
 
   window.addEventListener("resize", () => {
-    if (window.innerWidth > 960) {
-      closeSidebar();
-    }
+    applySidebarPreference();
   });
+
+  applySidebarPreference();
 }
 
 async function init() {
+  await i18n()?.ready?.();
+  i18n()?.renderLanguageSwitcher?.("chatLanguageSwitcher", { showLabel: false });
+  renderChatChrome();
+  i18n()?.onChange?.(async () => {
+    renderChatChrome();
+    renderUser();
+    setupQuickPrompts();
+    renderPendingComposerFiles();
+    updateConversationTitle();
+    renderConversations();
+    if (currentConvId) {
+      try {
+        await openConversation(currentConvId);
+      } catch {}
+    }
+    try {
+      await api("/api/me/preferences", {
+        method: "PATCH",
+        body: JSON.stringify({ preferred_locale: currentLocale() }),
+      });
+    } catch {}
+  });
+
   try {
     me = (await api("/api/me")).user;
   } catch {
     location.href = "/login.html";
     return;
+  }
+
+  if (me?.preferred_locale && me.preferred_locale !== currentLocale()) {
+    await i18n()?.setLocale?.(me.preferred_locale, { persist: false });
+    renderChatChrome();
   }
 
   renderUser();
@@ -1353,15 +1492,6 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
-
-
-
-
-
-
-
-
-
 
 
 

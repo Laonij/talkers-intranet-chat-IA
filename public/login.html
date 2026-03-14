@@ -1,5 +1,5 @@
 ﻿<!doctype html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,14 +8,15 @@
 </head>
 <body class="center">
   <div class="card">
+    <div id="loginLanguageSwitcher" style="display:flex; justify-content:flex-end; margin-bottom:10px;"></div>
     <img class="login-logo" src="/logo.png" alt="Logo" />
-    <h1 class="login-title">Entrar</h1>
-    <div class="muted" style="margin-top:-6px; margin-bottom:14px;">Use seu email e senha.</div>
+    <h1 class="login-title" id="loginTitle">Entrar</h1>
+    <div class="muted" id="loginSubtitle" style="margin-top:-6px; margin-bottom:14px;">Use seu email e senha.</div>
 
-    <label>Email</label>
+    <label id="loginEmailLabel">Email</label>
     <input id="email" placeholder="seuemail@empresa.com" autocomplete="username" />
 
-    <label>Senha</label>
+    <label id="loginPasswordLabel">Senha</label>
     <input id="password" type="password" placeholder="********" autocomplete="current-password" />
 
     <div style="margin-top:14px;">
@@ -25,10 +26,14 @@
     <div id="msg" class="small" style="margin-top:12px;"></div>
   </div>
 
+<script src="/i18n.js"></script>
 <script>
+const i18n = () => window.TalkersI18n;
+const t = (key, params = {}, fallback = '') => i18n()?.t?.(key, params, fallback) ?? fallback || key;
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) },
     credentials: 'include',
     ...opts
   });
@@ -37,6 +42,17 @@ async function api(path, opts = {}) {
   try { json = txt ? JSON.parse(txt) : null; } catch {}
   if (!res.ok) throw new Error(json?.error || txt || `HTTP ${res.status}`);
   return json;
+}
+
+function applyLoginTranslations() {
+  document.title = `Talkers IA - ${t('login.title')}`;
+  document.getElementById('loginTitle').textContent = t('login.title');
+  document.getElementById('loginSubtitle').textContent = t('login.subtitle');
+  document.getElementById('loginEmailLabel').textContent = t('login.email');
+  document.getElementById('loginPasswordLabel').textContent = t('login.password');
+  document.getElementById('email').setAttribute('placeholder', t('login.emailPlaceholder'));
+  document.getElementById('password').setAttribute('placeholder', t('login.passwordPlaceholder'));
+  document.getElementById('btnLogin').textContent = t('login.button');
 }
 
 document.getElementById('btnLogin').onclick = async () => {
@@ -54,9 +70,16 @@ document.getElementById('btnLogin').onclick = async () => {
     location.href = '/index.html';
   } catch (e) {
     msg.className = 'error';
-    msg.textContent = 'Erro: ' + e.message;
+    msg.textContent = t('login.errorPrefix') + e.message;
   }
 };
+
+window.addEventListener('DOMContentLoaded', async () => {
+  await i18n()?.ready?.();
+  i18n()?.renderLanguageSwitcher?.('loginLanguageSwitcher', { showLabel: false });
+  applyLoginTranslations();
+  i18n()?.onChange?.(applyLoginTranslations);
+});
 </script>
 </body>
 </html>

@@ -1,0 +1,341 @@
+{
+  "language": {
+    "label": "Langue"
+  },
+  "greetings": {
+    "morning": "Bonjour",
+    "afternoon": "Bon après-midi",
+    "evening": "Bonsoir"
+  },
+  "common": {
+    "back": "Retour",
+    "backToChat": "Retour au chat",
+    "save": "Enregistrer",
+    "saveChanges": "Enregistrer les modifications",
+    "cancel": "Annuler",
+    "edit": "Modifier",
+    "delete": "Supprimer",
+    "create": "Créer",
+    "refresh": "Actualiser",
+    "loading": "Chargement...",
+    "select": "Sélectionner",
+    "all": "Tous",
+    "search": "Recherche",
+    "viewMore": "Voir plus",
+    "close": "Fermer",
+    "analyze": "Analyser",
+    "today": "Aujourd’hui",
+    "openMenu": "Ouvrir le menu",
+    "closeMenu": "Fermer le menu latéral",
+    "collapseMenu": "Réduire le menu latéral",
+    "expandMenu": "Développer le menu latéral",
+    "connectedAccount": "Compte connecté",
+    "now": "Maintenant",
+    "noEnd": "Sans fin"
+  },
+  "chat": {
+    "brandSubUser": "Assistant de l’école",
+    "brandSubAdmin": "Panneau administratif",
+    "intranet": "Intranet Talkers",
+    "newConversation": "Nouvelle conversation",
+    "conversations": "Conversations",
+    "admin": "Admin",
+    "logout": "Se déconnecter",
+    "assistantKicker": "Assistant de l’école",
+    "emptyTitle": "Comment puis-je vous aider aujourd’hui ?",
+    "emptySubtitle": "Créez des documents, feuilles de calcul, images et audios, consultez la base de l’entreprise et traitez des demandes avec une expérience plus proche de ChatGPT.",
+    "placeholder": "Envoyez un message à Talkers IA",
+    "hint": "Entrée envoie, Maj+Entrée saute une ligne",
+    "attach": "Ajouter des photos et des fichiers",
+    "recordStart": "Enregistrer l’audio",
+    "recordStop": "Arrêter l’enregistrement",
+    "send": "Envoyer le message",
+    "copy": "Copier",
+    "copied": "Copié",
+    "copyFailed": "Impossible de copier le texte.",
+    "deleteConversation": "Supprimer cette conversation ? Cette action est irréversible.",
+    "deleteConversationError": "Erreur lors de la suppression de la conversation : {{error}}",
+    "sendAttachmentsFailed": "Impossible d’envoyer le message avec des pièces jointes.",
+    "uploadFailed": "Erreur lors de l’envoi de « {{name}} » : {{error}}",
+    "microphoneError": "Impossible d’accéder au microphone : {{error}}",
+    "oversizeIgnored": "{{count}} fichier(s) de plus de 25 Mo ont été ignorés{{names}}.",
+    "listen": "Écouter",
+    "openFile": "Ouvrir le fichier",
+    "openImage": "Ouvrir l’image",
+    "downloadFile": "Télécharger le fichier",
+    "downloadImage": "Télécharger l’image",
+    "downloadAudio": "Télécharger l’audio",
+    "removeFile": "Retirer {{name}}",
+    "errorPrefix": "Erreur : ",
+    "fileKinds": {
+      "image": "Image",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "spreadsheet": "Feuille de calcul",
+      "document": "Document",
+      "presentation": "Présentation",
+      "file": "Fichier"
+    },
+    "quickPrompts": {
+      "document": {
+        "label": "Générer un document",
+        "hint": "Créez des annonces, contrats et textes organisés.",
+        "prompt": "Générez un document professionnel sur ce sujet :"
+      },
+      "spreadsheet": {
+        "label": "Créer une feuille de calcul",
+        "hint": "Montez des tableaux avec des colonnes prêtes à l’emploi.",
+        "prompt": "Créez une feuille de calcul organisée avec les champs principaux pour :"
+      },
+      "audio": {
+        "label": "Transcrire l’audio",
+        "hint": "Analysez l’audio envoyé ou enregistré dans le navigateur.",
+        "prompt": "Analysez et transcrivez l’audio envoyé, puis faites un résumé objectif."
+      },
+      "image": {
+        "label": "Générer une image",
+        "hint": "Produisez des images pour l’école, le marketing et les supports.",
+        "prompt": "Générez une image réaliste et professionnelle de :"
+      },
+      "school": {
+        "label": "Communication scolaire",
+        "hint": "Créez des messages clairs et accueillants pour les élèves et les familles.",
+        "prompt": "Créez une communication scolaire claire et accueillante sur :"
+      },
+      "knowledge": {
+        "label": "Consulter la base interne",
+        "hint": "Recherchez des documents et connaissances de l’entreprise.",
+        "prompt": "Consultez la base interne et répondez-moi au sujet de :"
+      }
+    }
+  },
+  "login": {
+    "title": "Connexion",
+    "subtitle": "Utilisez votre e-mail et votre mot de passe.",
+    "email": "E-mail",
+    "password": "Mot de passe",
+    "button": "Se connecter",
+    "emailPlaceholder": "votremail@entreprise.com",
+    "passwordPlaceholder": "********",
+    "errorPrefix": "Erreur : "
+  },
+  "intranet": {
+    "title": "Intranet Talkers",
+    "brandSub": "Environnement interne d’entreprise",
+    "eyebrow": "Espace de travail d’entreprise",
+    "heroBadge": "IA + contenu d’entreprise",
+    "heroTitle": "Intranet Talkers",
+    "heroDescription": "Un hub interne pour documents, annonces, raccourcis et support IA par département.",
+    "overviewEyebrow": "Vue d’ensemble",
+    "overviewTitle": "Vue rapide de la routine interne",
+    "quickEyebrow": "Accès rapide",
+    "quickTitle": "Entrées principales",
+    "communicationEyebrow": "Communication d’entreprise",
+    "communicationTitle": "Avis institutionnels et communications internes",
+    "sidebarDepartments": "Départements",
+    "sidebarReminders": "Rappels et agenda",
+    "sidebarUtilityEmpty": "Aucun rappel proche pour le moment.",
+    "brandSubAdminAccess": "Accès administratif complet",
+    "brandSubUserAccess": "{{count}} zone(s) autorisée(s) - {{email}}",
+    "sidebarNoDepartment": "Aucun département n'est autorisé pour cet utilisateur.",
+    "departmentDefaultName": "Département",
+    "departmentMainArea": "Zone principale",
+    "departmentSubmenusCount": "{{count}} sous-menu(s)",
+    "departmentDefaultFlow": "Flux interne du département",
+    "departmentWorkspaceTitle": "Espace départemental",
+    "departmentWorkspaceDescription": "Espace départemental de l'intranet.",
+    "generic": {
+      "update": "Mise à jour",
+      "summary": "Résumé",
+      "announcement": "Communiqué",
+      "general": "Général",
+      "workspace": "workspace",
+      "periodUndefined": "Période non définie",
+      "notInformed": "Non renseigné",
+      "system": "Système",
+      "now": "Maintenant",
+      "noEnd": "Sans fin",
+      "module": "Module",
+      "saveError": "Impossible d'enregistrer la mise à jour : {{error}}"
+    },
+    "nav": {
+      "home": "Accueil",
+      "calendar": "Agenda",
+      "sales": "Panneau commercial"
+    },
+    "home": {
+      "greetingCardDescription": "Ceci est l’entrée principale de l’intranet, avec contexte institutionnel, agenda et communication interne.",
+      "greetingBadgeAdmin": "Admin",
+      "greetingBadgeUser": "Profil actif",
+      "nextMeetings": "Prochaines réunions",
+      "noMeetings": "Aucune réunion planifiée pour les prochains jours.",
+      "meetingsBadge": "{{count}} événement(s)"
+    },
+    "direction": {
+      "origin": "Direction",
+      "emptyTitle": "Aucune communication de la Direction",
+      "emptyBody": "Lorsqu’il y aura des avis institutionnels en évidence, ils apparaîtront ici.",
+      "fallbackTitle": "Communiqué institutionnel"
+    },
+    "communication": {
+      "emptyTitle": "Aucune communication active sur le tableau pour le moment.",
+      "nonePublished": "Aucune communication publiée pour l’instant.",
+      "allUsers": "Tous les utilisateurs",
+      "defaultOrigin": "Communiqué interne",
+      "publishTitle": "Publier un communiqué",
+      "editTitle": "Modifier le communiqué #{{id}}",
+      "save": "Enregistrer le communiqué",
+      "saveChanges": "Enregistrer les modifications",
+      "onePublished": "1 communiqué publié",
+      "manyPublished": "{{count}} communiqués publiés",
+      "departmentsAudience": "Départements : {{departments}}",
+      "segmentedDepartmentHint": "Communiqué segmenté pour cette zone.",
+      "segmentedDepartmentsHint": "Utilisez cette option lorsque le public est segmenté par département.",
+      "publishedTitle": "Communiqués publiés",
+      "activeTitle": "Communiqué actif",
+      "activeHint": "Les communiqués actifs apparaissent sur la Home, dans l’espace communication et dans les notifications internes.",
+      "titleRequired": "Renseignez le titre du communiqué.",
+      "departmentsRequired": "Sélectionnez au moins un département pour un communiqué segmenté.",
+      "saveError": "Impossible d'enregistrer le communiqué : {{error}}",
+      "deleteError": "Impossible de supprimer le communiqué : {{error}}",
+      "deleteConfirm": "Voulez-vous supprimer le communiqué \"{{title}}\" ?",
+      "fields": {
+        "title": "Titre",
+        "summary": "Résumé",
+        "content": "Contenu complet",
+        "type": "Type",
+        "priority": "Priorité",
+        "audience": "Public",
+        "startsAt": "Début (optionnel)",
+        "endsAt": "Fin (optionnelle)",
+        "departments": "Départements du communiqué"
+      },
+      "placeholders": {
+        "title": "Ex. : Formation interne de cette semaine",
+        "summary": "Texte court pour la Home et les notifications",
+        "content": "Texte principal du communiqué"
+      }
+    },
+    "departments": {
+      "empty": "Aucun département spécifique n'a été autorisé pour ce profil.",
+      "reminderEmpty": "Aucun rappel opérationnel pour ce profil pour le moment.",
+      "currentLevel": "Niveau actuel : {{level}}",
+      "collaborator": "collaborateur",
+      "noSubmenus": "Aucun sous-menu n'est encore configuré pour ce département.",
+      "noModules": "Aucun module n'est disponible pour cette zone pour le moment."
+    },
+    "departmentSummary": {
+      "currentLevel": "Niveau actuel",
+      "permission": "Permission",
+      "activeSubmenus": "Sous-menus actifs",
+      "flows": "Flux",
+      "availableModules": "Modules disponibles",
+      "resources": "Ressources",
+      "activeSubmenu": "Sous-menu actif",
+      "selectedArea": "Zone sélectionnée",
+      "detail": "Détail",
+      "main": "Principal"
+    },
+    "routes": {
+      "dashboardTitle": "Dashboard / BI",
+      "dashboardEyebrow": "BI",
+      "modulesTitle": "Modules",
+      "modulesEyebrow": "Workspace",
+      "calendarEyebrow": "Calendrier d'entreprise",
+      "departmentsTitle": "Départements",
+      "departmentsEyebrow": "Espaces de travail",
+      "documentsTitle": "Documents",
+      "documentsEyebrow": "Base de connaissance",
+      "trainingTitle": "Entraînement IA",
+      "trainingEyebrow": "Apprentissage et ingestion",
+      "communicationTitle": "Communication",
+      "communicationEyebrow": "Avis et communiqués",
+      "salesEyebrow": "Opération commerciale"
+    },
+    "reminder": {
+      "meeting": "Réunion",
+      "announcement": "Avis",
+      "empty": "Aucun rappel opérationnel pour le moment."
+    }
+  },
+  "calendar": {
+    "newEvent": "Nouveau rendez-vous",
+    "previous": "Précédent",
+    "today": "Aujourd’hui",
+    "next": "Suivant",
+    "month": "Mois",
+    "week": "Semaine",
+    "day": "Jour",
+    "list": "Liste",
+    "user": "Utilisateur",
+    "type": "Type",
+    "mode": "Format",
+    "status": "Statut",
+    "search": "Recherche",
+    "searchPlaceholder": "Titre, description, lieu ou type",
+    "all": "Tous",
+    "select": "Sélectionnez",
+    "title": "Titre",
+    "description": "Description",
+    "eventType": "Type",
+    "meetingMode": "Mode",
+    "allDay": "Toute la journée",
+    "allDayHint": "À utiliser pour les événements sans horaire fixe.",
+    "startDate": "Date de début",
+    "startTime": "Heure de début",
+    "endDate": "Date de fin",
+    "endTime": "Heure de fin",
+    "location": "Lieu",
+    "meetingLink": "Lien de réunion",
+    "notes": "Observations",
+    "participants": "Participants",
+    "participantsHint": "Sélectionnez une ou plusieurs personnes. Le rendez-vous apparaîtra dans l'agenda de tous les participants.",
+    "reset": "Effacer",
+    "save": "Enregistrer le rendez-vous",
+    "cancelEvent": "Annuler le rendez-vous",
+    "editorNew": "Nouveau rendez-vous",
+    "detailsEyebrow": "Détails du rendez-vous",
+    "defaultEventTitle": "Rendez-vous",
+    "defaultAgenda": "Agenda",
+    "fullDay": "Toute la journée",
+    "selectedDay": "Jour sélectionné",
+    "noHistory": "Aucun historique enregistré pour ce rendez-vous.",
+    "noEventsDay": "Aucun rendez-vous trouvé pour ce jour.",
+    "noEventsPeriod": "Aucun rendez-vous trouvé pour cette période.",
+    "emptyWeek": "Aucun événement",
+    "moreEvents": "+ {{count}} rendez-vous",
+    "loadError": "Impossible de charger le rendez-vous : {{error}}",
+    "saveError": "Impossible d'enregistrer le rendez-vous : {{error}}",
+    "cancelError": "Impossible d'annuler le rendez-vous : {{error}}",
+    "cancelReasonPrompt": "Motif de l'annulation (optionnel) :",
+    "summary": {
+      "inPeriod": "Dans la période",
+      "today": "Aujourd’hui",
+      "thisWeek": "Cette semaine",
+      "myEvents": "Mes rendez-vous"
+    },
+    "statusLabel": {
+      "scheduled": "Planifié",
+      "cancelled": "Annulé"
+    },
+    "modeLabel": {
+      "online": "En ligne",
+      "presencial": "Présentiel",
+      "hibrida": "Hybride"
+    }
+  },
+  "admin": {
+    "title": "Admin",
+    "subtitle": "Utilisateurs, autorisations et base de connaissance",
+    "tabs": {
+      "users": "Utilisateurs",
+      "departments": "Départements",
+      "knowledge": "Base de connaissance",
+      "training": "Entraînement IA",
+      "logs": "Logs du système"
+    }
+  },
+  "moderation": {
+    "refusal": "Je ne peux pas aider avec ce type de demande. Cette plateforme est destinée à l’éducation et à l’apprentissage des langues."
+  }
+}

@@ -1,0 +1,341 @@
+{
+  "language": {
+    "label": "Language"
+  },
+  "greetings": {
+    "morning": "Good morning",
+    "afternoon": "Good afternoon",
+    "evening": "Good evening"
+  },
+  "common": {
+    "back": "Back",
+    "backToChat": "Back to chat",
+    "save": "Save",
+    "saveChanges": "Save changes",
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "delete": "Delete",
+    "create": "Create",
+    "refresh": "Refresh",
+    "loading": "Loading...",
+    "select": "Select",
+    "all": "All",
+    "search": "Search",
+    "viewMore": "View more",
+    "close": "Close",
+    "analyze": "Analyze",
+    "today": "Today",
+    "openMenu": "Open menu",
+    "closeMenu": "Close sidebar",
+    "collapseMenu": "Collapse sidebar",
+    "expandMenu": "Expand sidebar",
+    "connectedAccount": "Connected account",
+    "now": "Now",
+    "noEnd": "No end"
+  },
+  "chat": {
+    "brandSubUser": "School assistant",
+    "brandSubAdmin": "Administrative panel",
+    "intranet": "Talkers Intranet",
+    "newConversation": "New conversation",
+    "conversations": "Conversations",
+    "admin": "Admin",
+    "logout": "Sign out",
+    "assistantKicker": "School assistant",
+    "emptyTitle": "How can I help today?",
+    "emptySubtitle": "Create documents, spreadsheets, images and audio, consult the company knowledge base and handle requests with an experience closer to ChatGPT.",
+    "placeholder": "Send a message to Talkers IA",
+    "hint": "Enter sends, Shift+Enter adds a line break",
+    "attach": "Add photos and files",
+    "recordStart": "Record audio",
+    "recordStop": "Stop recording",
+    "send": "Send message",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyFailed": "Could not copy the text.",
+    "deleteConversation": "Delete this conversation? This cannot be undone.",
+    "deleteConversationError": "Error deleting conversation: {{error}}",
+    "sendAttachmentsFailed": "Could not send the message with attachments.",
+    "uploadFailed": "Error uploading \"{{name}}\": {{error}}",
+    "microphoneError": "Could not access the microphone: {{error}}",
+    "oversizeIgnored": "{{count}} file(s) over 25 MB were ignored{{names}}.",
+    "listen": "Listen",
+    "openFile": "Open file",
+    "openImage": "Open image",
+    "downloadFile": "Download file",
+    "downloadImage": "Download image",
+    "downloadAudio": "Download audio",
+    "removeFile": "Remove {{name}}",
+    "errorPrefix": "Error: ",
+    "fileKinds": {
+      "image": "Image",
+      "audio": "Audio",
+      "pdf": "PDF",
+      "spreadsheet": "Spreadsheet",
+      "document": "Document",
+      "presentation": "Presentation",
+      "file": "File"
+    },
+    "quickPrompts": {
+      "document": {
+        "label": "Generate document",
+        "hint": "Create announcements, contracts and organized text.",
+        "prompt": "Create a professional document about this topic:"
+      },
+      "spreadsheet": {
+        "label": "Create spreadsheet",
+        "hint": "Build tables with columns ready to use.",
+        "prompt": "Create an organized spreadsheet with the main fields for:"
+      },
+      "audio": {
+        "label": "Transcribe audio",
+        "hint": "Analyze audio uploaded or recorded in the browser.",
+        "prompt": "Analyze and transcribe the uploaded audio, then provide an objective summary."
+      },
+      "image": {
+        "label": "Generate image",
+        "hint": "Produce images for school, marketing and materials.",
+        "prompt": "Generate a realistic and professional image of:"
+      },
+      "school": {
+        "label": "School notice",
+        "hint": "Create clear and welcoming messages for students and families.",
+        "prompt": "Create a clear and welcoming school notice about:"
+      },
+      "knowledge": {
+        "label": "Search internal knowledge",
+        "hint": "Research company documents and knowledge.",
+        "prompt": "Search the internal knowledge base and answer me about:"
+      }
+    }
+  },
+  "login": {
+    "title": "Sign in",
+    "subtitle": "Use your email and password.",
+    "email": "Email",
+    "password": "Password",
+    "button": "Sign in",
+    "emailPlaceholder": "your.email@company.com",
+    "passwordPlaceholder": "********",
+    "errorPrefix": "Error: "
+  },
+  "intranet": {
+    "title": "Talkers Intranet",
+    "brandSub": "Internal corporate environment",
+    "eyebrow": "Corporate workspace",
+    "heroBadge": "AI + corporate content",
+    "heroTitle": "Talkers Intranet",
+    "heroDescription": "An internal hub for documents, announcements, shortcuts and AI support by department.",
+    "overviewEyebrow": "Overview",
+    "overviewTitle": "Quick view of the internal routine",
+    "quickEyebrow": "Quick access",
+    "quickTitle": "Main entry points",
+    "communicationEyebrow": "Corporate communication",
+    "communicationTitle": "Institutional notices and internal announcements",
+    "sidebarDepartments": "Departments",
+    "sidebarReminders": "Reminders and schedule",
+    "sidebarUtilityEmpty": "No upcoming reminders right now.",
+    "brandSubAdminAccess": "Full administrative access",
+    "brandSubUserAccess": "{{count}} area(s) enabled - {{email}}",
+    "sidebarNoDepartment": "No departmental area is enabled for this user.",
+    "departmentDefaultName": "Department",
+    "departmentMainArea": "Main area",
+    "departmentSubmenusCount": "{{count}} submenu(s)",
+    "departmentDefaultFlow": "Internal department flow",
+    "departmentWorkspaceTitle": "Department workspace",
+    "departmentWorkspaceDescription": "Department workspace inside the intranet.",
+    "generic": {
+      "update": "Update",
+      "summary": "Summary",
+      "announcement": "Announcement",
+      "general": "General",
+      "workspace": "workspace",
+      "periodUndefined": "Period not defined",
+      "notInformed": "Not informed",
+      "system": "System",
+      "now": "Now",
+      "noEnd": "No end",
+      "module": "Module",
+      "saveError": "Could not save the update: {{error}}"
+    },
+    "nav": {
+      "home": "Home",
+      "calendar": "Schedule",
+      "sales": "Sales panel"
+    },
+    "home": {
+      "greetingCardDescription": "This is the main intranet entry point, with institutional context, calendar and internal communication.",
+      "greetingBadgeAdmin": "Admin",
+      "greetingBadgeUser": "Active profile",
+      "nextMeetings": "Upcoming meetings",
+      "noMeetings": "No meetings scheduled for the next few days.",
+      "meetingsBadge": "{{count}} event(s)"
+    },
+    "direction": {
+      "origin": "Leadership",
+      "emptyTitle": "No leadership announcements",
+      "emptyBody": "When there are highlighted institutional notices, they will appear here.",
+      "fallbackTitle": "Institutional announcement"
+    },
+    "communication": {
+      "emptyTitle": "There are no active announcements on the board right now.",
+      "nonePublished": "No announcements have been published yet.",
+      "allUsers": "All users",
+      "defaultOrigin": "Internal announcement",
+      "publishTitle": "Publish announcement",
+      "editTitle": "Edit announcement #{{id}}",
+      "save": "Save announcement",
+      "saveChanges": "Save changes",
+      "onePublished": "1 announcement published",
+      "manyPublished": "{{count}} announcements published",
+      "departmentsAudience": "Departments: {{departments}}",
+      "segmentedDepartmentHint": "Announcement segmented for this area.",
+      "segmentedDepartmentsHint": "Use this when the audience is segmented by department.",
+      "publishedTitle": "Published announcements",
+      "activeTitle": "Active announcement",
+      "activeHint": "Active announcements appear on the Home page, in the communication area and in internal notifications.",
+      "titleRequired": "Enter the announcement title.",
+      "departmentsRequired": "Select at least one department for a segmented announcement.",
+      "saveError": "Could not save the announcement: {{error}}",
+      "deleteError": "Could not delete the announcement: {{error}}",
+      "deleteConfirm": "Do you want to delete the announcement \"{{title}}\"?",
+      "fields": {
+        "title": "Title",
+        "summary": "Summary",
+        "content": "Full content",
+        "type": "Type",
+        "priority": "Priority",
+        "audience": "Audience",
+        "startsAt": "Start (optional)",
+        "endsAt": "End (optional)",
+        "departments": "Announcement departments"
+      },
+      "placeholders": {
+        "title": "Ex.: Internal training this week",
+        "summary": "Short text for Home and notifications",
+        "content": "Main announcement text"
+      }
+    },
+    "departments": {
+      "empty": "No specific department has been enabled for this profile.",
+      "reminderEmpty": "No operational reminders for this profile right now.",
+      "currentLevel": "Current level: {{level}}",
+      "collaborator": "collaborator",
+      "noSubmenus": "No submenu has been configured for this department yet.",
+      "noModules": "No module is enabled for this area right now."
+    },
+    "departmentSummary": {
+      "currentLevel": "Current level",
+      "permission": "Permission",
+      "activeSubmenus": "Active submenus",
+      "flows": "Flows",
+      "availableModules": "Enabled modules",
+      "resources": "Resources",
+      "activeSubmenu": "Active submenu",
+      "selectedArea": "Selected area",
+      "detail": "Detail",
+      "main": "Main"
+    },
+    "routes": {
+      "dashboardTitle": "Dashboard / BI",
+      "dashboardEyebrow": "BI",
+      "modulesTitle": "Modules",
+      "modulesEyebrow": "Workspace",
+      "calendarEyebrow": "Corporate calendar",
+      "departmentsTitle": "Departments",
+      "departmentsEyebrow": "Work areas",
+      "documentsTitle": "Documents",
+      "documentsEyebrow": "Knowledge base",
+      "trainingTitle": "AI training",
+      "trainingEyebrow": "Learning and ingestion",
+      "communicationTitle": "Communication",
+      "communicationEyebrow": "Notices and announcements",
+      "salesEyebrow": "Commercial operations"
+    },
+    "reminder": {
+      "meeting": "Meeting",
+      "announcement": "Notice",
+      "empty": "No operational reminders right now."
+    }
+  },
+  "calendar": {
+    "newEvent": "New event",
+    "previous": "Previous",
+    "today": "Today",
+    "next": "Next",
+    "month": "Month",
+    "week": "Week",
+    "day": "Day",
+    "list": "List",
+    "user": "User",
+    "type": "Type",
+    "mode": "Format",
+    "status": "Status",
+    "search": "Search",
+    "searchPlaceholder": "Title, description, location or type",
+    "all": "All",
+    "select": "Select",
+    "title": "Title",
+    "description": "Description",
+    "eventType": "Type",
+    "meetingMode": "Mode",
+    "allDay": "All day",
+    "allDayHint": "Use this for events without a fixed time.",
+    "startDate": "Start date",
+    "startTime": "Start time",
+    "endDate": "End date",
+    "endTime": "End time",
+    "location": "Location",
+    "meetingLink": "Meeting link",
+    "notes": "Notes",
+    "participants": "Participants",
+    "participantsHint": "Select one or more people. The event will appear on every participant's calendar.",
+    "reset": "Clear",
+    "save": "Save event",
+    "cancelEvent": "Cancel event",
+    "editorNew": "New event",
+    "detailsEyebrow": "Event details",
+    "defaultEventTitle": "Event",
+    "defaultAgenda": "Schedule",
+    "fullDay": "All day",
+    "selectedDay": "Selected day",
+    "noHistory": "No history has been recorded for this event yet.",
+    "noEventsDay": "No events found for this day.",
+    "noEventsPeriod": "No events found for this period.",
+    "emptyWeek": "No events",
+    "moreEvents": "+ {{count}} event(s)",
+    "loadError": "Could not load the event: {{error}}",
+    "saveError": "Could not save the event: {{error}}",
+    "cancelError": "Could not cancel the event: {{error}}",
+    "cancelReasonPrompt": "Cancellation reason (optional):",
+    "summary": {
+      "inPeriod": "In period",
+      "today": "Today",
+      "thisWeek": "This week",
+      "myEvents": "My events"
+    },
+    "statusLabel": {
+      "scheduled": "Scheduled",
+      "cancelled": "Cancelled"
+    },
+    "modeLabel": {
+      "online": "Online",
+      "presencial": "On-site",
+      "hibrida": "Hybrid"
+    }
+  },
+  "admin": {
+    "title": "Admin",
+    "subtitle": "Users, permissions and knowledge base",
+    "tabs": {
+      "users": "Users",
+      "departments": "Departments",
+      "knowledge": "Knowledge base",
+      "training": "AI training",
+      "logs": "System logs"
+    }
+  },
+  "moderation": {
+    "refusal": "I cannot help with that type of request. This platform is intended for education and language learning."
+  }
+}

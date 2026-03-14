@@ -1,0 +1,341 @@
+{
+  "language": {
+    "label": "Idioma"
+  },
+  "greetings": {
+    "morning": "Bom dia",
+    "afternoon": "Boa tarde",
+    "evening": "Boa noite"
+  },
+  "common": {
+    "back": "Voltar",
+    "backToChat": "Voltar ao chat",
+    "save": "Salvar",
+    "saveChanges": "Salvar alterações",
+    "cancel": "Cancelar",
+    "edit": "Editar",
+    "delete": "Excluir",
+    "create": "Criar",
+    "refresh": "Atualizar",
+    "loading": "Carregando...",
+    "select": "Selecione",
+    "all": "Todos",
+    "search": "Busca",
+    "viewMore": "Ver mais",
+    "close": "Fechar",
+    "analyze": "Analisar",
+    "today": "Hoje",
+    "openMenu": "Abrir menu",
+    "closeMenu": "Fechar menu lateral",
+    "collapseMenu": "Recolher menu lateral",
+    "expandMenu": "Expandir menu lateral",
+    "connectedAccount": "Conta conectada",
+    "now": "Agora",
+    "noEnd": "Sem fim"
+  },
+  "chat": {
+    "brandSubUser": "Assistente da escola",
+    "brandSubAdmin": "Painel administrativo",
+    "intranet": "Intranet Talkers",
+    "newConversation": "Nova conversa",
+    "conversations": "Conversas",
+    "admin": "Admin",
+    "logout": "Sair",
+    "assistantKicker": "Assistente da escola",
+    "emptyTitle": "Como posso ajudar hoje?",
+    "emptySubtitle": "Crie documentos, planilhas, imagens e áudios, consulte a base da empresa e conduza atendimentos com uma experiência mais parecida com o ChatGPT.",
+    "placeholder": "Envie uma mensagem para a Talkers IA",
+    "hint": "Enter envia, Shift+Enter quebra linha",
+    "attach": "Adicionar fotos e arquivos",
+    "recordStart": "Gravar áudio",
+    "recordStop": "Parar gravação",
+    "send": "Enviar mensagem",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "copyFailed": "Não foi possível copiar o texto.",
+    "deleteConversation": "Apagar esta conversa? Isso não pode ser desfeito.",
+    "deleteConversationError": "Erro ao apagar conversa: {{error}}",
+    "sendAttachmentsFailed": "Não foi possível enviar a mensagem com anexos.",
+    "uploadFailed": "Erro ao enviar \"{{name}}\": {{error}}",
+    "microphoneError": "Não foi possível acessar o microfone: {{error}}",
+    "oversizeIgnored": "{{count}} arquivo(s) acima de 25 MB foram ignorados{{names}}.",
+    "listen": "Ouvir",
+    "openFile": "Abrir arquivo",
+    "openImage": "Abrir imagem",
+    "downloadFile": "Baixar arquivo",
+    "downloadImage": "Baixar imagem",
+    "downloadAudio": "Baixar áudio",
+    "removeFile": "Remover {{name}}",
+    "errorPrefix": "Erro: ",
+    "fileKinds": {
+      "image": "Imagem",
+      "audio": "Áudio",
+      "pdf": "PDF",
+      "spreadsheet": "Planilha",
+      "document": "Documento",
+      "presentation": "Apresentação",
+      "file": "Arquivo"
+    },
+    "quickPrompts": {
+      "document": {
+        "label": "Gerar documento",
+        "hint": "Crie comunicados, contratos e textos organizados.",
+        "prompt": "Gere um documento profissional sobre este tema:"
+      },
+      "spreadsheet": {
+        "label": "Criar planilha",
+        "hint": "Monte tabelas com colunas prontas para uso.",
+        "prompt": "Crie uma planilha organizada com os principais campos para:"
+      },
+      "audio": {
+        "label": "Transcrever áudio",
+        "hint": "Analise áudio enviado ou gravado no navegador.",
+        "prompt": "Analise e transcreva o áudio enviado, depois faça um resumo objetivo."
+      },
+      "image": {
+        "label": "Gerar imagem",
+        "hint": "Produza imagens para escola, marketing e materiais.",
+        "prompt": "Gere uma imagem realista e profissional de:"
+      },
+      "school": {
+        "label": "Comunicado escolar",
+        "hint": "Crie avisos claros e acolhedores para alunos e famílias.",
+        "prompt": "Crie um comunicado escolar claro e acolhedor sobre:"
+      },
+      "knowledge": {
+        "label": "Consultar base interna",
+        "hint": "Pesquise documentos e conhecimento da empresa.",
+        "prompt": "Consulte a base interna e me responda sobre:"
+      }
+    }
+  },
+  "login": {
+    "title": "Entrar",
+    "subtitle": "Use seu email e senha.",
+    "email": "Email",
+    "password": "Senha",
+    "button": "Entrar",
+    "emailPlaceholder": "seuemail@empresa.com",
+    "passwordPlaceholder": "********",
+    "errorPrefix": "Erro: "
+  },
+  "intranet": {
+    "title": "Intranet Talkers",
+    "brandSub": "Ambiente corporativo interno",
+    "eyebrow": "Workspace corporativo",
+    "heroBadge": "IA + conteúdo corporativo",
+    "heroTitle": "Intranet Talkers",
+    "heroDescription": "Um hub interno para documentos, comunicados, atalhos e apoio da IA por departamento.",
+    "overviewEyebrow": "Visão geral",
+    "overviewTitle": "Panorama rápido da rotina interna",
+    "quickEyebrow": "Acesso rápido",
+    "quickTitle": "Entradas principais",
+    "communicationEyebrow": "Comunicação corporativa",
+    "communicationTitle": "Avisos institucionais e comunicados internos",
+    "sidebarDepartments": "Departamentos",
+    "sidebarReminders": "Lembretes e agenda",
+    "sidebarUtilityEmpty": "Nenhum lembrete próximo no momento.",
+    "brandSubAdminAccess": "Acesso administrativo total",
+    "brandSubUserAccess": "{{count}} área(s) liberada(s) - {{email}}",
+    "sidebarNoDepartment": "Nenhum departamento setorial liberado para este usuário.",
+    "departmentDefaultName": "Departamento",
+    "departmentMainArea": "Área principal",
+    "departmentSubmenusCount": "{{count}} submenu(s)",
+    "departmentDefaultFlow": "Fluxo interno do departamento",
+    "departmentWorkspaceTitle": "Área departamental",
+    "departmentWorkspaceDescription": "Área departamental da intranet.",
+    "generic": {
+      "update": "Atualização",
+      "summary": "Resumo",
+      "announcement": "Comunicado",
+      "general": "Geral",
+      "workspace": "workspace",
+      "periodUndefined": "Período não definido",
+      "notInformed": "Não informado",
+      "system": "Sistema",
+      "now": "Agora",
+      "noEnd": "Sem fim",
+      "module": "Módulo",
+      "saveError": "Não foi possível salvar a atualização: {{error}}"
+    },
+    "nav": {
+      "home": "Home",
+      "calendar": "Agenda",
+      "sales": "Painel comercial"
+    },
+    "home": {
+      "greetingCardDescription": "Esta é a entrada principal da intranet, com contexto institucional, agenda e comunicação interna.",
+      "greetingBadgeAdmin": "Admin",
+      "greetingBadgeUser": "Perfil ativo",
+      "nextMeetings": "Próximas reuniões",
+      "noMeetings": "Nenhuma reunião agendada para os próximos dias.",
+      "meetingsBadge": "{{count}} evento(s)"
+    },
+    "direction": {
+      "origin": "Direção",
+      "emptyTitle": "Nenhum comunicado da Direção",
+      "emptyBody": "Quando houver avisos institucionais em destaque, eles aparecerão aqui.",
+      "fallbackTitle": "Comunicado institucional"
+    },
+    "communication": {
+      "emptyTitle": "Nenhum comunicado ativo no mural neste momento.",
+      "nonePublished": "Nenhum comunicado publicado ainda.",
+      "allUsers": "Todos os usuários",
+      "defaultOrigin": "Comunicado interno",
+      "publishTitle": "Publicar comunicado",
+      "editTitle": "Editar comunicado #{{id}}",
+      "save": "Salvar comunicado",
+      "saveChanges": "Salvar alterações",
+      "onePublished": "1 comunicado publicado",
+      "manyPublished": "{{count}} comunicados publicados",
+      "departmentsAudience": "Departamentos: {{departments}}",
+      "segmentedDepartmentHint": "Comunicado segmentado para esta área.",
+      "segmentedDepartmentsHint": "Use quando o público for segmentado por departamento.",
+      "publishedTitle": "Comunicados publicados",
+      "activeTitle": "Comunicado ativo",
+      "activeHint": "Comunicados ativos aparecem na Home, na área de comunicação e nas notificações internas.",
+      "titleRequired": "Informe o título do comunicado.",
+      "departmentsRequired": "Selecione ao menos um departamento para um comunicado segmentado.",
+      "saveError": "Não foi possível salvar o comunicado: {{error}}",
+      "deleteError": "Não foi possível excluir o comunicado: {{error}}",
+      "deleteConfirm": "Deseja excluir o comunicado \"{{title}}\"?",
+      "fields": {
+        "title": "Título",
+        "summary": "Resumo",
+        "content": "Conteúdo completo",
+        "type": "Tipo",
+        "priority": "Prioridade",
+        "audience": "Público",
+        "startsAt": "Início (opcional)",
+        "endsAt": "Fim (opcional)",
+        "departments": "Departamentos do comunicado"
+      },
+      "placeholders": {
+        "title": "Ex.: Treinamento interno desta semana",
+        "summary": "Texto curto para a Home e notificações",
+        "content": "Texto principal do comunicado"
+      }
+    },
+    "departments": {
+      "empty": "Nenhum departamento específico foi liberado para este perfil.",
+      "reminderEmpty": "Sem lembretes operacionais para este perfil no momento.",
+      "currentLevel": "Nível atual: {{level}}",
+      "collaborator": "colaborador",
+      "noSubmenus": "Nenhum submenu configurado para este departamento ainda.",
+      "noModules": "Nenhum módulo liberado para esta área no momento."
+    },
+    "departmentSummary": {
+      "currentLevel": "Nível atual",
+      "permission": "Permissão",
+      "activeSubmenus": "Submenus ativos",
+      "flows": "Fluxos",
+      "availableModules": "Módulos liberados",
+      "resources": "Recursos",
+      "activeSubmenu": "Submenu ativo",
+      "selectedArea": "Área selecionada",
+      "detail": "Detalhe",
+      "main": "Principal"
+    },
+    "routes": {
+      "dashboardTitle": "Dashboard / BI",
+      "dashboardEyebrow": "BI",
+      "modulesTitle": "Módulos",
+      "modulesEyebrow": "Workspace",
+      "calendarEyebrow": "Calendário corporativo",
+      "departmentsTitle": "Departamentos",
+      "departmentsEyebrow": "Áreas de trabalho",
+      "documentsTitle": "Documentos",
+      "documentsEyebrow": "Base de conhecimento",
+      "trainingTitle": "Treinamento IA",
+      "trainingEyebrow": "Aprendizado e ingestão",
+      "communicationTitle": "Comunicação",
+      "communicationEyebrow": "Avisos e comunicados",
+      "salesEyebrow": "Operação comercial"
+    },
+    "reminder": {
+      "meeting": "Reunião",
+      "announcement": "Aviso",
+      "empty": "Nenhum lembrete operacional no momento."
+    }
+  },
+  "calendar": {
+    "newEvent": "Novo compromisso",
+    "previous": "Anterior",
+    "today": "Hoje",
+    "next": "Próximo",
+    "month": "Mês",
+    "week": "Semana",
+    "day": "Dia",
+    "list": "Lista",
+    "user": "Usuário",
+    "type": "Tipo",
+    "mode": "Formato",
+    "status": "Status",
+    "search": "Busca",
+    "searchPlaceholder": "Título, descrição, local ou tipo",
+    "all": "Todos",
+    "select": "Selecione",
+    "title": "Título",
+    "description": "Descrição",
+    "eventType": "Tipo",
+    "meetingMode": "Modo",
+    "allDay": "Dia inteiro",
+    "allDayHint": "Use para eventos sem horário fixo.",
+    "startDate": "Data inicial",
+    "startTime": "Hora inicial",
+    "endDate": "Data final",
+    "endTime": "Hora final",
+    "location": "Local",
+    "meetingLink": "Link da reunião",
+    "notes": "Observações",
+    "participants": "Participantes",
+    "participantsHint": "Selecione uma ou mais pessoas. O compromisso aparecerá na agenda de todos os participantes.",
+    "reset": "Limpar",
+    "save": "Salvar compromisso",
+    "cancelEvent": "Cancelar compromisso",
+    "editorNew": "Novo compromisso",
+    "detailsEyebrow": "Detalhes do compromisso",
+    "defaultEventTitle": "Compromisso",
+    "defaultAgenda": "Agenda",
+    "fullDay": "Dia inteiro",
+    "selectedDay": "Dia selecionado",
+    "noHistory": "Nenhum histórico registrado ainda para este compromisso.",
+    "noEventsDay": "Nenhum compromisso encontrado para este dia.",
+    "noEventsPeriod": "Nenhum compromisso encontrado para este período.",
+    "emptyWeek": "Sem eventos",
+    "moreEvents": "+ {{count}} compromisso(s)",
+    "loadError": "Não foi possível carregar o compromisso: {{error}}",
+    "saveError": "Não foi possível salvar o compromisso: {{error}}",
+    "cancelError": "Não foi possível cancelar o compromisso: {{error}}",
+    "cancelReasonPrompt": "Motivo do cancelamento (opcional):",
+    "summary": {
+      "inPeriod": "No período",
+      "today": "Hoje",
+      "thisWeek": "Esta semana",
+      "myEvents": "Meus compromissos"
+    },
+    "statusLabel": {
+      "scheduled": "Agendado",
+      "cancelled": "Cancelado"
+    },
+    "modeLabel": {
+      "online": "Online",
+      "presencial": "Presencial",
+      "hibrida": "Híbrida"
+    }
+  },
+  "admin": {
+    "title": "Admin",
+    "subtitle": "Usuários, permissões e base de conhecimento",
+    "tabs": {
+      "users": "Usuários",
+      "departments": "Departamentos",
+      "knowledge": "Base de conhecimento",
+      "training": "Treinamento da IA",
+      "logs": "Logs do sistema"
+    }
+  },
+  "moderation": {
+    "refusal": "Não posso ajudar com esse tipo de solicitação. Esta plataforma é voltada para educação e aprendizado de idiomas."
+  }
+}

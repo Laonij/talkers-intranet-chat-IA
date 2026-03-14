@@ -252,9 +252,9 @@ function renderIntranetChrome() {
   const overviewTitle = el('homeOverviewTitle');
   if (overviewTitle) overviewTitle.textContent = t('intranet.overviewTitle');
   const communicationEyebrow = el('homeCommunicationEyebrow');
-  if (communicationEyebrow) communicationEyebrow.textContent = t('intranet.communicationEyebrow');
+  if (communicationEyebrow) communicationEyebrow.textContent = t('intranet.communicationEyebrow', {}, 'Mural da rotina interna');
   const communicationTitle = el('homeCommunicationTitle');
-  if (communicationTitle) communicationTitle.textContent = t('intranet.communicationTitle');
+  if (communicationTitle) communicationTitle.textContent = t('intranet.communicationTitle', {}, 'Avisos, comunicados e tarefas programadas');
   const quickEyebrow = el('homeQuickEyebrow');
   if (quickEyebrow) quickEyebrow.textContent = t('intranet.quickEyebrow');
   const quickTitle = el('homeQuickTitle');
@@ -471,6 +471,7 @@ function getVisibleDepartments(intranet) {
 function getGlobalNavigationItems(intranet) {
   const items = [
     { key: 'home', label: t('intranet.nav.home'), icon: 'workspace' },
+    { key: 'dashboard', label: t('intranet.nav.dashboard', {}, 'Dashboard'), icon: 'insight' },
     { key: 'calendar', label: t('intranet.nav.calendar'), icon: 'calendar' },
     { key: 'sales', label: t('intranet.nav.sales'), icon: 'target', hidden: !Boolean(salesState?.enabled) },
   ];
@@ -752,11 +753,11 @@ function renderSidebar(user, intranet) {
       toggle.onclick = () => {
         const slug = department.slug || '';
         const isExpanded = expandedDepartmentSlugs.has(slug);
-        const isCurrentDepartment = currentViewState.key === 'department' && currentViewState.departmentSlug === slug && !currentViewState.submenuSlug;
+        const isCurrentDepartment = currentViewState.key === 'department' && currentViewState.departmentSlug === slug;
 
-        if (isExpanded && isCurrentDepartment) {
+        if (isExpanded) {
           toggleDepartmentExpanded(slug, false);
-          setActiveView('home');
+          if (isCurrentDepartment) setActiveView('home');
           return;
         }
 
@@ -778,7 +779,6 @@ function renderSidebar(user, intranet) {
             <span class="intranet-nav-link-icon">${renderIcon(submenu.icon || department.icon || 'layers')}</span>
             <span class="intranet-side-link-copy">
               <strong>${escapeHtml(submenu.title || 'Submenu')}</strong>
-              <small>${escapeHtml(submenu.description || t('intranet.departmentDefaultFlow', {}, 'Fluxo interno do departamento'))}</small>
             </span>
           `;
           button.onclick = () => {
@@ -798,48 +798,16 @@ function renderSidebar(user, intranet) {
 }
 
 function renderHomeOverview(user, intranet) {
-  const overviewGrid = el('homeOverviewGrid');
   const directionGrid = el('homeDirectionGrid');
   const communicationGrid = el('homeCommunicationGrid');
-  if (overviewGrid) {
-    const updates = Array.isArray(intranet.home?.updates) ? intranet.home.updates : [];
-    const overviewCards = [
-      {
-        title: `${getPeriodGreeting()}, ${user.name}`,
-        description: t('intranet.home.greetingCardDescription'),
-        badge: user.role === 'admin' ? t('intranet.home.greetingBadgeAdmin') : t('intranet.home.greetingBadgeUser'),
-      },
-      ...(updates || []).slice(0, 4).map((item) => ({
-        title: item.title || t('intranet.generic.update', {}, 'Atualizacao'),
-        description: item.description || '',
-        badge: item.label || t('intranet.generic.summary', {}, 'Resumo'),
-      })),
-      {
-        title: t('intranet.home.nextMeetings'),
-        description: intranet.home?.upcoming_events?.[0]
-          ? `${intranet.home.upcoming_events[0].title} - ${formatDate(intranet.home.upcoming_events[0].start_at || intranet.home.upcoming_events[0].start_date)}`
-          : t('intranet.home.noMeetings'),
-        badge: t('intranet.home.meetingsBadge', { count: Number((intranet.home?.upcoming_events || []).length || 0) }),
-      },
-    ];
-
-    overviewGrid.innerHTML = overviewCards.map((item) => `
-      <article class="intranet-quick-card intranet-home-overview-card">
-        <div class="intranet-quick-title">${escapeHtml(item.title)}</div>
-        <div class="intranet-quick-text">${escapeHtml(item.description)}</div>
-        <div class="intranet-home-overview-meta">${escapeHtml(item.badge || '')}</div>
-      </article>
-    `).join('');
-  }
-
   if (directionGrid) {
     const directionItems = Array.isArray(intranet.home?.direction_board) ? intranet.home.direction_board : [];
     if (!directionItems.length) {
       directionGrid.innerHTML = `
         <article class="intranet-direction-card is-empty">
           <div class="intranet-card-meta">${escapeHtml(t('intranet.direction.origin'))}</div>
-          <h4>${escapeHtml(t('intranet.direction.emptyTitle'))}</h4>
-          <p>${escapeHtml(t('intranet.direction.emptyBody'))}</p>
+          <h4>${escapeHtml(t('intranet.direction.emptyTitle', {}, 'Direcao sem novos comunicados agora'))}</h4>
+          <p>${escapeHtml(t('intranet.direction.emptyBody', {}, 'Quando houver avisos prioritarios da Direcao, eles aparecem primeiro neste mural.'))}</p>
         </article>
       `;
     } else {
@@ -859,15 +827,38 @@ function renderHomeOverview(user, intranet) {
     const announcements = Array.isArray(intranet.home?.communication_board) ? intranet.home.communication_board : [];
     const directionIds = new Set((Array.isArray(intranet.home?.direction_board) ? intranet.home.direction_board : []).map((item) => Number(item.id || 0)));
     const visibleAnnouncements = announcements.filter((item) => !directionIds.has(Number(item.id || 0)));
-    if (!visibleAnnouncements.length) {
+    const scheduledItems = [
+      ...(Array.isArray(intranet.home?.upcoming_events) ? intranet.home.upcoming_events.slice(0, 3).map((item) => ({
+        meta: t('calendar.defaultEventTitle', {}, 'Compromisso agendado'),
+        title: item.title || t('calendar.defaultEventTitle', {}, 'Compromisso'),
+        description: item.description || item.meeting_mode_label || t('calendar.defaultAgenda', {}, 'Agenda corporativa'),
+        footer: formatDate(item.start_at || item.start_date || ''),
+      })) : []),
+      ...(Array.isArray(intranet.notifications) ? intranet.notifications.slice(0, 3).map((item) => ({
+        meta: item.type === 'announcement'
+          ? t('intranet.generic.announcement', {}, 'Comunicado')
+          : t('intranet.generic.reminder', {}, 'Lembrete'),
+        title: item.title || t('intranet.generic.update', {}, 'Atualizacao'),
+        description: item.description || '',
+        footer: t('intranet.generic.internalRoutine', {}, 'Rotina interna'),
+      })) : []),
+      ...visibleAnnouncements.slice(0, 4).map((item) => ({
+        meta: item.origin_label || t('intranet.communication.defaultOrigin', {}, 'Comunicado interno'),
+        title: item.title || t('intranet.generic.announcement', {}, 'Comunicado'),
+        description: item.summary || '',
+        footer: formatDate(item.created_at || ''),
+      })),
+    ].slice(0, 8);
+
+    if (!scheduledItems.length) {
       communicationGrid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.communication.emptyTitle'))}</div>`;
     } else {
-      communicationGrid.innerHTML = visibleAnnouncements.map((item) => `
+      communicationGrid.innerHTML = scheduledItems.map((item) => `
         <article class="intranet-communication-card">
-          <div class="intranet-card-meta">${escapeHtml(item.origin_label || t('intranet.communication.defaultOrigin', {}, 'Comunicado interno'))} - ${escapeHtml(item.priority || 'normal')}</div>
+          <div class="intranet-card-meta">${escapeHtml(item.meta || t('intranet.generic.announcement', {}, 'Comunicado'))}</div>
           <h4>${escapeHtml(item.title || t('intranet.generic.announcement', {}, 'Comunicado'))}</h4>
-          <p>${escapeHtml(item.summary || '')}</p>
-          <div class="small muted">${escapeHtml(formatDate(item.created_at || ''))}</div>
+          <p>${escapeHtml(item.description || '')}</p>
+          <div class="small muted">${escapeHtml(item.footer || '')}</div>
         </article>
       `).join('');
     }
@@ -1294,19 +1285,29 @@ function renderDepartmentWorkspace(intranet) {
   section.hidden = false;
   el('departmentWorkspaceEyebrow').textContent = submenu ? department.name : t('intranet.departmentDefaultName', {}, 'Departamento');
   el('departmentWorkspaceTitle').textContent = submenu?.title || department.name || t('intranet.departmentWorkspaceTitle', {}, 'Area departamental');
-  el('departmentWorkspaceDescription').textContent = submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Area departamental da intranet.');
+  const isCustomWorkspace = isMarketingInfluencerWorkspace(department, submenu);
+  el('departmentWorkspaceDescription').textContent = isCustomWorkspace
+    ? t('intranet.marketingInfluencer.workspaceDescription', {}, 'Cadastro, lancamentos, relatorios e analise da operacao de influencers do Marketing.')
+    : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Area departamental da intranet.'));
 
   const summary = el('departmentWorkspaceSummary');
   summary.innerHTML = '';
-  const summaryCards = [
-    { title: t('intranet.departmentSummary.currentLevel', {}, 'Nivel atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissao') },
-    { title: t('intranet.departmentSummary.activeSubmenus', {}, 'Submenus ativos'), description: String((department.submenus || []).length || 0), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
-    { title: t('intranet.departmentSummary.availableModules', {}, 'Modulos liberados'), description: String((department.modules || []).length || 0), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
-    { title: submenu ? t('intranet.departmentSummary.activeSubmenu', {}, 'Submenu ativo') : t('intranet.departmentSummary.selectedArea', {}, 'Area selecionada'), description: submenu?.title || department.name, badge: submenu ? t('intranet.departmentSummary.detail', {}, 'Detalhe') : t('intranet.departmentSummary.main', {}, 'Principal') },
-  ];
+  const summaryCards = isCustomWorkspace
+    ? [
+      { title: t('intranet.marketingInfluencer.summary.register', {}, 'Cadastro'), description: t('intranet.marketingInfluencer.summary.registerDescription', {}, 'Base e dados da parceria'), badge: t('intranet.departmentSummary.main', {}, 'Principal') },
+      { title: t('intranet.marketingInfluencer.summary.overview', {}, 'Visao geral'), description: t('intranet.marketingInfluencer.summary.overviewDescription', {}, 'Leitura rapida do periodo'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+      { title: t('intranet.marketingInfluencer.summary.reports', {}, 'Relatorios'), description: t('intranet.marketingInfluencer.summary.reportsDescription', {}, 'Historico e comparativos'), badge: t('intranet.departmentSummary.detail', {}, 'Detalhe') },
+      { title: t('intranet.marketingInfluencer.summary.analysis', {}, 'Analise IA'), description: t('intranet.marketingInfluencer.summary.analysisDescription', {}, 'Apoio para a decisao operacional'), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
+    ]
+    : [
+      { title: t('intranet.departmentSummary.currentLevel', {}, 'Nivel atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissao') },
+      { title: t('intranet.departmentSummary.activeSubmenus', {}, 'Submenus ativos'), description: String((department.submenus || []).length || 0), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
+      { title: t('intranet.departmentSummary.availableModules', {}, 'Modulos liberados'), description: String((department.modules || []).length || 0), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+      { title: submenu ? t('intranet.departmentSummary.activeSubmenu', {}, 'Submenu ativo') : t('intranet.departmentSummary.selectedArea', {}, 'Area selecionada'), description: submenu?.title || department.name, badge: submenu ? t('intranet.departmentSummary.detail', {}, 'Detalhe') : t('intranet.departmentSummary.main', {}, 'Principal') },
+    ];
   summaryCards.forEach((item) => {
     const card = document.createElement('article');
-    card.className = 'intranet-quick-card intranet-home-overview-card';
+    card.className = `intranet-quick-card intranet-home-overview-card department-summary-card${isCustomWorkspace ? ' is-compact' : ''}`;
     card.innerHTML = `
       <div class="intranet-quick-title">${escapeHtml(item.title)}</div>
       <div class="intranet-quick-text">${escapeHtml(item.description)}</div>
@@ -1325,10 +1326,7 @@ function renderDepartmentWorkspace(intranet) {
       const card = document.createElement('button');
       card.type = 'button';
       card.className = `intranet-quick-card intranet-submenu-card${currentViewState.submenuSlug === item.slug ? ' is-active' : ''}`;
-      card.innerHTML = `
-        <div class="intranet-quick-title">${escapeHtml(item.title)}</div>
-        <div class="intranet-quick-text">${escapeHtml(item.description || t('intranet.departmentDefaultFlow', {}, 'Fluxo interno do departamento'))}</div>
-      `;
+      card.innerHTML = `<div class="intranet-quick-title">${escapeHtml(item.title)}</div>`;
       card.onclick = () => setActiveView('department', { departmentSlug: department.slug, submenuSlug: item.slug || '' });
       submenusWrap.appendChild(card);
     });
@@ -1337,7 +1335,6 @@ function renderDepartmentWorkspace(intranet) {
   const modulesWrap = el('departmentWorkspaceModules');
   modulesWrap.innerHTML = '';
   const modules = sortAlphabetically(department.modules || [], (item) => item?.title || item?.key || '');
-  const isCustomWorkspace = isMarketingInfluencerWorkspace(department, submenu);
   if (customWrap) customWrap.hidden = !isCustomWorkspace;
   if (modulesHead) modulesHead.hidden = isCustomWorkspace;
   modulesWrap.hidden = isCustomWorkspace;
@@ -1412,8 +1409,8 @@ function renderMarketingInfluencerWorkspace() {
       <div class="influencer-toolbar">
         <div>
           <div class="intranet-section-eyebrow">Marketing</div>
-          <h3 class="intranet-section-title">Gestao de influencers e leitura comparativa</h3>
-          <p class="small muted">Cadastre as parceiras, lance a performance manualmente, compare indicadores e use a IA como apoio para decidir os proximos passos.</p>
+          <h3 class="intranet-section-title">Influencer</h3>
+          <p class="small muted">Cadastro, desempenho, comparativos e leitura de apoio para as parcerias do Marketing.</p>
         </div>
         <div class="influencer-toolbar-actions">
           <div>
@@ -1434,26 +1431,26 @@ function renderMarketingInfluencerWorkspace() {
         </div>
       </div>
 
-      <div class="intranet-home-grid influencer-summary-grid">
-        <article class="intranet-quick-card intranet-home-overview-card">
-          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.total_influencers || 0))}</div>
-          <div class="intranet-quick-text">Influencers cadastradas</div>
-          <div class="intranet-home-overview-meta">Base atual</div>
+      <div class="influencer-overview-strip">
+        <article class="influencer-overview-card">
+          <div class="influencer-overview-label">Base</div>
+          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.total_influencers || 0))}</div>
+          <div class="influencer-overview-meta">Influencers cadastradas</div>
         </article>
-        <article class="intranet-quick-card intranet-home-overview-card">
-          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.followers_total || 0))}</div>
-          <div class="intranet-quick-text">Seguidores monitorados</div>
-          <div class="intranet-home-overview-meta">Total consolidado</div>
+        <article class="influencer-overview-card">
+          <div class="influencer-overview-label">Audiencia</div>
+          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.followers_total || 0))}</div>
+          <div class="influencer-overview-meta">Seguidores monitorados</div>
         </article>
-        <article class="intranet-quick-card intranet-home-overview-card">
-          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.enrollments_total || 0))}</div>
-          <div class="intranet-quick-text">Matriculas atribuidas</div>
-          <div class="intranet-home-overview-meta">${escapeHtml(period.label || 'Periodo atual')}</div>
+        <article class="influencer-overview-card">
+          <div class="influencer-overview-label">Resultado</div>
+          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.enrollments_total || 0))}</div>
+          <div class="influencer-overview-meta">Matriculas no periodo</div>
         </article>
-        <article class="intranet-quick-card intranet-home-overview-card">
-          <div class="intranet-quick-title">${escapeHtml(formatInteger(summary.launches_total || 0))}</div>
-          <div class="intranet-quick-text">Lancamentos de performance</div>
-          <div class="intranet-home-overview-meta">Historico operacional</div>
+        <article class="influencer-overview-card">
+          <div class="influencer-overview-label">Historico</div>
+          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.launches_total || 0))}</div>
+          <div class="influencer-overview-meta">Lancamentos registrados</div>
         </article>
       </div>
 
@@ -1461,7 +1458,7 @@ function renderMarketingInfluencerWorkspace() {
         <button class="influencer-section-toggle" type="button" id="btnToggleInfluencerForm" aria-expanded="${influencerState.formCollapsed ? 'false' : 'true'}">
           <span>
             <strong id="influencerFormTitle">${escapeHtml(influencerState.editingId ? 'Editar influencer' : 'Cadastrar influencer')}</strong>
-            <small>Bloco recolhivel para manter a tela organizada.</small>
+            <small>Abra apenas quando for cadastrar ou atualizar a base.</small>
           </span>
           <span class="influencer-section-toggle-icon">${renderIcon('chevron')}</span>
         </button>
@@ -1523,7 +1520,7 @@ function renderMarketingInfluencerWorkspace() {
       <section class="influencer-card-section">
         <div class="intranet-section-head">
           <div>
-            <div class="intranet-section-eyebrow">Base cadastrada</div>
+            <div class="intranet-section-eyebrow">Visao geral</div>
             <h4 class="intranet-section-title">Influencers cadastradas</h4>
           </div>
           <div class="small muted">${escapeHtml(period.label || 'Periodo atual')}</div>
@@ -1560,7 +1557,7 @@ function renderMarketingInfluencerWorkspace() {
         <section class="influencer-detail-panel">
           <div class="intranet-section-head">
             <div>
-              <div class="intranet-section-eyebrow">Relatorio individual</div>
+              <div class="intranet-section-eyebrow">Relatorios</div>
               <h4 class="intranet-section-title">${escapeHtml(selectedCard?.name || 'Selecione uma influencer')}</h4>
             </div>
             ${selectedCard ? `<button class="btn" type="button" data-influencer-edit="${escapeHtml(selectedCard.id)}">Editar cadastro</button>` : ''}
@@ -1626,7 +1623,7 @@ function renderMarketingInfluencerWorkspace() {
         <aside class="influencer-metric-panel">
           <div class="intranet-section-head">
             <div>
-              <div class="intranet-section-eyebrow">Lancamento manual</div>
+              <div class="intranet-section-eyebrow">Fluxos</div>
               <h4 class="intranet-section-title">Performance operacional</h4>
             </div>
           </div>
@@ -1684,7 +1681,7 @@ function renderMarketingInfluencerWorkspace() {
       <section class="influencer-chart-section">
         <div class="intranet-section-head">
           <div>
-            <div class="intranet-section-eyebrow">Comparativo</div>
+            <div class="intranet-section-eyebrow">Leitura comparativa</div>
             <h4 class="intranet-section-title">Graficos comparativos por influencer</h4>
           </div>
           <div class="small muted">${escapeHtml(period.label || 'Periodo atual')}</div>
@@ -1984,13 +1981,31 @@ function setActiveView(viewKey, options = {}) {
 
 function renderDashboard(intranet) {
   const dashboard = intranet.dashboard || { enabled: false };
-  setDashboardSectionVisible(Boolean(dashboard.enabled));
-  if (!dashboard.enabled) return;
-
   const summaryWrap = el('dashboardSummaryCards');
   const breakdownWrap = el('dashboardDepartmentBreakdown');
   const highlightsWrap = el('dashboardHighlightsList');
   const widgetsWrap = el('dashboardWidgetGrid');
+  setDashboardSectionVisible(true);
+
+  if (!dashboard.enabled) {
+    if (summaryWrap) {
+      summaryWrap.innerHTML = `
+        <article class="intranet-stat-card">
+          <div class="intranet-stat-value">-</div>
+          <div class="intranet-stat-label">${escapeHtml(t('intranet.dashboardComingSoonTitle', {}, 'Dashboard em preparacao'))}</div>
+          <div class="small muted">${escapeHtml(t('intranet.dashboardComingSoonDescription', {}, 'Os paineis por area serao liberados conforme as fontes e indicadores forem sendo conectados.'))}</div>
+        </article>
+      `;
+    }
+    if (breakdownWrap) {
+      breakdownWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardComingSoonAreas', {}, 'A estrutura ja esta pronta para dashboards Comercial, Pedagogico, Financeiro e Geral.'))}</div>`;
+    }
+    if (highlightsWrap) {
+      highlightsWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardComingSoonHighlights', {}, 'Por enquanto, use Home, Agenda e os departamentos para acompanhar a rotina interna.'))}</div>`;
+    }
+    if (widgetsWrap) widgetsWrap.innerHTML = '';
+    return;
+  }
 
   if (summaryWrap) {
     summaryWrap.innerHTML = '';

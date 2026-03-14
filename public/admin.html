@@ -838,7 +838,7 @@
     </div>
   </div>
 
-<script src="/i18n.js"></script>
+<script src="/i18n.js?v=20260313b"></script>
 <script>
 const RAG_BATCH_SIZE = 1;
 const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
@@ -859,7 +859,10 @@ let collapsedSections = new Set();
 let activeAdminTab = 'users';
 
 const i18n = () => window.TalkersI18n;
-const t = (key, params = {}, fallback = '') => i18n()?.t?.(key, params, fallback) ?? fallback || key;
+const t = (key, params = {}, fallback = '') => {
+  const translated = i18n()?.t?.(key, params, fallback);
+  return translated ?? fallback ?? key;
+};
 const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
 
 async function api(path, opts = {}) {

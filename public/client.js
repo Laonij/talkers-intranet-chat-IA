@@ -1,7 +1,10 @@
 ﻿const el = (id) => document.getElementById(id);
 
 const i18n = () => window.TalkersI18n;
-const t = (key, params = {}, fallback = '') => i18n()?.t?.(key, params, fallback) ?? fallback || key;
+const t = (key, params = {}, fallback = '') => {
+  const translated = i18n()?.t?.(key, params, fallback);
+  return translated ?? fallback ?? key;
+};
 const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
 
 const QUICK_PROMPTS = [

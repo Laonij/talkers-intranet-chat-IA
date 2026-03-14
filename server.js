@@ -148,6 +148,22 @@ const RAG_ALLOWED_EXTS = new Set([
   ".mpeg",
   ".mpg",
 ]);
+const RAG_BLOCKED_EXTS = new Set([
+  ".exe",
+  ".msi",
+  ".bat",
+  ".cmd",
+  ".com",
+  ".scr",
+  ".ps1",
+  ".dll",
+  ".jar",
+  ".apk",
+  ".app",
+  ".dmg",
+  ".pkg",
+  ".sh",
+]);
 const RAG_TEXT_COMPARE_EXTS = new Set([".txt", ".md", ".csv", ".json"]);
 const RAG_LOCAL_EXTRACTION_LIMITS = {
   ".pdf": 8 * 1024 * 1024,
@@ -629,6 +645,37 @@ function getKnowledgeSourceFullPath(source) {
 
 function getKnowledgeUploadExt(filePath, originalName = "", mimeType = "") {
   return detectExt(filePath, originalName, mimeType) || path.extname(String(filePath || "")).toLowerCase() || ".bin";
+}
+
+function normalizeKnowledgeExt(value = "") {
+  const safeValue = String(value || "").trim().toLowerCase();
+  if (!safeValue) return "";
+  return safeValue.startsWith(".") ? safeValue : `.${safeValue}`;
+}
+
+function classifyKnowledgeCompatibility({ originalName = "", mimeType = "", filePath = "", ext = "" } = {}) {
+  const resolvedExt = normalizeKnowledgeExt(ext || getKnowledgeUploadExt(filePath, originalName, mimeType));
+  if (RAG_BLOCKED_EXTS.has(resolvedExt)) {
+    return {
+      allowed: false,
+      ext: resolvedExt,
+      reason: "blocked_knowledge_file",
+    };
+  }
+
+  if (!RAG_ALLOWED_EXTS.has(resolvedExt)) {
+    return {
+      allowed: false,
+      ext: resolvedExt,
+      reason: "unsupported_knowledge_file",
+    };
+  }
+
+  return {
+    allowed: true,
+    ext: resolvedExt,
+    reason: "supported",
+  };
 }
 
 function isMediaKnowledgeFile(originalName = "", mimeType = "", filePath = "") {
@@ -2611,6 +2658,185 @@ async function deleteStoredFiles(storedNames = [], baseDir = uploadsDir) {
   }
 }
 
+function isPathInside(baseDir, candidatePath) {
+  const safeBase = path.resolve(String(baseDir || ""));
+  const safeCandidate = path.resolve(String(candidatePath || ""));
+  return safeCandidate === safeBase || safeCandidate.startsWith(`${safeBase}${path.sep}`);
+}
+
+function deleteFileIfExists(filePath, allowedRoots = [DATA_DIR, kbDir, knowledgeDir, uploadsDir]) {
+  const safePath = String(filePath || "").trim();
+  if (!safePath || !fs.existsSync(safePath)) return false;
+
+  const canDelete = (allowedRoots || []).some((root) => root && isPathInside(root, safePath));
+  if (!canDelete) return false;
+
+  try {
+    fs.unlinkSync(safePath);
+    return true;
+  } catch (err) {
+    console.log("Erro ao remover arquivo incompatível do disco:", safePath, err?.message || err);
+    return false;
+  }
+}
+
+async function deleteRowsByIds(tableName, columnName, ids = []) {
+  const safeIds = [...new Set((ids || []).map((item) => Number(item || 0)).filter(Boolean))];
+  if (!safeIds.length) return 0;
+
+  const placeholders = safeIds.map(() => "?").join(", ");
+  const result = await run(`DELETE FROM ${tableName} WHERE ${columnName} IN (${placeholders})`, safeIds);
+  return Number(result?.changes || 0);
+}
+
+function removeKnowledgeSourceFromBackgroundQueue(knowledgeSourceId) {
+  const safeId = Number(knowledgeSourceId || 0);
+  if (!safeId) return;
+
+  knowledgeBackgroundState.queue = knowledgeBackgroundState.queue.filter((item) => Number(item?.id || 0) !== safeId);
+  knowledgeBackgroundState.queuedIds.delete(safeId);
+  if (Number(knowledgeBackgroundState.current_source_id || 0) === safeId) {
+    knowledgeBackgroundState.current_source_id = null;
+  }
+}
+
+function createKnowledgeCleanupSummary() {
+  return {
+    scanned_sources: 0,
+    scanned_documents: 0,
+    removed_sources: 0,
+    removed_documents: 0,
+    removed_document_chunks: 0,
+    removed_memories: 0,
+    removed_processing_logs: 0,
+    removed_training_events: 0,
+    removed_local_files: 0,
+    removed_transcripts: 0,
+    removed_orphan_documents: 0,
+    reasons: {},
+    extensions: {},
+  };
+}
+
+function bumpKnowledgeCleanupCounter(map, key) {
+  const safeKey = String(key || "unknown").trim() || "unknown";
+  map[safeKey] = Number(map[safeKey] || 0) + 1;
+}
+
+async function deleteKnowledgeSourceCascade(source, summary, reason = "unsupported_knowledge_file") {
+  if (!source?.id) return;
+
+  const fullPath = getKnowledgeSourceFullPath(source);
+  const relPath = fullPath ? path.relative(kbDir, fullPath).replace(/\\/g, "/") : "";
+  const conditions = [];
+  const params = [];
+
+  if (fullPath) {
+    conditions.push("source_path=?");
+    params.push(fullPath);
+  }
+  if (relPath) {
+    conditions.push("rel_path=?");
+    params.push(relPath);
+  }
+
+  const documentRows = conditions.length
+    ? await all(
+        `SELECT id, source_path
+           FROM documents
+          WHERE ${conditions.join(" OR ")}`,
+        params
+      )
+    : [];
+
+  const documentIds = documentRows.map((row) => Number(row.id || 0)).filter(Boolean);
+  summary.removed_document_chunks += await deleteRowsByIds("document_chunks", "document_id", documentIds);
+  summary.removed_documents += await deleteRowsByIds("documents", "id", documentIds);
+
+  const memoryDelete = await run("DELETE FROM memory_entries WHERE knowledge_source_id=?", [source.id]);
+  summary.removed_memories += Number(memoryDelete?.changes || 0);
+
+  const logDelete = await run("DELETE FROM knowledge_processing_logs WHERE knowledge_source_id=?", [source.id]);
+  summary.removed_processing_logs += Number(logDelete?.changes || 0);
+
+  const trainingDelete = await run("DELETE FROM ai_training_events WHERE knowledge_source_id=?", [source.id]);
+  summary.removed_training_events += Number(trainingDelete?.changes || 0);
+
+  const sourceDelete = await run("DELETE FROM knowledge_sources WHERE id=?", [source.id]);
+  summary.removed_sources += Number(sourceDelete?.changes || 0);
+
+  if (deleteFileIfExists(fullPath)) summary.removed_local_files += 1;
+  const transcriptPath = getTranscriptFilePathForKnowledge(source.stored_name || "");
+  if (deleteFileIfExists(transcriptPath)) summary.removed_transcripts += 1;
+
+  removeKnowledgeSourceFromBackgroundQueue(source.id);
+
+  const ext = normalizeKnowledgeExt(path.extname(String(source.original_name || source.stored_name || "")).toLowerCase());
+  bumpKnowledgeCleanupCounter(summary.reasons, reason);
+  if (ext) bumpKnowledgeCleanupCounter(summary.extensions, ext);
+}
+
+async function purgeIncompatibleKnowledgeAssets(actorUserId = null) {
+  const summary = createKnowledgeCleanupSummary();
+
+  const sources = await all(
+    `SELECT id, original_name, stored_name, mime_type
+       FROM knowledge_sources
+      ORDER BY id ASC`
+  );
+
+  for (const source of sources) {
+    summary.scanned_sources += 1;
+    const fullPath = getKnowledgeSourceFullPath(source);
+    const compatibility = classifyKnowledgeCompatibility({
+      originalName: source.original_name || source.stored_name || "",
+      mimeType: source.mime_type || "",
+      filePath: fullPath,
+    });
+
+    if (!compatibility.allowed) {
+      await deleteKnowledgeSourceCascade(source, summary, compatibility.reason);
+    }
+  }
+
+  const documents = await all(
+    `SELECT id, source_path, rel_path, ext, mime_type
+       FROM documents
+      ORDER BY id ASC`
+  );
+
+  const documentIdsToDelete = [];
+  for (const row of documents) {
+    summary.scanned_documents += 1;
+    const compatibility = classifyKnowledgeCompatibility({
+      originalName: row.rel_path || path.basename(String(row.source_path || "")),
+      mimeType: row.mime_type || "",
+      filePath: row.source_path || "",
+      ext: row.ext || "",
+    });
+
+    if (compatibility.allowed) continue;
+
+    documentIdsToDelete.push(Number(row.id || 0));
+    if (deleteFileIfExists(row.source_path || "")) summary.removed_local_files += 1;
+    bumpKnowledgeCleanupCounter(summary.reasons, compatibility.reason);
+    if (compatibility.ext) bumpKnowledgeCleanupCounter(summary.extensions, compatibility.ext);
+  }
+
+  if (documentIdsToDelete.length) {
+    summary.removed_document_chunks += await deleteRowsByIds("document_chunks", "document_id", documentIdsToDelete);
+    const deletedDocs = await deleteRowsByIds("documents", "id", documentIdsToDelete);
+    summary.removed_documents += deletedDocs;
+    summary.removed_orphan_documents += deletedDocs;
+  }
+
+  if (summary.removed_sources || summary.removed_documents || summary.removed_local_files || summary.removed_transcripts) {
+    await logEvent(actorUserId, "knowledge_cleanup_incompatible_files", summary);
+  }
+
+  return summary;
+}
+
 async function createFileMessage({
   conversationId,
   uploadedBy,
@@ -2988,8 +3214,7 @@ async function getRelevantUserMemory(userId, userText) {
 }
 
 function isSupportedKnowledgeUpload(originalName = "", mimeType = "", filePath = "") {
-  const ext = getKnowledgeUploadExt(filePath, originalName, mimeType);
-  return RAG_ALLOWED_EXTS.has(ext);
+  return classifyKnowledgeCompatibility({ originalName, mimeType, filePath }).allowed;
 }
 
 function shouldExtractKnowledgeLocally(ext, sizeBytes) {
@@ -6643,6 +6868,16 @@ app.get("/api/admin/rag/status", requireAuth(JWT_SECRET), requireRole("admin"), 
   });
 });
 
+app.post("/api/admin/rag/cleanup-incompatible", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  try {
+    const summary = await purgeIncompatibleKnowledgeAssets(req.user.sub);
+    res.json({ ok: true, summary });
+  } catch (err) {
+    console.log("Erro ao limpar arquivos incompatíveis da base:", err?.message || err);
+    res.status(500).json({ error: err?.message || "knowledge_cleanup_failed" });
+  }
+});
+
 app.get("/api/admin/rag/files", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const [files, totalRow] = await Promise.all([
     all(
@@ -6759,7 +6994,7 @@ function getRagUploadFailureStatus(errors = []) {
   const codes = [...new Set((errors || []).map((item) => String(item?.error || '').trim()).filter(Boolean))];
   if (!codes.length) return 500;
   if (codes.every((code) => code === 'knowledge_file_too_large')) return 413;
-  if (codes.every((code) => code === 'unsupported_knowledge_file')) return 400;
+  if (codes.every((code) => code === 'unsupported_knowledge_file' || code === 'blocked_knowledge_file')) return 400;
   return 500;
 }
 
@@ -6834,11 +7069,18 @@ async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
   const sourceKind = String(options.sourceKind || 'manual_upload').trim() || 'manual_upload';
 
   if (sizeBytes > 25 * 1024 * 1024) {
+    deleteFileIfExists(tempPath);
     throw new Error("knowledge_file_too_large");
   }
 
-  if (!isSupportedKnowledgeUpload(safeOriginalName, uploaded.mimetype || "", tempPath)) {
-    throw new Error("unsupported_knowledge_file");
+  const compatibility = classifyKnowledgeCompatibility({
+    originalName: safeOriginalName,
+    mimeType: uploaded.mimetype || "",
+    filePath: tempPath,
+  });
+  if (!compatibility.allowed) {
+    deleteFileIfExists(tempPath);
+    throw new Error(compatibility.reason);
   }
 
   const duplicate = await findDuplicateKnowledgeUpload({
@@ -7724,6 +7966,7 @@ app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"),
       }
     } catch (err) {
       console.log("Erro no upload RAG:", err?.message || err);
+      deleteFileIfExists(uploaded?.path || (uploaded?.filename ? path.join(uploadsDir, uploaded.filename) : ""));
       errors.push({
         filename: sanitizeFilename(uploaded?.originalname || uploaded?.filename || "arquivo"),
         error: err?.message || "rag_upload_failed",
@@ -7992,6 +8235,15 @@ async function startServer() {
   await ensureCalendarEventTypes();
   await syncLegacyUserDepartmentData();
   await ensureFixedDepartments();
+  const incompatibleCleanup = await purgeIncompatibleKnowledgeAssets(null);
+  if (
+    incompatibleCleanup.removed_sources
+    || incompatibleCleanup.removed_documents
+    || incompatibleCleanup.removed_local_files
+    || incompatibleCleanup.removed_transcripts
+  ) {
+    console.log("Limpeza de arquivos incompatíveis concluída:", incompatibleCleanup);
+  }
 
   app.listen(PORT, () => {
     console.log(`Talkers IA rodando em ${BASE_URL}`);

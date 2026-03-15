@@ -99,8 +99,8 @@
       <section class="intranet-section intranet-view" id="dashboard" data-view="dashboard" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
-            <div class="intranet-section-eyebrow">Dashboard / BI</div>
-            <h3 class="intranet-section-title">Leitura consolidada da operacao e das areas liberadas</h3>
+            <div class="intranet-section-eyebrow" id="dashboardSectionEyebrow">Dashboard / BI</div>
+            <h3 class="intranet-section-title" id="dashboardSectionTitle">Leitura consolidada da operacao e das areas liberadas</h3>
           </div>
         </div>
 
@@ -108,14 +108,46 @@
 
         <div class="intranet-dashboard-layout">
           <div class="intranet-training-panel">
-            <div class="intranet-block-title">Visao por area</div>
+            <div class="intranet-block-title" id="dashboardBreakdownTitle">Visao por area</div>
             <div class="intranet-dashboard-list" id="dashboardDepartmentBreakdown"></div>
           </div>
           <div class="intranet-training-panel">
-            <div class="intranet-block-title">Leituras e alertas</div>
+            <div class="intranet-block-title" id="dashboardHighlightsTitle">Leituras e alertas</div>
             <div class="intranet-dashboard-list" id="dashboardHighlightsList"></div>
           </div>
         </div>
+
+        <section class="intranet-dashboard-map-shell" id="dashboardTerritorySection">
+          <div class="intranet-dashboard-map-head">
+            <div>
+              <div class="intranet-block-title" id="dashboardMapEyebrow">Mapa territorial</div>
+              <h4 class="intranet-section-title intranet-dashboard-map-title" id="dashboardMapTitle">Cobertura e expansao da base</h4>
+              <p class="small muted" id="dashboardMapDescription">Estrutura pronta para exibir pins automaticos por regiao, estado e cidade, sem depender de mapas externos.</p>
+            </div>
+            <div class="intranet-dashboard-map-filters">
+              <label>
+                <span id="dashboardMapRegionLabel">Regiao</span>
+                <select id="dashboardMapRegionFilter">
+                  <option value="">Todas</option>
+                </select>
+              </label>
+              <label>
+                <span id="dashboardMapStateLabel">Estado</span>
+                <select id="dashboardMapStateFilter">
+                  <option value="">Todos</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="intranet-dashboard-map-layout">
+            <div class="intranet-dashboard-map-canvas" id="dashboardTerritoryCanvas"></div>
+            <aside class="intranet-dashboard-map-sidebar">
+              <div class="intranet-block-title" id="dashboardMapSidebarTitle">Territorio monitorado</div>
+              <div class="intranet-dashboard-map-legend" id="dashboardTerritoryLegend"></div>
+              <div class="small muted" id="dashboardMapClusterHint">A clusterizacao e os pins automaticos serao ativados quando a base territorial e a integracao com vendas estiverem conectadas.</div>
+            </aside>
+          </div>
+        </section>
 
         <div class="intranet-module-grid" id="dashboardWidgetGrid"></div>
       </section>
@@ -143,8 +175,9 @@
       <section class="intranet-section intranet-view" id="calendar" data-view="calendar" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
-            <div class="intranet-section-eyebrow">Agenda corporativa</div>
-            <h3 class="intranet-section-title">Reunioes, compromissos e alinhamentos internos</h3>
+            <div class="intranet-section-eyebrow" id="calendarSectionEyebrow">Planejamento interno</div>
+            <h3 class="intranet-section-title" id="calendarSectionTitle">Compromissos e reunioes</h3>
+            <p class="small muted" id="calendarSectionDescription">Organize compromissos futuros, acompanhe a agenda do time e mantenha o calendario da escola em dia.</p>
           </div>
           <div class="intranet-topbar-actions intranet-calendar-actions">
             <button class="btn primary" id="btnNewCalendarEvent" type="button">Novo compromisso</button>
@@ -332,21 +365,27 @@
             <p class="small muted" id="departmentWorkspaceDescription">Selecione um departamento no menu para visualizar a area correspondente.</p>
           </div>
         </div>
-        <div class="intranet-home-grid" id="departmentWorkspaceSummary"></div>
-        <div class="intranet-section-head" style="margin-top:18px;">
-          <div>
-            <div class="intranet-section-eyebrow">Submenus</div>
-            <h4 class="intranet-section-title" style="font-size:20px;">Fluxos e acessos da area</h4>
-          </div>
+        <div id="departmentWorkspaceSummaryWrap">
+          <div class="intranet-home-grid" id="departmentWorkspaceSummary"></div>
         </div>
-        <div class="intranet-quick-grid" id="departmentWorkspaceSubmenus"></div>
-        <div class="intranet-section-head" style="margin-top:18px;" id="departmentWorkspaceModulesHead">
-          <div>
-            <div class="intranet-section-eyebrow">Modulos do departamento</div>
-            <h4 class="intranet-section-title" style="font-size:20px;">Recursos disponiveis</h4>
+        <section id="departmentWorkspaceSubmenusSection">
+          <div class="intranet-section-head" style="margin-top:18px;">
+            <div>
+              <div class="intranet-section-eyebrow" id="departmentWorkspaceSubmenusEyebrow">Submenus</div>
+              <h4 class="intranet-section-title" style="font-size:20px;" id="departmentWorkspaceSubmenusTitle">Fluxos e acessos da area</h4>
+            </div>
           </div>
-        </div>
-        <div class="intranet-module-grid" id="departmentWorkspaceModules"></div>
+          <div class="intranet-quick-grid" id="departmentWorkspaceSubmenus"></div>
+        </section>
+        <section id="departmentWorkspaceModulesSection">
+          <div class="intranet-section-head" style="margin-top:18px;" id="departmentWorkspaceModulesHead">
+            <div>
+              <div class="intranet-section-eyebrow" id="departmentWorkspaceModulesEyebrow">Modulos do departamento</div>
+              <h4 class="intranet-section-title" style="font-size:20px;" id="departmentWorkspaceModulesTitle">Recursos disponiveis</h4>
+            </div>
+          </div>
+          <div class="intranet-module-grid" id="departmentWorkspaceModules"></div>
+        </section>
         <div id="departmentWorkspaceCustom" class="intranet-department-custom" hidden></div>
       </section>
 

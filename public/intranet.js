@@ -62,6 +62,10 @@ let calendarState = {
   history: [],
   summary: null,
 };
+let dashboardState = {
+  region: '',
+  state: '',
+};
 let communicationState = {
   catalog: [],
   editingId: null,
@@ -90,6 +94,8 @@ let influencerState = {
     result: '',
     generatedAt: '',
   },
+  activeSection: '',
+  notice: null,
 };
 const SIDEBAR_STORAGE_KEY = 'talkers_intranet_sidebar_state_v1';
 const VIEW_STORAGE_KEY = 'talkers_intranet_view_state_v1';
@@ -263,11 +269,39 @@ function renderIntranetChrome() {
   if (sidebarDepartmentsTitle) sidebarDepartmentsTitle.textContent = t('intranet.sidebarDepartments');
   const sidebarRemindersTitle = el('intranetSidebarRemindersTitle');
   if (sidebarRemindersTitle) sidebarRemindersTitle.textContent = t('intranet.sidebarReminders');
+  const dashboardEyebrow = el('dashboardSectionEyebrow');
+  if (dashboardEyebrow) dashboardEyebrow.textContent = t('intranet.dashboardSectionEyebrow', {}, 'Dashboard territorial');
+  const dashboardTitle = el('dashboardSectionTitle');
+  if (dashboardTitle) dashboardTitle.textContent = t('intranet.dashboardSectionTitle', {}, 'Leitura consolidada da operacao e das areas liberadas');
+  const dashboardMapEyebrow = el('dashboardMapEyebrow');
+  if (dashboardMapEyebrow) dashboardMapEyebrow.textContent = t('intranet.dashboardMap.eyebrow', {}, 'Mapa territorial');
+  const dashboardMapTitle = el('dashboardMapTitle');
+  if (dashboardMapTitle) dashboardMapTitle.textContent = t('intranet.dashboardMap.title', {}, 'Cobertura e expansao da base');
+  const dashboardMapDescription = el('dashboardMapDescription');
+  if (dashboardMapDescription) dashboardMapDescription.textContent = t('intranet.dashboardMap.description', {}, 'Estrutura pronta para exibir pins automaticos por regiao, estado e cidade, sem depender de mapas externos.');
+  const dashboardMapRegionLabel = el('dashboardMapRegionLabel');
+  if (dashboardMapRegionLabel) dashboardMapRegionLabel.textContent = t('intranet.dashboardMap.filters.region', {}, 'Regiao');
+  const dashboardMapStateLabel = el('dashboardMapStateLabel');
+  if (dashboardMapStateLabel) dashboardMapStateLabel.textContent = t('intranet.dashboardMap.filters.state', {}, 'Estado');
+  const dashboardMapSidebarTitle = el('dashboardMapSidebarTitle');
+  if (dashboardMapSidebarTitle) dashboardMapSidebarTitle.textContent = t('intranet.dashboardMap.sidebarTitle', {}, 'Territorio monitorado');
+  const dashboardMapClusterHint = el('dashboardMapClusterHint');
+  if (dashboardMapClusterHint) dashboardMapClusterHint.textContent = t('intranet.dashboardMap.clusterHint', {}, 'A clusterizacao e os pins automaticos serao ativados quando a base territorial e a integracao com vendas estiverem conectadas.');
+  const dashboardBreakdownTitle = el('dashboardBreakdownTitle');
+  if (dashboardBreakdownTitle) dashboardBreakdownTitle.textContent = t('intranet.dashboardBreakdownTitle', {}, 'Visao por area');
+  const dashboardHighlightsTitle = el('dashboardHighlightsTitle');
+  if (dashboardHighlightsTitle) dashboardHighlightsTitle.textContent = t('intranet.dashboardHighlightsTitle', {}, 'Leituras e alertas');
   document.querySelectorAll('.intranet-back-btn, .intranet-topbar-actions .btn[href="/index.html"]').forEach((node) => {
     node.textContent = t('common.backToChat');
   });
   const newEventBtn = el('btnNewCalendarEvent');
   if (newEventBtn) newEventBtn.textContent = t('calendar.newEvent');
+  const calendarSectionEyebrow = el('calendarSectionEyebrow');
+  if (calendarSectionEyebrow) calendarSectionEyebrow.textContent = t('calendar.sectionEyebrow', {}, 'Planejamento interno');
+  const calendarSectionTitle = el('calendarSectionTitle');
+  if (calendarSectionTitle) calendarSectionTitle.textContent = t('calendar.sectionTitle', {}, 'Compromissos e reunioes');
+  const calendarSectionDescription = el('calendarSectionDescription');
+  if (calendarSectionDescription) calendarSectionDescription.textContent = t('calendar.sectionDescription', {}, 'Organize compromissos futuros, acompanhe a agenda do time e mantenha o calendario da escola em dia.');
   const prevBtn = el('btnCalendarPrev');
   if (prevBtn) prevBtn.textContent = t('calendar.previous');
   const todayBtn = el('btnCalendarToday');
@@ -348,6 +382,14 @@ function renderIntranetChrome() {
   if (cancelBtn) cancelBtn.textContent = t('calendar.cancelEvent');
   const saveBtn = el('btnCalendarSave');
   if (saveBtn) saveBtn.textContent = t('calendar.save');
+  const departmentSubmenusEyebrow = el('departmentWorkspaceSubmenusEyebrow');
+  if (departmentSubmenusEyebrow) departmentSubmenusEyebrow.textContent = t('intranet.departmentSubmenusEyebrow', {}, 'Submenus');
+  const departmentSubmenusTitle = el('departmentWorkspaceSubmenusTitle');
+  if (departmentSubmenusTitle) departmentSubmenusTitle.textContent = t('intranet.departmentSubmenusTitle', {}, 'Fluxos e acessos da area');
+  const departmentModulesEyebrow = el('departmentWorkspaceModulesEyebrow');
+  if (departmentModulesEyebrow) departmentModulesEyebrow.textContent = t('intranet.departmentModulesEyebrow', {}, 'Modulos do departamento');
+  const departmentModulesTitle = el('departmentWorkspaceModulesTitle');
+  if (departmentModulesTitle) departmentModulesTitle.textContent = t('intranet.departmentModulesTitle', {}, 'Recursos disponiveis');
   const communicationTitleLabel = document.querySelector('label[for="communicationTitle"]');
   const communicationSummaryLabel = document.querySelector('label[for="communicationSummary"]');
   const communicationContentLabel = document.querySelector('label[for="communicationContent"]');
@@ -1074,6 +1116,12 @@ function formatCompactInteger(value) {
   }).format(safe);
 }
 
+function capitalizeLabel(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function formatInfluenceTypesList(items = []) {
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
   return safeItems.length ? safeItems.join(', ') : t('intranet.generic.notInformed', {}, 'Nao informado');
@@ -1096,13 +1144,13 @@ function getMarketingPeriodOptions() {
 function getMarketingStatusLabel(status = '') {
   const safe = String(status || '').trim().toLowerCase();
   const map = {
-    ativo: 'Ativo',
-    em_teste: 'Em teste',
-    'em teste': 'Em teste',
-    pausado: 'Pausado',
-    encerrado: 'Encerrado',
+    ativo: t('intranet.marketingInfluencer.status.active', {}, 'Ativo'),
+    em_teste: t('intranet.marketingInfluencer.status.testing', {}, 'Em teste'),
+    'em teste': t('intranet.marketingInfluencer.status.testing', {}, 'Em teste'),
+    pausado: t('intranet.marketingInfluencer.status.paused', {}, 'Pausado'),
+    encerrado: t('intranet.marketingInfluencer.status.closed', {}, 'Encerrado'),
   };
-  return map[safe] || (safe ? safe.charAt(0).toUpperCase() + safe.slice(1) : 'Ativo');
+  return map[safe] || (safe ? safe.charAt(0).toUpperCase() + safe.slice(1) : t('intranet.marketingInfluencer.status.active', {}, 'Ativo'));
 }
 
 function getMarketingInfluencerPeriodFilters() {
@@ -1161,6 +1209,50 @@ function getSelectedMarketingInfluencerCard() {
   return getMarketingInfluencerCards().find((item) => Number(item.id) === Number(influencerState.selectedInfluencerId || 0)) || null;
 }
 
+function setInfluencerActiveSection(sectionKey = '') {
+  const safeSection = String(sectionKey || '').trim();
+  influencerState.activeSection = influencerState.activeSection === safeSection ? '' : safeSection;
+}
+
+function forceInfluencerSection(sectionKey = 'overview') {
+  influencerState.activeSection = String(sectionKey || 'overview').trim() || 'overview';
+}
+
+function setInfluencerNotice(type = '', text = '') {
+  const safeText = String(text || '').trim();
+  influencerState.notice = safeText ? { type: type || 'info', text: safeText } : null;
+}
+
+function buildWorkspaceActionMenu(actions = [], activeKey = '') {
+  return `
+    <div class="workspace-action-menu">
+      ${actions.map((action) => `
+        <button
+          class="workspace-action-button${action.key === activeKey ? ' is-active' : ''}"
+          type="button"
+          data-workspace-section="${escapeHtml(action.key)}"
+          aria-expanded="${action.key === activeKey ? 'true' : 'false'}"
+        >
+          <span class="workspace-action-copy">
+            <strong>${escapeHtml(action.title)}</strong>
+            ${action.description ? `<small>${escapeHtml(action.description)}</small>` : ''}
+          </span>
+          <span class="workspace-action-indicator">${renderIcon('chevron')}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function bindWorkspaceActionMenu(root, callback) {
+  Array.from(root.querySelectorAll('[data-workspace-section]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextSection = button.getAttribute('data-workspace-section') || '';
+      callback(nextSection);
+    });
+  });
+}
+
 function resetInfluencerForm() {
   influencerState.editingId = null;
   influencerState.formDraft = null;
@@ -1194,7 +1286,7 @@ function populateInfluencerForm(influencer = null) {
     influencer_status: influencer.influencer_status || 'ativo',
     notes: influencer.notes || '',
   };
-  influencerState.formCollapsed = false;
+  forceInfluencerSection('register');
   renderMarketingInfluencerWorkspace();
   window.setTimeout(() => {
     el('influencerName')?.focus();
@@ -1208,7 +1300,7 @@ function renderInfluencerMetricBars(items = [], metricKey, label) {
 
   return `
     <article class="influencer-chart-card">
-      <div class="intranet-card-meta">Comparativo</div>
+      <div class="intranet-card-meta">${escapeHtml(t('intranet.marketingInfluencer.chartMeta', {}, 'Comparativo'))}</div>
       <h4>${escapeHtml(label)}</h4>
       <div class="influencer-chart-list">
         ${safeItems.length ? safeItems.map((item) => {
@@ -1225,7 +1317,7 @@ function renderInfluencerMetricBars(items = [], metricKey, label) {
               </div>
             </div>
           `;
-        }).join('') : '<div class="intranet-empty-card">Sem dados suficientes para este comparativo.</div>'}
+        }).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyComparison', {}, 'Sem dados suficientes para este comparativo.'))}</div>`}
       </div>
     </article>
   `;
@@ -1235,26 +1327,26 @@ function renderInfluencerMonthlyComparison(monthly = []) {
   const rows = Array.isArray(monthly) ? monthly.slice(-6) : [];
   return `
     <article class="influencer-chart-card influencer-chart-card-wide">
-      <div class="intranet-card-meta">Evolucao mensal</div>
-      <h4>Comparativo entre influencers por periodo</h4>
+      <div class="intranet-card-meta">${escapeHtml(t('intranet.marketingInfluencer.monthlyEvolutionMeta', {}, 'Evolucao mensal'))}</div>
+      <h4>${escapeHtml(t('intranet.marketingInfluencer.monthlyEvolutionTitle', {}, 'Comparativo entre influencers por periodo'))}</h4>
       <div class="influencer-evolution-list">
         ${rows.length ? rows.map((entry) => `
           <div class="influencer-evolution-item">
             <div class="influencer-evolution-head">
-              <strong>${escapeHtml(entry.label || entry.period_key || 'Periodo')}</strong>
-              <span>${escapeHtml(String((entry.influencers || []).length || 0))} influencer(s)</span>
+              <strong>${escapeHtml(entry.label || entry.period_key || t('intranet.marketingInfluencer.periodLabel', {}, 'Periodo'))}</strong>
+              <span>${escapeHtml(t('intranet.marketingInfluencer.influencerCount', { count: String((entry.influencers || []).length || 0) }, `${String((entry.influencers || []).length || 0)} influencer(s)`))}</span>
             </div>
             <div class="influencer-evolution-grid">
               ${(entry.influencers || []).sort((left, right) => Number(right?.enrollments_count || 0) - Number(left?.enrollments_count || 0)).map((item) => `
                 <div class="influencer-evolution-chip">
                   <strong>${escapeHtml(item.name || 'Influencer')}</strong>
-                  <span>${escapeHtml(formatInteger(item.enrollments_count || 0))} matriculas</span>
-                  <small>${escapeHtml(formatInteger(item.performance_score || 0))} pts</small>
+                  <span>${escapeHtml(t('intranet.marketingInfluencer.enrollmentsCount', { count: formatInteger(item.enrollments_count || 0) }, `${formatInteger(item.enrollments_count || 0)} matriculas`))}</span>
+                  <small>${escapeHtml(t('intranet.marketingInfluencer.scorePoints', { count: formatInteger(item.performance_score || 0) }, `${formatInteger(item.performance_score || 0)} pts`))}</small>
                 </div>
               `).join('')}
             </div>
           </div>
-        `).join('') : '<div class="intranet-empty-card">A evolucao mensal aparecera conforme os lancamentos forem sendo registrados.</div>'}
+        `).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyEvolution', {}, 'A evolucao mensal aparecera conforme os lancamentos forem sendo registrados.'))}</div>`}
       </div>
     </article>
   `;
@@ -1269,16 +1361,169 @@ function setDashboardSectionVisible(isVisible) {
   if (section) section.hidden = !isVisible;
 }
 
+function getDashboardTerritoryModel(dashboard = {}) {
+  const fallbackRegions = [
+    { key: 'north', label: t('intranet.dashboardMap.regions.north', {}, 'Norte'), shortLabel: 'N', states: ['AC', 'AM', 'AP', 'PA', 'RO', 'RR', 'TO'] },
+    { key: 'northeast', label: t('intranet.dashboardMap.regions.northeast', {}, 'Nordeste'), shortLabel: 'NE', states: ['AL', 'BA', 'CE', 'MA', 'PB', 'PE', 'PI', 'RN', 'SE'] },
+    { key: 'midwest', label: t('intranet.dashboardMap.regions.midwest', {}, 'Centro-Oeste'), shortLabel: 'CO', states: ['DF', 'GO', 'MS', 'MT'] },
+    { key: 'southeast', label: t('intranet.dashboardMap.regions.southeast', {}, 'Sudeste'), shortLabel: 'SE', states: ['ES', 'MG', 'RJ', 'SP'] },
+    { key: 'south', label: t('intranet.dashboardMap.regions.south', {}, 'Sul'), shortLabel: 'S', states: ['PR', 'RS', 'SC'] },
+  ];
+
+  const sourceRegions = Array.isArray(dashboard?.territory?.regions) && dashboard.territory.regions.length
+    ? dashboard.territory.regions
+    : fallbackRegions;
+
+  return sourceRegions.map((region, index) => {
+    const states = Array.isArray(region.states)
+      ? region.states.map((state, stateIndex) => {
+          const code = typeof state === 'string' ? state : state.code;
+          const name = typeof state === 'string' ? state : (state.name || state.code || '');
+          const cityCount = Number(typeof state === 'string' ? 0 : state.city_count || 0);
+          const leadCount = Number(typeof state === 'string' ? 0 : state.lead_count || 0);
+          return {
+            code: String(code || '').toUpperCase(),
+            name,
+            cityCount,
+            leadCount,
+            intensity: Math.max(0.2, Math.min(1, Number(typeof state === 'string' ? ((stateIndex + 1) / 8) : (state.intensity || 0.42)))),
+          };
+        })
+      : [];
+
+    const totalCities = states.reduce((sum, state) => sum + Number(state.cityCount || 0), 0);
+    const totalLeads = states.reduce((sum, state) => sum + Number(state.leadCount || 0), 0);
+    return {
+      key: String(region.key || region.slug || `region-${index}`),
+      label: region.label || region.name || `Regiao ${index + 1}`,
+      shortLabel: region.shortLabel || region.short_label || region.abbr || String(region.label || region.name || `R${index + 1}`).slice(0, 2).toUpperCase(),
+      states,
+      cityCount: Number(region.city_count || totalCities || 0),
+      leadCount: Number(region.lead_count || totalLeads || 0),
+      intensity: Math.max(0.24, Math.min(1, Number(region.intensity || (0.34 + (index * 0.1))))),
+    };
+  });
+}
+
+function renderDashboardTerritoryMap(dashboard = {}) {
+  const regionFilter = el('dashboardMapRegionFilter');
+  const stateFilter = el('dashboardMapStateFilter');
+  const canvas = el('dashboardTerritoryCanvas');
+  const legend = el('dashboardTerritoryLegend');
+  if (!regionFilter || !stateFilter || !canvas || !legend) return;
+
+  const territory = getDashboardTerritoryModel(dashboard);
+  const regionOptions = [
+    `<option value="">${escapeHtml(t('common.all', {}, 'Todos'))}</option>`,
+    ...territory.map((region) => `<option value="${escapeHtml(region.key)}"${region.key === dashboardState.region ? ' selected' : ''}>${escapeHtml(region.label)}</option>`),
+  ];
+  regionFilter.innerHTML = regionOptions.join('');
+
+  const selectedRegion = territory.find((item) => item.key === dashboardState.region) || null;
+  const visibleStates = (selectedRegion?.states || territory.flatMap((region) => region.states || []))
+    .sort((left, right) => compareAlpha(left.name || left.code, right.name || right.code));
+  if (dashboardState.state && !visibleStates.some((state) => state.code === dashboardState.state)) {
+    dashboardState.state = '';
+  }
+
+  stateFilter.innerHTML = [
+    `<option value="">${escapeHtml(t('common.all', {}, 'Todos'))}</option>`,
+    ...visibleStates.map((state) => `<option value="${escapeHtml(state.code)}"${state.code === dashboardState.state ? ' selected' : ''}>${escapeHtml(state.name || state.code)}</option>`),
+  ].join('');
+
+  const filteredRegions = territory
+    .filter((region) => !dashboardState.region || region.key === dashboardState.region)
+    .map((region) => ({
+      ...region,
+      states: (region.states || []).filter((state) => !dashboardState.state || state.code === dashboardState.state),
+    }))
+    .filter((region) => region.states.length || !dashboardState.state);
+
+  canvas.innerHTML = `
+    <div class="intranet-dashboard-map-grid">
+      ${filteredRegions.map((region) => {
+        const metricLabel = region.leadCount
+          ? t('intranet.dashboardMap.metricLabelLeads', { count: formatInteger(region.leadCount) }, `${formatInteger(region.leadCount)} leads`)
+          : t('intranet.dashboardMap.metricLabelReady', { count: formatInteger(region.states.length) }, `${formatInteger(region.states.length)} estado(s) pronto(s)`);
+        return `
+          <button
+            type="button"
+            class="intranet-dashboard-map-node${dashboardState.region === region.key ? ' is-active' : ''}"
+            data-dashboard-region="${escapeHtml(region.key)}"
+            style="--map-node-intensity:${String(region.intensity || 0.4)}"
+          >
+            <span class="intranet-dashboard-map-node-badge">${escapeHtml(region.shortLabel || region.label.slice(0, 2))}</span>
+            <strong>${escapeHtml(region.label)}</strong>
+            <small>${escapeHtml(metricLabel)}</small>
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  const legendItems = dashboardState.state
+    ? visibleStates.filter((state) => state.code === dashboardState.state)
+    : visibleStates;
+  legend.innerHTML = legendItems.length
+    ? legendItems.map((state) => `
+        <article class="intranet-dashboard-map-legend-item">
+          <div>
+            <strong>${escapeHtml(state.name || state.code)}</strong>
+            <small>${escapeHtml(state.code)}</small>
+          </div>
+          <span>${escapeHtml(
+            state.leadCount
+              ? t('intranet.dashboardMap.legendLeadCount', { count: formatInteger(state.leadCount) }, `${formatInteger(state.leadCount)} lead(s)`)
+              : t('intranet.dashboardMap.legendReady', { count: formatInteger(state.cityCount || 0) }, `${formatInteger(state.cityCount || 0)} cidade(s) prontas`)
+          )}</span>
+        </article>
+      `).join('')
+    : `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardMap.emptyLegend', {}, 'Selecione uma regiao para ver os estados monitorados e preparar a futura leitura territorial.'))}</div>`;
+
+  regionFilter.onchange = () => {
+    dashboardState.region = regionFilter.value || '';
+    dashboardState.state = '';
+    renderDashboardTerritoryMap(dashboard);
+  };
+  stateFilter.onchange = () => {
+    dashboardState.state = stateFilter.value || '';
+    renderDashboardTerritoryMap(dashboard);
+  };
+  Array.from(canvas.querySelectorAll('[data-dashboard-region]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextRegion = button.getAttribute('data-dashboard-region') || '';
+      dashboardState.region = dashboardState.region === nextRegion ? '' : nextRegion;
+      dashboardState.state = '';
+      renderDashboardTerritoryMap(dashboard);
+    });
+  });
+}
+
 function renderDepartmentWorkspace(intranet) {
   const section = el('departmentWorkspace');
   const customWrap = el('departmentWorkspaceCustom');
   const modulesHead = el('departmentWorkspaceModulesHead');
+  const summaryWrap = el('departmentWorkspaceSummaryWrap');
+  const submenusSection = el('departmentWorkspaceSubmenusSection');
+  const modulesSection = el('departmentWorkspaceModulesSection');
   if (!section) return;
+
+  if (currentViewState.key !== 'department') {
+    section.hidden = true;
+    if (customWrap) customWrap.hidden = true;
+    if (summaryWrap) summaryWrap.hidden = true;
+    if (submenusSection) submenusSection.hidden = true;
+    if (modulesSection) modulesSection.hidden = true;
+    return;
+  }
 
   const { department, submenu } = getDepartmentRouteMeta(intranet, currentViewState.departmentSlug, currentViewState.submenuSlug);
   if (!department) {
     section.hidden = true;
     if (customWrap) customWrap.hidden = true;
+    if (summaryWrap) summaryWrap.hidden = true;
+    if (submenusSection) submenusSection.hidden = true;
+    if (modulesSection) modulesSection.hidden = true;
     return;
   }
 
@@ -1315,6 +1560,7 @@ function renderDepartmentWorkspace(intranet) {
     `;
     summary.appendChild(card);
   });
+  if (summaryWrap) summaryWrap.hidden = isCustomWorkspace;
 
   const submenusWrap = el('departmentWorkspaceSubmenus');
   submenusWrap.innerHTML = '';
@@ -1331,6 +1577,7 @@ function renderDepartmentWorkspace(intranet) {
       submenusWrap.appendChild(card);
     });
   }
+  if (submenusSection) submenusSection.hidden = isCustomWorkspace;
 
   const modulesWrap = el('departmentWorkspaceModules');
   modulesWrap.innerHTML = '';
@@ -1338,6 +1585,7 @@ function renderDepartmentWorkspace(intranet) {
   if (customWrap) customWrap.hidden = !isCustomWorkspace;
   if (modulesHead) modulesHead.hidden = isCustomWorkspace;
   modulesWrap.hidden = isCustomWorkspace;
+  if (modulesSection) modulesSection.hidden = isCustomWorkspace;
 
   if (isCustomWorkspace) {
     renderMarketingInfluencerWorkspace();
@@ -1375,7 +1623,7 @@ function renderMarketingInfluencerWorkspace() {
   if (!customWrap || customWrap.hidden) return;
 
   if (influencerState.loading && !influencerState.bootstrap) {
-    customWrap.innerHTML = '<div class="intranet-empty-card">Carregando workspace de influencers...</div>';
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.loading', {}, 'Carregando workspace de influencers...'))}</div>`;
     return;
   }
 
@@ -1401,336 +1649,157 @@ function renderMarketingInfluencerWorkspace() {
   const comparisonItems = Array.isArray(comparison.items) ? comparison.items : [];
   const metricHistory = Array.isArray(detail.metric_history) ? detail.metric_history : [];
   const detailHistory = Array.isArray(detail.history) ? detail.history : [];
-  const analysisText = influencerState.analysis.result || 'Selecione um periodo e clique em "Analisar" para receber uma leitura comparativa da IA sobre o desempenho das influencers.';
   const formDraft = influencerState.formDraft || {};
+  const activeSection = influencerState.activeSection || '';
+  const submitLabel = influencerState.editingId ? t('common.save') : t('intranet.marketingInfluencer.form.submitCreate', {}, 'Cadastrar');
+  const refreshLabel = influencerState.loading ? t('common.loading') : t('common.refresh');
+  const analysisText = influencerState.analysis.result || t('intranet.marketingInfluencer.analysisPlaceholder', {}, 'Selecione um periodo e clique em "Analisar" para receber uma leitura comparativa da IA sobre o desempenho das influencers.');
+  const sectionActions = [
+    { key: 'register', title: t('intranet.marketingInfluencer.sections.register', {}, 'Cadastro'), description: t('intranet.marketingInfluencer.sections.registerDescription', {}, 'Base da parceria') },
+    { key: 'overview', title: t('intranet.marketingInfluencer.sections.overview', {}, 'Visao geral'), description: t('intranet.marketingInfluencer.sections.overviewDescription', {}, 'Base e carteira ativa') },
+    { key: 'reports', title: t('intranet.marketingInfluencer.sections.reports', {}, 'Relatorios'), description: t('intranet.marketingInfluencer.sections.reportsDescription', {}, 'Historico e comparativos') },
+    { key: 'analysis', title: t('intranet.marketingInfluencer.sections.analysis', {}, 'Analise IA'), description: t('intranet.marketingInfluencer.sections.analysisDescription', {}, 'Leitura de apoio') },
+  ];
+
+  const noticeMarkup = influencerState.notice?.text ? `
+    <div class="workspace-inline-notice is-${escapeHtml(influencerState.notice.type || 'info')}">
+      <span>${escapeHtml(influencerState.notice.text)}</span>
+      <button class="icon-btn workspace-inline-notice-close" type="button" id="btnDismissInfluencerNotice" aria-label="${escapeHtml(t('common.close'))}">${renderIcon('chevron')}</button>
+    </div>
+  ` : '';
+
+  const registerSection = `
+    <section class="workspace-section-panel influencer-form-card">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.register', {}, 'Cadastro'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(influencerState.editingId ? t('intranet.marketingInfluencer.form.editTitle', {}, 'Editar influencer') : t('intranet.marketingInfluencer.form.createTitle', {}, 'Cadastrar influencer'))}</h4>
+          <p class="small muted">${escapeHtml(t('intranet.marketingInfluencer.form.helper', {}, 'Abra apenas quando for cadastrar ou atualizar a base.'))}</p>
+        </div>
+        <button class="btn" type="button" id="btnCloseInfluencerSection">${escapeHtml(t('common.close'))}</button>
+      </div>
+      <form id="influencerForm" class="influencer-form-grid">
+        <input type="hidden" id="influencerId" value="${escapeHtml(formDraft.id || influencerState.editingId || '')}" />
+        <div>
+          <label for="influencerName">${escapeHtml(t('intranet.marketingInfluencer.form.fields.name', {}, 'Nome do influencer'))}</label>
+          <input id="influencerName" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.name', {}, 'Ex.: Maria Andrade'))}" value="${escapeHtml(formDraft.name || '')}" />
+        </div>
+        <div>
+          <label for="influencerTypes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.types', {}, 'Tipos de influencia'))}</label>
+          <input id="influencerTypes" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.types', {}, 'Ex.: Reels, Stories, Conteudo educacional'))}" list="influencerTypesSuggestions" value="${escapeHtml(formDraft.influence_types || '')}" />
+          <datalist id="influencerTypesSuggestions">
+            ${(suggestions.influence_types || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join('')}
+          </datalist>
+        </div>
+        <div>
+          <label for="influencerContractType">${escapeHtml(t('intranet.marketingInfluencer.form.fields.contractType', {}, 'Tipo de contrato'))}</label>
+          <select id="influencerContractType">
+            <option value="">${escapeHtml(t('common.select'))}</option>
+            ${(suggestions.contract_types || []).map((item) => `<option value="${escapeHtml(item)}"${item === (formDraft.contract_type || '') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label for="influencerPhotoUrl">${escapeHtml(t('intranet.marketingInfluencer.form.fields.photo', {}, 'Foto (URL)'))}</label>
+          <input id="influencerPhotoUrl" type="url" placeholder="https://..." value="${escapeHtml(formDraft.photo_url || '')}" />
+        </div>
+        <div>
+          <label for="influencerInstagram">${escapeHtml(t('intranet.marketingInfluencer.form.fields.instagram', {}, 'Link do Instagram'))}</label>
+          <input id="influencerInstagram" type="url" placeholder="https://instagram.com/..." value="${escapeHtml(formDraft.instagram_url || '')}" />
+        </div>
+        <div>
+          <label for="influencerFollowers">${escapeHtml(t('intranet.marketingInfluencer.form.fields.followers', {}, 'Quantidade de seguidores'))}</label>
+          <input id="influencerFollowers" type="number" min="0" step="1" placeholder="0" value="${escapeHtml(formDraft.followers_count ?? '')}" />
+        </div>
+        <div>
+          <label for="influencerStartDate">${escapeHtml(t('intranet.marketingInfluencer.form.fields.startDate', {}, 'Data de inicio da parceria'))}</label>
+          <input id="influencerStartDate" type="date" value="${escapeHtml(formDraft.partnership_start_date || '')}" />
+        </div>
+        <div>
+          <label for="influencerStatus">${escapeHtml(t('intranet.marketingInfluencer.form.fields.status', {}, 'Status'))}</label>
+          <select id="influencerStatus">
+            ${(suggestions.statuses || ['ativo', 'em_teste', 'pausado', 'encerrado']).map((item) => `<option value="${escapeHtml(item)}"${item === (formDraft.influencer_status || 'ativo') ? ' selected' : ''}>${escapeHtml(getMarketingStatusLabel(item))}</option>`).join('')}
+          </select>
+        </div>
+        <div class="influencer-form-span">
+          <label for="influencerNotes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.notes', {}, 'Observacoes internas'))}</label>
+          <textarea id="influencerNotes" rows="3" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.notes', {}, 'Anotacoes internas do Marketing sobre a parceria, posicionamento ou proximos passos'))}">${escapeHtml(formDraft.notes || '')}</textarea>
+        </div>
+        <div class="influencer-form-actions influencer-form-span">
+          <button class="btn" type="button" id="btnResetInfluencerForm">${escapeHtml(t('calendar.reset', {}, 'Limpar'))}</button>
+          <button class="btn primary" type="submit">${escapeHtml(submitLabel)}</button>
+        </div>
+      </form>
+    </section>
+  `;
+
+  const overviewSection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.overview', {}, 'Visao geral'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.overviewTitle', {}, 'Influencers cadastradas'))}</h4>
+        </div>
+        <div class="small muted">${escapeHtml(period.label || t('intranet.marketingInfluencer.currentPeriod', {}, 'Periodo atual'))}</div>
+      </div>
+      <div class="influencer-overview-strip">
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.base', {}, 'Base'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.total_influencers || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.baseMeta', {}, 'Influencers cadastradas'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.audience', {}, 'Audiencia'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.followers_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.audienceMeta', {}, 'Seguidores monitorados'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.result', {}, 'Resultado'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.enrollments_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.resultMeta', {}, 'Matriculas no periodo'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.history', {}, 'Historico'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.launches_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.historyMeta', {}, 'Lancamentos registrados'))}</div></article>
+      </div>
+      <div class="influencer-list-grid">
+        ${cards.length ? cards.map((item) => `<article class="influencer-card${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' is-active' : ''}"><div class="influencer-card-head">${item.photo_url ? `<img class="influencer-avatar" src="${escapeHtml(item.photo_url)}" alt="${escapeHtml(item.name || 'Influencer')}" />` : `<div class="influencer-avatar influencer-avatar-fallback">${escapeHtml(getInfluencerInitials(item.name || 'Influencer'))}</div>`}<div class="influencer-card-copy"><h4>${escapeHtml(item.name || 'Influencer')}</h4><div class="small muted">${escapeHtml(formatInfluenceTypesList(item.influence_types || []))}</div></div><span class="intranet-chip">${escapeHtml(getMarketingStatusLabel(item.influencer_status))}</span></div><div class="influencer-card-metrics"><div><strong>${escapeHtml(item.contract_type || '-')}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.contract', {}, 'Contrato'))}</span></div><div><strong>${escapeHtml(formatCompactInteger(item.followers_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.followers', {}, 'Seguidores'))}</span></div><div><strong>${escapeHtml(formatInteger(item.metrics_summary?.enrollments_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.enrollments', {}, 'Matriculas'))}</span></div><div><strong>${escapeHtml(formatInteger(item.metrics_summary?.performance_score || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.score', {}, 'Pontuacao'))}</span></div></div><div class="small muted">${escapeHtml(item.instagram_url || t('intranet.marketingInfluencer.card.noInstagram', {}, 'Instagram nao informado'))}</div><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.card.partnerSince', { date: formatDateOnly(item.partnership_start_date || '') }, `Parceria desde ${formatDateOnly(item.partnership_start_date || '')}`))}</div><div class="intranet-card-actions"><button class="btn" type="button" data-influencer-view="${escapeHtml(item.id)}">${escapeHtml(t('common.viewMore'))}</button><button class="btn" type="button" data-influencer-edit="${escapeHtml(item.id)}">${escapeHtml(t('common.edit'))}</button></div></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyOverview', {}, 'Nenhuma influencer cadastrada ainda. Use Cadastro para iniciar a base de Marketing.'))}</div>`}
+      </div>
+    </section>
+  `;
+
+  const reportsSection = selectedCard ? `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.reports', {}, 'Relatorios'))}</div><h4 class="intranet-section-title">${escapeHtml(selectedCard.name || t('intranet.marketingInfluencer.selectOne', {}, 'Selecione uma influencer'))}</h4></div><div class="small muted">${escapeHtml(period.label || t('intranet.marketingInfluencer.currentPeriod', {}, 'Periodo atual'))}</div></div>
+      ${influencerState.detailLoading ? `<div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.loadingDetail', {}, 'Carregando relatorio detalhado...'))}</div>` : ''}
+      ${influencerState.detailError ? `<div class="small muted">${escapeHtml(influencerState.detailError)}</div>` : ''}
+      <div class="influencer-detail-layout">
+        <section class="influencer-detail-panel is-embedded">
+          <div class="influencer-detail-summary"><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.posts_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.posts', {}, 'Postagens'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.reels_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.reels', {}, 'Reels'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.stories_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.stories', {}, 'Stories'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.views_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.views', {}, 'Views'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.enrollments_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.enrollments', {}, 'Matriculas'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(detailSummary.performance_label || t('intranet.marketingInfluencer.reports.track', {}, 'Acompanhar'))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.generalPerformance', {}, 'Desempenho geral'))}</span></article></div>
+          <div class="influencer-detail-meta"><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.period', {}, 'Periodo consultado'))}</strong><span>${escapeHtml(detail.period?.label || period.label || '-')}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.history', {}, 'Historico registrado'))}</strong><span>${escapeHtml(formatInteger(detailSummary.launches_total || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.launches', {}, 'lancamento(s)'))}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.activeDays', {}, 'Dias com atividade'))}</strong><span>${escapeHtml(formatInteger(detailSummary.reported_days_total || 0))}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.instagram', {}, 'Instagram'))}</strong><span>${escapeHtml(selectedCard.instagram_url || '-')}</span></div></div>
+          <div class="influencer-detail-columns">
+            <div><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.reports.performanceHistory', {}, 'Historico de performance'))}</div><div class="influencer-history-list">${metricHistory.length ? metricHistory.map((item) => `<article class="influencer-history-card"><div class="influencer-history-head"><strong>${escapeHtml(item.period_label || formatDateRangeLabel(item.period_start, item.period_end))}</strong><span>${escapeHtml(item.period_type || 'month')}</span></div><div class="influencer-history-stats"><span>${escapeHtml(formatInteger(item.posts_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.postsShort', {}, 'posts'))}</span><span>${escapeHtml(formatInteger(item.reels_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.reelsShort', {}, 'reels'))}</span><span>${escapeHtml(formatInteger(item.stories_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.storiesShort', {}, 'stories'))}</span><span>${escapeHtml(formatInteger(item.views_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.viewsShort', {}, 'views'))}</span><span>${escapeHtml(formatInteger(item.enrollments_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.enrollmentsShort', {}, 'matriculas'))}</span></div>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}</article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyMetrics', {}, 'Ainda nao ha lancamentos de performance para esta influencer.'))}</div>`}</div></div>
+            <div><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.reports.updateHistory', {}, 'Historico de atualizacoes'))}</div><div class="influencer-history-list">${detailHistory.length ? detailHistory.map((item) => `<article class="influencer-history-card"><div class="influencer-history-head"><strong>${escapeHtml(item.action || t('intranet.generic.update', {}, 'Atualizacao'))}</strong><span>${escapeHtml(formatDate(item.created_at || ''))}</span></div><div class="small muted">${escapeHtml(item.actor_name || t('intranet.generic.system', {}, 'Sistema'))}</div><p>${escapeHtml(item.field_name ? `${item.field_name}: ${item.old_value || '-'} -> ${item.new_value || '-'}` : JSON.stringify(item.detail || {}))}</p></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyLogs', {}, 'Nenhum log administrativo registrado para esta influencer ainda.'))}</div>`}</div></div>
+          </div>
+        </section>
+        <aside class="influencer-metric-panel is-embedded">
+          <div class="intranet-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.reports.flowEyebrow', {}, 'Fluxos'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.reports.flowTitle', {}, 'Performance operacional'))}</h4></div></div>
+          <form id="influencerMetricForm" class="influencer-metric-form"><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.reports.metricHint', { name: selectedCard.name || 'Influencer' }, `Lancamento para ${selectedCard.name || 'Influencer'}`))}</div><div class="influencer-form-grid influencer-metric-grid"><div><label for="metricPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Periodo'))}</label><select id="metricPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="metricPeriodStart">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="metricPeriodStart" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="metricPeriodEnd">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Ate'))}</label><input id="metricPeriodEnd" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><div><label for="metricPosts">${escapeHtml(t('intranet.marketingInfluencer.reports.posts', {}, 'Postagens'))}</label><input id="metricPosts" type="number" min="0" step="1" value="0" /></div><div><label for="metricReels">${escapeHtml(t('intranet.marketingInfluencer.reports.reels', {}, 'Reels'))}</label><input id="metricReels" type="number" min="0" step="1" value="0" /></div><div><label for="metricStories">${escapeHtml(t('intranet.marketingInfluencer.reports.stories', {}, 'Stories'))}</label><input id="metricStories" type="number" min="0" step="1" value="0" /></div><div><label for="metricViews">${escapeHtml(t('intranet.marketingInfluencer.reports.views', {}, 'Views'))}</label><input id="metricViews" type="number" min="0" step="1" value="0" /></div><div><label for="metricEnrollments">${escapeHtml(t('intranet.marketingInfluencer.reports.enrollmentsAttributed', {}, 'Matriculas atribuidas'))}</label><input id="metricEnrollments" type="number" min="0" step="1" value="0" /></div><div class="influencer-form-span"><label for="metricNotes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.notes', {}, 'Observacoes'))}</label><textarea id="metricNotes" rows="3" placeholder="${escapeHtml(t('intranet.marketingInfluencer.reports.metricNotesPlaceholder', {}, 'Anote contexto da campanha, particularidades do periodo ou observacoes operacionais'))}"></textarea></div></div><div class="influencer-form-actions"><button class="btn primary" type="submit">${escapeHtml(t('intranet.marketingInfluencer.reports.saveLaunch', {}, 'Salvar lancamento'))}</button></div></form>
+        </aside>
+      </div>
+      <div class="influencer-chart-grid">${renderInfluencerMetricBars(comparisonItems, 'enrollments_count', t('intranet.marketingInfluencer.charts.enrollments', {}, 'Matriculas por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'posts_count', t('intranet.marketingInfluencer.charts.posts', {}, 'Postagens por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'reels_count', t('intranet.marketingInfluencer.charts.reels', {}, 'Reels por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'stories_count', t('intranet.marketingInfluencer.charts.stories', {}, 'Stories por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'views_count', t('intranet.marketingInfluencer.charts.views', {}, 'Views por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'performance_score', t('intranet.marketingInfluencer.charts.performance', {}, 'Desempenho geral'))}${renderInfluencerMonthlyComparison(comparison.monthly_evolution || [])}</div>
+    </section>
+  ` : `<section class="workspace-section-panel"><div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyReports', {}, 'Clique em "Ver mais" em uma influencer para abrir o relatorio detalhado, registrar performance e acompanhar o historico.'))}</div></section>`;
+
+  const analysisSection = `
+    <section class="workspace-section-panel influencer-analysis-box">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.analysis', {}, 'Analise IA'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.analysisTitle', {}, 'Leitura comparativa e recomendacao operacional'))}</h4></div><button class="btn" type="button" id="btnCloseInfluencerSection">${escapeHtml(t('common.close'))}</button></div>
+      <div class="influencer-analysis-toolbar"><div><label for="influencerAnalysisPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Periodo'))}</label><select id="influencerAnalysisPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.analysis.periodType || influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="influencerAnalysisFrom">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="influencerAnalysisFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="influencerAnalysisTo">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Ate'))}</label><input id="influencerAnalysisTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><div><label for="influencerAnalysisFocus">${escapeHtml(t('intranet.marketingInfluencer.analysisFocus', {}, 'Foco'))}</label><select id="influencerAnalysisFocus"><option value="">${escapeHtml(t('intranet.marketingInfluencer.analysisGeneral', {}, 'Comparativo geral'))}</option>${cards.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' selected' : ''}>${escapeHtml(item.name || 'Influencer')}</option>`).join('')}</select></div><button class="btn primary" type="button" id="btnRunInfluencerAnalysis" ${cards.length ? '' : 'disabled'}>${escapeHtml(influencerState.analysis.loading ? t('intranet.marketingInfluencer.analysisRunning', {}, 'Analisando...') : t('common.analyze'))}</button></div>
+      <div class="influencer-analysis-result" id="influencerAnalysisResult">${escapeHtml(analysisText)}</div>
+      <div class="small muted">${influencerState.analysis.generatedAt ? escapeHtml(t('intranet.marketingInfluencer.analysisGeneratedAt', { date: formatDate(influencerState.analysis.generatedAt) }, `Ultima analise em ${formatDate(influencerState.analysis.generatedAt)}`)) : escapeHtml(t('intranet.marketingInfluencer.analysisHint', {}, 'A IA usa os dados registrados para sugerir proximos passos, reforco de parceria ou necessidade de revisao.'))}</div>
+    </section>
+  `;
+
+  const sectionMarkup = activeSection === 'register'
+    ? registerSection
+    : activeSection === 'reports'
+      ? reportsSection
+      : activeSection === 'analysis'
+        ? analysisSection
+        : activeSection === 'overview'
+          ? overviewSection
+          : `<div class="workspace-section-empty">${escapeHtml(t('intranet.workspaceSectionClosed', {}, 'Escolha uma acao acima para abrir somente o conteudo necessario desta area.'))}</div>`;
 
   customWrap.innerHTML = `
     <section class="influencer-workspace">
-      <div class="influencer-toolbar">
-        <div>
-          <div class="intranet-section-eyebrow">Marketing</div>
-          <h3 class="intranet-section-title">Influencer</h3>
-          <p class="small muted">Cadastro, desempenho, comparativos e leitura de apoio para as parcerias do Marketing.</p>
-        </div>
-        <div class="influencer-toolbar-actions">
-          <div>
-            <label for="influencerFilterPeriodType">Periodo</label>
-            <select id="influencerFilterPeriodType">
-              ${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
-            </select>
-          </div>
-          <div>
-            <label for="influencerFilterFrom">De</label>
-            <input id="influencerFilterFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" />
-          </div>
-          <div>
-            <label for="influencerFilterTo">Ate</label>
-            <input id="influencerFilterTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" />
-          </div>
-          <button class="btn" type="button" id="btnRefreshInfluencerWorkspace">${influencerState.loading ? 'Atualizando...' : 'Atualizar'}</button>
-        </div>
-      </div>
-
-      <div class="influencer-overview-strip">
-        <article class="influencer-overview-card">
-          <div class="influencer-overview-label">Base</div>
-          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.total_influencers || 0))}</div>
-          <div class="influencer-overview-meta">Influencers cadastradas</div>
-        </article>
-        <article class="influencer-overview-card">
-          <div class="influencer-overview-label">Audiencia</div>
-          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.followers_total || 0))}</div>
-          <div class="influencer-overview-meta">Seguidores monitorados</div>
-        </article>
-        <article class="influencer-overview-card">
-          <div class="influencer-overview-label">Resultado</div>
-          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.enrollments_total || 0))}</div>
-          <div class="influencer-overview-meta">Matriculas no periodo</div>
-        </article>
-        <article class="influencer-overview-card">
-          <div class="influencer-overview-label">Historico</div>
-          <div class="influencer-overview-value">${escapeHtml(formatInteger(summary.launches_total || 0))}</div>
-          <div class="influencer-overview-meta">Lancamentos registrados</div>
-        </article>
-      </div>
-
-      <article class="influencer-form-card">
-        <button class="influencer-section-toggle" type="button" id="btnToggleInfluencerForm" aria-expanded="${influencerState.formCollapsed ? 'false' : 'true'}">
-          <span>
-            <strong id="influencerFormTitle">${escapeHtml(influencerState.editingId ? 'Editar influencer' : 'Cadastrar influencer')}</strong>
-            <small>Abra apenas quando for cadastrar ou atualizar a base.</small>
-          </span>
-          <span class="influencer-section-toggle-icon">${renderIcon('chevron')}</span>
-        </button>
-        <div class="influencer-form-body${influencerState.formCollapsed ? ' is-collapsed' : ''}" id="influencerFormBody">
-          <form id="influencerForm" class="influencer-form-grid">
-            <input type="hidden" id="influencerId" value="${escapeHtml(formDraft.id || influencerState.editingId || '')}" />
-            <div>
-              <label for="influencerName">Nome do influencer</label>
-              <input id="influencerName" placeholder="Ex.: Maria Andrade" value="${escapeHtml(formDraft.name || '')}" />
-            </div>
-            <div>
-              <label for="influencerTypes">Tipos de influencia</label>
-              <input id="influencerTypes" placeholder="Ex.: Reels, Stories, Conteudo educacional" list="influencerTypesSuggestions" value="${escapeHtml(formDraft.influence_types || '')}" />
-              <datalist id="influencerTypesSuggestions">
-                ${(suggestions.influence_types || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join('')}
-              </datalist>
-            </div>
-            <div>
-              <label for="influencerContractType">Tipo de contrato</label>
-              <select id="influencerContractType">
-                <option value="">Selecione</option>
-                ${(suggestions.contract_types || []).map((item) => `<option value="${escapeHtml(item)}"${item === (formDraft.contract_type || '') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}
-              </select>
-            </div>
-            <div>
-              <label for="influencerPhotoUrl">Foto (URL)</label>
-              <input id="influencerPhotoUrl" type="url" placeholder="https://..." value="${escapeHtml(formDraft.photo_url || '')}" />
-            </div>
-            <div>
-              <label for="influencerInstagram">Link do Instagram</label>
-              <input id="influencerInstagram" type="url" placeholder="https://instagram.com/..." value="${escapeHtml(formDraft.instagram_url || '')}" />
-            </div>
-            <div>
-              <label for="influencerFollowers">Quantidade de seguidores</label>
-              <input id="influencerFollowers" type="number" min="0" step="1" placeholder="0" value="${escapeHtml(formDraft.followers_count ?? '')}" />
-            </div>
-            <div>
-              <label for="influencerStartDate">Data de inicio da parceria</label>
-              <input id="influencerStartDate" type="date" value="${escapeHtml(formDraft.partnership_start_date || '')}" />
-            </div>
-            <div>
-              <label for="influencerStatus">Status</label>
-              <select id="influencerStatus">
-                ${(suggestions.statuses || ['ativo', 'em_teste', 'pausado', 'encerrado']).map((item) => `<option value="${escapeHtml(item)}"${item === (formDraft.influencer_status || 'ativo') ? ' selected' : ''}>${escapeHtml(getMarketingStatusLabel(item))}</option>`).join('')}
-              </select>
-            </div>
-            <div class="influencer-form-span">
-              <label for="influencerNotes">Observacoes internas</label>
-              <textarea id="influencerNotes" rows="3" placeholder="Anotacoes internas do Marketing sobre a parceria, posicionamento ou proximos passos">${escapeHtml(formDraft.notes || '')}</textarea>
-            </div>
-            <div class="influencer-form-actions influencer-form-span">
-              <button class="btn" type="button" id="btnResetInfluencerForm">Limpar</button>
-              <button class="btn primary" type="submit"><span id="btnSaveInfluencerLabel">${escapeHtml(influencerState.editingId ? 'Salvar' : 'Cadastrar')}</span></button>
-            </div>
-          </form>
-        </div>
-      </article>
-
-      <section class="influencer-card-section">
-        <div class="intranet-section-head">
-          <div>
-            <div class="intranet-section-eyebrow">Visao geral</div>
-            <h4 class="intranet-section-title">Influencers cadastradas</h4>
-          </div>
-          <div class="small muted">${escapeHtml(period.label || 'Periodo atual')}</div>
-        </div>
-        <div class="influencer-list-grid">
-          ${cards.length ? cards.map((item) => `
-            <article class="influencer-card${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' is-active' : ''}">
-              <div class="influencer-card-head">
-                ${item.photo_url ? `<img class="influencer-avatar" src="${escapeHtml(item.photo_url)}" alt="${escapeHtml(item.name || 'Influencer')}" />` : `<div class="influencer-avatar influencer-avatar-fallback">${escapeHtml(getInfluencerInitials(item.name || 'Influencer'))}</div>`}
-                <div class="influencer-card-copy">
-                  <h4>${escapeHtml(item.name || 'Influencer')}</h4>
-                  <div class="small muted">${escapeHtml(formatInfluenceTypesList(item.influence_types || []))}</div>
-                </div>
-                <span class="intranet-chip">${escapeHtml(getMarketingStatusLabel(item.influencer_status))}</span>
-              </div>
-              <div class="influencer-card-metrics">
-                <div><strong>${escapeHtml(item.contract_type || '-')}</strong><span>Contrato</span></div>
-                <div><strong>${escapeHtml(formatCompactInteger(item.followers_count || 0))}</strong><span>Seguidores</span></div>
-                <div><strong>${escapeHtml(formatInteger(item.metrics_summary?.enrollments_count || 0))}</strong><span>Matriculas</span></div>
-                <div><strong>${escapeHtml(formatInteger(item.metrics_summary?.performance_score || 0))}</strong><span>Pontuacao</span></div>
-              </div>
-              <div class="small muted">${escapeHtml(item.instagram_url || 'Instagram nao informado')}</div>
-              <div class="small muted">Parceria desde ${escapeHtml(formatDateOnly(item.partnership_start_date || ''))}</div>
-              <div class="intranet-card-actions">
-                <button class="btn" type="button" data-influencer-view="${escapeHtml(item.id)}">Ver mais</button>
-                <button class="btn" type="button" data-influencer-edit="${escapeHtml(item.id)}">Editar cadastro</button>
-              </div>
-            </article>
-          `).join('') : '<div class="intranet-empty-card">Nenhuma influencer cadastrada ainda. Use o bloco acima para iniciar a base de Marketing.</div>'}
-        </div>
-      </section>
-
-      <div class="influencer-detail-layout">
-        <section class="influencer-detail-panel">
-          <div class="intranet-section-head">
-            <div>
-              <div class="intranet-section-eyebrow">Relatorios</div>
-              <h4 class="intranet-section-title">${escapeHtml(selectedCard?.name || 'Selecione uma influencer')}</h4>
-            </div>
-            ${selectedCard ? `<button class="btn" type="button" data-influencer-edit="${escapeHtml(selectedCard.id)}">Editar cadastro</button>` : ''}
-          </div>
-          ${selectedCard && influencerState.detailLoading ? '<div class="small muted">Carregando relatorio detalhado...</div>' : ''}
-          ${selectedCard && influencerState.detailError ? `<div class="small muted">${escapeHtml(influencerState.detailError)}</div>` : ''}
-          ${selectedCard ? `
-            <div class="influencer-detail-summary">
-              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.posts_count || 0))}</strong><span>Postagens</span></article>
-              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.reels_count || 0))}</strong><span>Reels</span></article>
-              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.stories_count || 0))}</strong><span>Stories</span></article>
-              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.views_count || 0))}</strong><span>Views</span></article>
-              <article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.enrollments_count || 0))}</strong><span>Matriculas</span></article>
-              <article class="intranet-sales-card"><strong>${escapeHtml(detailSummary.performance_label || 'Acompanhar')}</strong><span>Desempenho geral</span></article>
-            </div>
-            <div class="influencer-detail-meta">
-              <div><strong>Periodo consultado</strong><span>${escapeHtml(detail.period?.label || period.label || '-')}</span></div>
-              <div><strong>Historico registrado</strong><span>${escapeHtml(formatInteger(detailSummary.launches_total || 0))} lancamento(s)</span></div>
-              <div><strong>Dias com atividade</strong><span>${escapeHtml(formatInteger(detailSummary.reported_days_total || 0))}</span></div>
-              <div><strong>Instagram</strong><span>${escapeHtml(selectedCard.instagram_url || '-')}</span></div>
-            </div>
-            <div class="influencer-detail-columns">
-              <div>
-                <div class="intranet-block-title">Historico de performance</div>
-                <div class="influencer-history-list">
-                  ${metricHistory.length ? metricHistory.map((item) => `
-                    <article class="influencer-history-card">
-                      <div class="influencer-history-head">
-                        <strong>${escapeHtml(item.period_label || formatDateRangeLabel(item.period_start, item.period_end))}</strong>
-                        <span>${escapeHtml(item.period_type || 'month')}</span>
-                      </div>
-                      <div class="influencer-history-stats">
-                        <span>${escapeHtml(formatInteger(item.posts_count || 0))} posts</span>
-                        <span>${escapeHtml(formatInteger(item.reels_count || 0))} reels</span>
-                        <span>${escapeHtml(formatInteger(item.stories_count || 0))} stories</span>
-                        <span>${escapeHtml(formatInteger(item.views_count || 0))} views</span>
-                        <span>${escapeHtml(formatInteger(item.enrollments_count || 0))} matriculas</span>
-                      </div>
-                      ${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}
-                    </article>
-                  `).join('') : '<div class="intranet-empty-card">Ainda nao ha lancamentos de performance para esta influencer.</div>'}
-                </div>
-              </div>
-              <div>
-                <div class="intranet-block-title">Historico de atualizacoes</div>
-                <div class="influencer-history-list">
-                  ${detailHistory.length ? detailHistory.map((item) => `
-                    <article class="influencer-history-card">
-                      <div class="influencer-history-head">
-                        <strong>${escapeHtml(item.action || 'Atualizacao')}</strong>
-                        <span>${escapeHtml(formatDate(item.created_at || ''))}</span>
-                      </div>
-                      <div class="small muted">${escapeHtml(item.actor_name || 'Sistema')}</div>
-                      <p>${escapeHtml(item.field_name ? `${item.field_name}: ${item.old_value || '-'} -> ${item.new_value || '-'}` : JSON.stringify(item.detail || {}))}</p>
-                    </article>
-                  `).join('') : '<div class="intranet-empty-card">Nenhum log administrativo registrado para esta influencer ainda.</div>'}
-                </div>
-              </div>
-            </div>
-          ` : '<div class="intranet-empty-card">Clique em "Ver mais" em uma influencer para abrir o relatorio detalhado, registrar performance e acompanhar o historico.</div>'}
-        </section>
-
-        <aside class="influencer-metric-panel">
-          <div class="intranet-section-head">
-            <div>
-              <div class="intranet-section-eyebrow">Fluxos</div>
-              <h4 class="intranet-section-title">Performance operacional</h4>
-            </div>
-          </div>
-          ${selectedCard ? `
-            <form id="influencerMetricForm" class="influencer-metric-form">
-              <div class="small muted">Lancamento para <strong>${escapeHtml(selectedCard.name || 'Influencer')}</strong></div>
-              <div class="influencer-form-grid influencer-metric-grid">
-                <div>
-                  <label for="metricPeriodType">Periodo</label>
-                  <select id="metricPeriodType">
-                    ${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('')}
-                  </select>
-                </div>
-                <div>
-                  <label for="metricPeriodStart">Data inicial</label>
-                  <input id="metricPeriodStart" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" />
-                </div>
-                <div>
-                  <label for="metricPeriodEnd">Data final</label>
-                  <input id="metricPeriodEnd" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" />
-                </div>
-                <div>
-                  <label for="metricPosts">Postagens</label>
-                  <input id="metricPosts" type="number" min="0" step="1" value="0" />
-                </div>
-                <div>
-                  <label for="metricReels">Reels</label>
-                  <input id="metricReels" type="number" min="0" step="1" value="0" />
-                </div>
-                <div>
-                  <label for="metricStories">Stories</label>
-                  <input id="metricStories" type="number" min="0" step="1" value="0" />
-                </div>
-                <div>
-                  <label for="metricViews">Views</label>
-                  <input id="metricViews" type="number" min="0" step="1" value="0" />
-                </div>
-                <div>
-                  <label for="metricEnrollments">Matriculas atribuidas</label>
-                  <input id="metricEnrollments" type="number" min="0" step="1" value="0" />
-                </div>
-                <div class="influencer-form-span">
-                  <label for="metricNotes">Observacoes</label>
-                  <textarea id="metricNotes" rows="3" placeholder="Anote contexto da campanha, particularidades do periodo ou observacoes operacionais"></textarea>
-                </div>
-              </div>
-              <div class="influencer-form-actions">
-                <button class="btn primary" type="submit">Salvar lancamento</button>
-              </div>
-            </form>
-          ` : '<div class="intranet-empty-card">Selecione uma influencer para registrar postagens, reels, stories, views e matriculas do periodo.</div>'}
-        </aside>
-      </div>
-
-      <section class="influencer-chart-section">
-        <div class="intranet-section-head">
-          <div>
-            <div class="intranet-section-eyebrow">Leitura comparativa</div>
-            <h4 class="intranet-section-title">Graficos comparativos por influencer</h4>
-          </div>
-          <div class="small muted">${escapeHtml(period.label || 'Periodo atual')}</div>
-        </div>
-        <div class="influencer-chart-grid">
-          ${renderInfluencerMetricBars(comparisonItems, 'enrollments_count', 'Matriculas por influencer')}
-          ${renderInfluencerMetricBars(comparisonItems, 'posts_count', 'Postagens por influencer')}
-          ${renderInfluencerMetricBars(comparisonItems, 'reels_count', 'Reels por influencer')}
-          ${renderInfluencerMetricBars(comparisonItems, 'stories_count', 'Stories por influencer')}
-          ${renderInfluencerMetricBars(comparisonItems, 'views_count', 'Views por influencer')}
-          ${renderInfluencerMetricBars(comparisonItems, 'performance_score', 'Desempenho geral')}
-          ${renderInfluencerMonthlyComparison(comparison.monthly_evolution || [])}
-        </div>
-      </section>
-
-      <section class="influencer-analysis-box">
-        <div class="intranet-section-head">
-          <div>
-            <div class="intranet-section-eyebrow">Analise com IA</div>
-            <h4 class="intranet-section-title">Leitura comparativa e recomendacao operacional</h4>
-          </div>
-        </div>
-        <div class="influencer-analysis-toolbar">
-          <div>
-            <label for="influencerAnalysisPeriodType">Periodo</label>
-            <select id="influencerAnalysisPeriodType">
-              ${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.analysis.periodType || influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
-            </select>
-          </div>
-          <div>
-            <label for="influencerAnalysisFrom">De</label>
-            <input id="influencerAnalysisFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" />
-          </div>
-          <div>
-            <label for="influencerAnalysisTo">Ate</label>
-            <input id="influencerAnalysisTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" />
-          </div>
-          <div>
-            <label for="influencerAnalysisFocus">Foco</label>
-            <select id="influencerAnalysisFocus">
-              <option value="">Comparativo geral</option>
-              ${cards.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' selected' : ''}>${escapeHtml(item.name || 'Influencer')}</option>`).join('')}
-            </select>
-          </div>
-          <button class="btn primary" type="button" id="btnRunInfluencerAnalysis" ${cards.length ? '' : 'disabled'}>${influencerState.analysis.loading ? 'Analisando...' : 'Analisar'}</button>
-        </div>
-        <div class="influencer-analysis-result" id="influencerAnalysisResult">${escapeHtml(analysisText)}</div>
-        <div class="small muted">${influencerState.analysis.generatedAt ? `Ultima analise em ${escapeHtml(formatDate(influencerState.analysis.generatedAt))}` : 'A IA usa os dados registrados para sugerir proximos passos, reforco de parceria ou necessidade de revisao.'}</div>
-      </section>
+      <div class="influencer-toolbar influencer-toolbar-compact"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.menuEyebrow', {}, 'Marketing'))}</div><h3 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.menuTitle', {}, 'Influencer'))}</h3><p class="small muted">${escapeHtml(t('intranet.marketingInfluencer.menuDescription', {}, 'Cadastro, desempenho, comparativos e apoio de IA para as parcerias do Marketing.'))}</p></div><div class="influencer-toolbar-actions"><div><label for="influencerFilterPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Periodo'))}</label><select id="influencerFilterPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="influencerFilterFrom">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="influencerFilterFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="influencerFilterTo">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Ate'))}</label><input id="influencerFilterTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><button class="btn" type="button" id="btnRefreshInfluencerWorkspace">${escapeHtml(refreshLabel)}</button></div></div>
+      ${noticeMarkup}
+      <section class="workspace-submenu-shell"><div class="workspace-submenu-header"><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.submenuTitle', {}, 'Acoes do submenu'))}</div><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.submenuHint', {}, 'Abra apenas a secao que estiver usando agora.'))}</div></div>${buildWorkspaceActionMenu(sectionActions, activeSection)}${sectionMarkup}</section>
     </section>
   `;
 
@@ -1740,8 +1809,17 @@ function renderMarketingInfluencerWorkspace() {
     if (metricPeriodType) metricPeriodType.value = influencerState.filters?.periodType || period.period_type || 'month';
   }
 
-  el('btnToggleInfluencerForm')?.addEventListener('click', () => {
-    influencerState.formCollapsed = !influencerState.formCollapsed;
+  bindWorkspaceActionMenu(customWrap, (sectionKey) => {
+    setInfluencerNotice('', '');
+    setInfluencerActiveSection(sectionKey);
+    renderMarketingInfluencerWorkspace();
+  });
+  el('btnCloseInfluencerSection')?.addEventListener('click', () => {
+    influencerState.activeSection = '';
+    renderMarketingInfluencerWorkspace();
+  });
+  el('btnDismissInfluencerNotice')?.addEventListener('click', () => {
+    setInfluencerNotice('', '');
     renderMarketingInfluencerWorkspace();
   });
   el('btnResetInfluencerForm')?.addEventListener('click', () => {
@@ -1764,6 +1842,7 @@ function renderMarketingInfluencerWorkspace() {
       const influencerId = Number(button.getAttribute('data-influencer-view') || 0);
       if (!influencerId) return;
       influencerState.selectedInfluencerId = influencerId;
+      forceInfluencerSection('reports');
       renderMarketingInfluencerWorkspace();
       await fetchMarketingInfluencerDetail(influencerId);
     });
@@ -1777,6 +1856,12 @@ function renderMarketingInfluencerWorkspace() {
       populateInfluencerForm(influencer);
     });
   });
+
+  if (activeSection === 'register') {
+    window.setTimeout(() => {
+      el('influencerName')?.focus();
+    }, 30);
+  }
 }
 
 async function fetchMarketingInfluencerBootstrap(options = {}) {
@@ -1810,7 +1895,8 @@ async function fetchMarketingInfluencerBootstrap(options = {}) {
     }
 
     renderMarketingInfluencerWorkspace();
-    if (options.loadDetail === false || !influencerState.selectedInfluencerId) {
+    const shouldLoadDetail = options.forceLoadDetail === true || influencerState.activeSection === 'reports';
+    if (options.loadDetail === false || !influencerState.selectedInfluencerId || !shouldLoadDetail) {
       influencerState.detail = null;
       return;
     }
@@ -1868,7 +1954,7 @@ async function handleInfluencerFormSubmit(event) {
   };
 
   if (!payload.name) {
-    alert('Informe o nome da influencer.');
+    window.alert(t('intranet.marketingInfluencer.form.nameRequired', {}, 'Informe o nome da influencer.'));
     return;
   }
 
@@ -1878,15 +1964,23 @@ async function handleInfluencerFormSubmit(event) {
       body: JSON.stringify(payload),
     });
     resetInfluencerForm();
-    influencerState.formCollapsed = true;
     influencerState.selectedInfluencerId = influencer?.id || influencerState.selectedInfluencerId;
+    setInfluencerNotice(
+      'success',
+      t('intranet.marketingInfluencer.form.success', {}, 'Influencer cadastrada com sucesso.')
+    );
+    forceInfluencerSection('overview');
     await fetchMarketingInfluencerBootstrap({
       filters: getMarketingInfluencerPeriodFilters(),
       preserveSelection: true,
       selectedInfluencerId: influencerState.selectedInfluencerId,
     });
   } catch (err) {
-    alert('Nao foi possivel salvar a influencer: ' + err.message);
+    setInfluencerNotice(
+      'error',
+      t('intranet.marketingInfluencer.form.saveError', { error: err.message }, `Nao foi possivel salvar a influencer: ${err.message}`)
+    );
+    renderMarketingInfluencerWorkspace();
   }
 }
 
@@ -1894,7 +1988,7 @@ async function handleInfluencerMetricSubmit(event) {
   event.preventDefault();
   const influencerId = Number(influencerState.selectedInfluencerId || 0);
   if (!influencerId) {
-    alert('Selecione uma influencer para registrar a performance.');
+    window.alert(t('intranet.marketingInfluencer.reports.selectInfluencer', {}, 'Selecione uma influencer para registrar a performance.'));
     return;
   }
 
@@ -1912,7 +2006,7 @@ async function handleInfluencerMetricSubmit(event) {
   };
 
   if (!payload.period_start) {
-    alert('Informe ao menos a data inicial do lancamento.');
+    window.alert(t('intranet.marketingInfluencer.reports.periodStartRequired', {}, 'Informe ao menos a data inicial do lancamento.'));
     return;
   }
 
@@ -1921,18 +2015,28 @@ async function handleInfluencerMetricSubmit(event) {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    setInfluencerNotice(
+      'success',
+      t('intranet.marketingInfluencer.reports.metricSaved', {}, 'Lancamento salvo com sucesso.')
+    );
+    forceInfluencerSection('reports');
     await fetchMarketingInfluencerBootstrap({
       filters: getMarketingInfluencerPeriodFilters(),
       preserveSelection: true,
       selectedInfluencerId: influencerId,
     });
   } catch (err) {
-    alert('Nao foi possivel registrar a performance: ' + err.message);
+    setInfluencerNotice(
+      'error',
+      t('intranet.marketingInfluencer.reports.metricSaveError', { error: err.message }, `Nao foi possivel registrar a performance: ${err.message}`)
+    );
+    renderMarketingInfluencerWorkspace();
   }
 }
 
 async function handleInfluencerAnalysis() {
   influencerState.analysis.loading = true;
+  forceInfluencerSection('analysis');
   renderMarketingInfluencerWorkspace();
 
   try {
@@ -1953,7 +2057,7 @@ async function handleInfluencerAnalysis() {
     renderMarketingInfluencerWorkspace();
   } catch (err) {
     influencerState.analysis.loading = false;
-    influencerState.analysis.result = `Nao foi possivel analisar este periodo: ${err.message}`;
+    influencerState.analysis.result = t('intranet.marketingInfluencer.analysisError', { error: err.message }, `Nao foi possivel analisar este periodo: ${err.message}`);
     influencerState.analysis.generatedAt = new Date().toISOString();
     renderMarketingInfluencerWorkspace();
   }
@@ -1961,10 +2065,11 @@ async function handleInfluencerAnalysis() {
 
 function setActiveView(viewKey, options = {}) {
   if (!bootstrapData?.intranet) return;
+  const isDepartmentRoute = String(viewKey || '') === 'department';
   currentViewState = normalizeViewState({
     key: viewKey,
-    departmentSlug: options.departmentSlug ?? currentViewState.departmentSlug,
-    submenuSlug: options.submenuSlug ?? currentViewState.submenuSlug,
+    departmentSlug: isDepartmentRoute ? (options.departmentSlug ?? currentViewState.departmentSlug) : '',
+    submenuSlug: isDepartmentRoute ? (options.submenuSlug ?? currentViewState.submenuSlug) : '',
   }, bootstrapData.intranet);
 
   if (currentViewState.key === 'department' && currentViewState.departmentSlug) {
@@ -1986,6 +2091,7 @@ function renderDashboard(intranet) {
   const highlightsWrap = el('dashboardHighlightsList');
   const widgetsWrap = el('dashboardWidgetGrid');
   setDashboardSectionVisible(true);
+  renderDashboardTerritoryMap(dashboard);
 
   if (!dashboard.enabled) {
     if (summaryWrap) {
@@ -2025,7 +2131,7 @@ function renderDashboard(intranet) {
     breakdownWrap.innerHTML = '';
     const rows = dashboard.department_breakdown || [];
     if (!rows.length) {
-      breakdownWrap.innerHTML = '<div class="intranet-empty-card">Nenhuma area disponivel para compor o dashboard deste perfil.</div>';
+      breakdownWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardEmptyAreas', {}, 'Nenhuma area disponivel para compor o dashboard deste perfil.'))}</div>`;
     } else {
       const maxDocuments = Math.max(...rows.map((item) => Number(item.documents_total || 0)), 1);
       rows.forEach((item) => {
@@ -2040,7 +2146,7 @@ function renderDashboard(intranet) {
                 <div class="small muted">${escapeHtml(item.access_level || 'colaborador')}</div>
               </div>
             </div>
-            <div class="small muted">${escapeHtml(String(item.documents_total || 0))} doc(s) • ${escapeHtml(String(item.modules_total || 0))} modulo(s)</div>
+            <div class="small muted">${escapeHtml(t('intranet.dashboardAreaMetrics', { documents: String(item.documents_total || 0), modules: String(item.modules_total || 0) }, `${String(item.documents_total || 0)} doc(s) • ${String(item.modules_total || 0)} modulo(s)`))}</div>
           </div>
           <div class="intranet-dashboard-bar-track">
             <span class="intranet-dashboard-bar-fill" style="width:${Math.max(12, Math.round((Number(item.documents_total || 0) / maxDocuments) * 100))}%"></span>
@@ -2066,7 +2172,7 @@ function renderDashboard(intranet) {
     widgetsWrap.innerHTML = '';
     const docs = dashboard.recent_documents || [];
     if (!docs.length) {
-      widgetsWrap.innerHTML = '<div class="intranet-empty-card">Nenhum documento recente para destacar no dashboard.</div>';
+      widgetsWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardEmptyDocuments', {}, 'Nenhum documento recente para destacar no dashboard.'))}</div>`;
     } else {
       docs.forEach((document) => {
         const card = document.createElement('article');
@@ -2292,11 +2398,11 @@ function formatCalendarDateLabel(dateKey) {
 function formatCalendarRangeLabel(range = {}) {
   if (calendarState.view === 'month' && range.from) {
     try {
-      return new Date(`${range.from}T12:00:00-03:00`).toLocaleDateString(currentLocale(), {
+      return capitalizeLabel(new Date(`${range.from}T12:00:00-03:00`).toLocaleDateString(currentLocale(), {
         month: 'long',
         year: 'numeric',
         timeZone: 'America/Sao_Paulo',
-      });
+      }));
     } catch {}
   }
 
@@ -3461,4 +3567,5 @@ async function init() {
 }
 
 window.addEventListener('DOMContentLoaded', init);
+
 

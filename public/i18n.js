@@ -1,14 +1,21 @@
-(function () {
+﻿(function () {
   const DEFAULT_LOCALE = 'pt-BR';
   const STORAGE_KEY = 'talkers_locale_v1';
   const COOKIE_KEY = 'talkers_locale';
   const SUPPORTED_LOCALES = ['pt-BR', 'en', 'es', 'it', 'fr'];
+  function toFlagEmoji(countryCode) {
+    const safeCode = String(countryCode || '').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(safeCode)) return '';
+    return Array.from(safeCode)
+      .map((char) => String.fromCodePoint(127397 + char.charCodeAt(0)))
+      .join('');
+  }
   const LOCALE_OPTIONS = [
-    { code: 'pt-BR', flag: '🇧🇷', label: 'Português' },
-    { code: 'en', flag: '🇺🇸', label: 'English' },
-    { code: 'es', flag: '🇪🇸', label: 'Español' },
-    { code: 'it', flag: '🇮🇹', label: 'Italiano' },
-    { code: 'fr', flag: '🇫🇷', label: 'Français' },
+    { code: 'pt-BR', flag: toFlagEmoji('BR'), label: 'Portugues' },
+    { code: 'en', flag: toFlagEmoji('US'), label: 'English' },
+    { code: 'es', flag: toFlagEmoji('ES'), label: 'Espanol' },
+    { code: 'it', flag: toFlagEmoji('IT'), label: 'Italiano' },
+    { code: 'fr', flag: toFlagEmoji('FR'), label: 'Francais' },
   ];
   const SELECTOR = '[data-i18n], [data-i18n-placeholder], [data-i18n-title], [data-i18n-aria-label]';
 
@@ -251,3 +258,4 @@
     getPeriodGreeting,
   };
 })();
+

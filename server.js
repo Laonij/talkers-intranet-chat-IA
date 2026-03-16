@@ -4882,7 +4882,7 @@ Memória semântica derivada dos documentos:
 ${trimContextText(knowledgeMemoryBundle.text || "Sem memória documental relevante para esta pergunta.")}
 
 Documentos e imagens da conversa:
-${trimContextText(supportAssets.fileContext || "Nenhum anexo recente.")}
+${trimContextText((supportAssets?.used_in_this_turn ? supportAssets.fileContext : "") || "Nenhum anexo usado nesta resposta.")}
 
 Dados externos atualizados e busca web:
 ${trimContextText(externalToolContext?.text || (shouldUseExternalTools ? "Nenhum resultado externo adicional foi encontrado nesta tentativa." : "Nao foi necessario consultar fonte externa nesta pergunta."))}
@@ -5233,6 +5233,46 @@ async function getConversationSupportAssets(conversationId) {
   return payload;
 }
 
+function queryExplicitlyReferencesConversationAssets(query = "") {
+  const value = normalizeQuery(query);
+  if (!value) return false;
+  return /(arquivo|arquivos|documento|documentos|doc|docs|pdf|planilha|planilhas|imagem|imagens|foto|fotos|anexo|anexos|anexado|anexada|anexei|enviei|enviado|enviada|mandei|subi|upload|analisar o arquivo|com base no arquivo|com base no documento|nesse arquivo|neste arquivo|nesse documento|neste documento|nessa imagem|nesta imagem|nessa planilha|nesta planilha)/i.test(value);
+}
+
+function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topicSnapshot = null) {
+  const safeAssets = supportAssets && typeof supportAssets === "object"
+    ? supportAssets
+    : {
+        cache_key: "",
+        fileContext: "",
+        visionInputs: [],
+        documentInputs: [],
+        imageReferences: [],
+      };
+
+  const topicShift = topicSnapshot?.topicShift || { isShift: false, reason: "unknown" };
+  const explicitAttachmentReference = queryExplicitlyReferencesConversationAssets(userText);
+  const shouldUseAssets = explicitAttachmentReference && !topicShift.isShift;
+
+  if (shouldUseAssets) {
+    return {
+      ...safeAssets,
+      used_in_this_turn: true,
+      explicit_reference: true,
+    };
+  }
+
+  return {
+    cache_key: `${safeAssets.cache_key || ""}:filtered`,
+    fileContext: "",
+    visionInputs: [],
+    documentInputs: [],
+    imageReferences: [],
+    used_in_this_turn: false,
+    explicit_reference: explicitAttachmentReference,
+  };
+}
+
 function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
   const allowReusablePrompt = /^(1|true|yes|on)$/i.test(String(process.env.OPENAI_PROMPT_USE_IN_CHAT || "").trim());
   if (!OPENAI_PROMPT_ID || !allowReusablePrompt) return null;
@@ -5291,9 +5331,14 @@ async function buildOpenAIInput({
       ? []
       : await getRelevantMemoryEntries(userId, conversationId, userText, 4);
   const memoryBundle = buildMemoryContextBundle(memoryEntries);
-  const supportVisionInputs = Array.isArray(visionInputs) ? visionInputs : await getRecentVisionInputs(conversationId, 3);
-  const supportDocumentInputs = Array.isArray(documentInputs) ? documentInputs : await getRecentDocumentInputs(conversationId, 2);
   const normalizedUserText = String(userText || '').trim();
+  const shouldUseConversationAttachments = !topicShift.isShift && queryExplicitlyReferencesConversationAssets(normalizedUserText);
+  const supportVisionInputs = shouldUseConversationAttachments
+    ? (Array.isArray(visionInputs) ? visionInputs : await getRecentVisionInputs(conversationId, 3))
+    : [];
+  const supportDocumentInputs = shouldUseConversationAttachments
+    ? (Array.isArray(documentInputs) ? documentInputs : await getRecentDocumentInputs(conversationId, 2))
+    : [];
   const businessContextText = buildBusinessContextBlock({
     user: resolvedUser || {},
     businessIntent: intent.businessIntent,
@@ -5339,6 +5384,8 @@ Comportamento:
 - Para respostas institucionais, comerciais, explicativas ou comparativas, prefira uma abertura curta, 2 a 5 blocos claros com titulos e bullets objetivos, em vez de um texto corrido confuso.
 - Se a pergunta for sobre uma empresa, marca, curso, produto, servico ou tema publico relevante, responda de forma apresentavel, persuasiva e facil de escanear, como se o usuario pudesse reutilizar a resposta em uma apresentacao ou conversa executiva.
 - Se o usuario mudar de assunto, foque totalmente no tema atual sem arrastar contexto irrelevante.
+- So mencione documento, imagem, anexo, base interna, arquivo enviado ou planilha da conversa se esse contexto realmente tiver sido usado nesta resposta atual.
+- Se nenhum documento ou anexo foi usado neste turno, nunca diga frases como "no documento que voce enviou", "na base interna" ou equivalentes.
 - Se faltar informacao suficiente, deixe isso claro e peca complemento.
 - Nunca responda de forma rasa quando a pergunta pedir profundidade ou aplicacao pratica.
 - Nunca se compare negativamente com outros assistentes, nunca diga que tem menos capacidade, e nunca responda com frases como "nao tenho acesso" se houver contexto atual disponivel.
@@ -8377,7 +8424,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
 
     const contextStartedAt = Date.now();
     const contextStrategy = buildChatContextStrategy(text, responseProfile);
-    const [knowledgeSignature, supportAssets, queryEmbedding] = await Promise.all([
+    const [knowledgeSignature, rawSupportAssets, queryEmbedding] = await Promise.all([
       contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
       contextStrategy.skipSupportAssets
         ? Promise.resolve({
@@ -8390,6 +8437,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         : getConversationSupportAssets(id),
       contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
     ]);
+    const supportAssets = sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot);
     const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
@@ -8755,7 +8803,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
 
     const contextStartedAt = Date.now();
     const contextStrategy = buildChatContextStrategy(text, responseProfile);
-    const [knowledgeSignature, supportAssets, queryEmbedding] = await Promise.all([
+    const [knowledgeSignature, rawSupportAssets, queryEmbedding] = await Promise.all([
       contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
       contextStrategy.skipSupportAssets
         ? Promise.resolve({
@@ -8768,6 +8816,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         : getConversationSupportAssets(id),
       contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
     ]);
+    const supportAssets = sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot);
     const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });

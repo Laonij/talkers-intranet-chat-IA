@@ -6,6 +6,7 @@ const t = (key, params = {}, fallback = '') => {
   return translated ?? fallback ?? key;
 };
 const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
+const repairDisplayText = (value) => i18n()?.repairMojibakeText?.(String(value ?? '')) || String(value ?? '');
 
 const QUICK_PROMPTS = [
   { icon: "document", key: "document" },
@@ -641,7 +642,8 @@ function shouldRenderStructuredCard(meta, content) {
 }
 
 function appendAssistantContent(bubble, text, meta = null) {
-  const useStructuredCard = shouldRenderStructuredCard(meta, text);
+  const safeText = repairDisplayText(text);
+  const useStructuredCard = shouldRenderStructuredCard(meta, safeText);
 
   if (useStructuredCard) {
     const card = document.createElement("section");
@@ -652,15 +654,15 @@ function appendAssistantContent(bubble, text, meta = null) {
 
     const label = document.createElement("div");
     label.className = "structured-card-label";
-    label.textContent = meta?.structured_label || "Resposta estruturada";
+    label.textContent = repairDisplayText(meta?.structured_label || "Resposta estruturada");
 
     head.appendChild(label);
-    head.appendChild(createCopyButton(text, "structured-copy-btn"));
+    head.appendChild(createCopyButton(safeText, "structured-copy-btn"));
     card.appendChild(head);
 
     const body = document.createElement("div");
     body.className = "structured-card-body md-content";
-    body.innerHTML = renderMarkdown(text);
+    body.innerHTML = renderMarkdown(safeText);
     card.appendChild(body);
 
     bubble.appendChild(card);
@@ -669,11 +671,11 @@ function appendAssistantContent(bubble, text, meta = null) {
 
   const plain = document.createElement("div");
   plain.className = "assistant-plain";
-  plain.appendChild(createCopyButton(text, "inline-copy-btn"));
+  plain.appendChild(createCopyButton(safeText, "inline-copy-btn"));
 
   const textNode = document.createElement("div");
   textNode.className = "md-content";
-  textNode.innerHTML = renderMarkdown(text);
+  textNode.innerHTML = renderMarkdown(safeText);
   plain.appendChild(textNode);
 
   bubble.appendChild(plain);
@@ -913,7 +915,7 @@ function createAssistantStreamShell() {
 
 function updateAssistantStreamShell(shell, text) {
   if (!shell?.textNode) return;
-  shell.textNode.textContent = String(text || "");
+  shell.textNode.textContent = repairDisplayText(text);
   scrollChat();
 }
 

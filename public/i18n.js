@@ -449,6 +449,7 @@
     onChange,
     formatDate,
     getPeriodGreeting,
+    repairMojibakeText,
   };
 })();
 

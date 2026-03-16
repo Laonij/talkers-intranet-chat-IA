@@ -4880,7 +4880,22 @@ async function getRecentDocumentInputs(conversationId, limit = 2) {
   }
 }
 
-function buildOpenAITools() {
+function buildOpenAIWebSearchTool(legacyWebSearch = false) {
+  if (legacyWebSearch) {
+    return { type: "web_search_preview" };
+  }
+
+  return {
+    type: "web_search",
+    search_context_size: "medium",
+    user_location: {
+      type: "approximate",
+      country: "BR",
+    },
+  };
+}
+
+function buildOpenAITools({ legacyWebSearch = false } = {}) {
   const tools = [];
 
   if (OPENAI_VECTOR_STORE_ID) {
@@ -4890,8 +4905,38 @@ function buildOpenAITools() {
     });
   }
 
-  tools.push({ type: "web_search_preview" });
+  tools.push(buildOpenAIWebSearchTool(Boolean(legacyWebSearch)));
   return tools;
+}
+
+function buildOpenAIResponsesRequestBody({
+  model,
+  input,
+  prompt = null,
+  stream = false,
+  legacyWebSearch = false,
+}) {
+  const requestBody = {
+    model,
+    input,
+    tools: buildOpenAITools({ legacyWebSearch }),
+    include: ["file_search_call.results", "web_search_call.action.sources"],
+    tool_choice: "auto",
+  };
+  if (stream) {
+    requestBody.stream = true;
+    requestBody.stream_options = {
+      include_obfuscation: false,
+    };
+  }
+  if (prompt) requestBody.prompt = prompt;
+  return requestBody;
+}
+
+function shouldRetryWithLegacyWebSearch(status, bodyText = "") {
+  const safeBody = String(bodyText || "").toLowerCase();
+  if (!status || status < 400) return false;
+  return /web_search|web search|unknown tool|invalid tool|unsupported tool|tool_choice|tool type/.test(safeBody);
 }
 
 function parsePromptVariablesConfig() {
@@ -5092,21 +5137,21 @@ function extractResponsePayload(data, baseSources = []) {
     pushUniqueSource(sources, source);
   }
 
-  let text = String(data?.output_text || "").trim();
+  let text = repairMojibakeText(String(data?.output_text || "").trim());
 
   try {
     for (const item of data?.output || []) {
       if (item?.type === "message" && Array.isArray(item.content)) {
         for (const part of item.content) {
           if (!text && part?.type === "output_text" && part.text) {
-            text = `${text ? `${text}\n` : ""}${part.text}`.trim();
+            text = repairMojibakeText(`${text ? `${text}\n` : ""}${part.text}`.trim());
           }
 
           for (const annotation of part?.annotations || []) {
             if (annotation?.type === "file_citation") {
               pushUniqueSource(sources, {
                 type: "file_search",
-                label: annotation.filename || annotation.file_id || "Arquivo da base",
+                label: repairMojibakeText(annotation.filename || annotation.file_id || "Arquivo da base"),
                 file_id: annotation.file_id || "",
               });
             }
@@ -5114,7 +5159,7 @@ function extractResponsePayload(data, baseSources = []) {
             if (annotation?.type === "url_citation") {
               pushUniqueSource(sources, {
                 type: "web",
-                label: annotation.title || annotation.url || "Fonte externa",
+                label: repairMojibakeText(annotation.title || annotation.url || "Fonte externa"),
                 url: annotation.url || "",
               });
             }
@@ -5127,9 +5172,9 @@ function extractResponsePayload(data, baseSources = []) {
         for (const result of item.results.slice(0, 6)) {
           pushUniqueSource(sources, {
             type: "file_search",
-            label: result?.filename || result?.file_id || "Arquivo da base",
+            label: repairMojibakeText(result?.filename || result?.file_id || "Arquivo da base"),
             file_id: result?.file_id || "",
-            excerpt: result?.text || result?.content || "",
+            excerpt: repairMojibakeText(result?.text || result?.content || ""),
           });
         }
       }
@@ -5140,7 +5185,7 @@ function extractResponsePayload(data, baseSources = []) {
         for (const source of item.action.sources.slice(0, 6)) {
           pushUniqueSource(sources, {
             type: "web",
-            label: source?.title || source?.url || "Fonte externa",
+            label: repairMojibakeText(source?.title || source?.url || "Fonte externa"),
             url: source?.url || "",
           });
         }
@@ -5151,7 +5196,7 @@ function extractResponsePayload(data, baseSources = []) {
   }
 
   return {
-    text: (text || "").trim() || "Sem resposta da OpenAI.",
+    text: repairMojibakeText((text || "").trim()) || "Sem resposta da OpenAI.",
     sources: sources.slice(0, 8),
     tool_usage: toolUsage,
   };
@@ -5196,14 +5241,14 @@ async function openaiReply({
   const currentUser = await getUserById(userId).catch(() => null);
   const prompt = buildOpenAIPromptConfig(currentUser, responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)), responseProfile?.language);
 
-  const requestBody = {
+  let legacyWebSearch = false;
+  let requestBody = buildOpenAIResponsesRequestBody({
     model,
     input,
-    tools: buildOpenAITools(),
-    include: ["file_search_call.results", "web_search_call.action.sources"],
-  };
-  if (prompt) requestBody.prompt = prompt;
-  const payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
+    prompt,
+    legacyWebSearch,
+  });
+  let payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
 
   let resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -5227,6 +5272,35 @@ async function openaiReply({
       },
       body: JSON.stringify(fallbackBody),
     });
+  }
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    if (shouldRetryWithLegacyWebSearch(resp.status, body)) {
+      console.log("OpenAI web_search fallback:", resp.status, body);
+      legacyWebSearch = true;
+      requestBody = buildOpenAIResponsesRequestBody({
+        model,
+        input,
+        prompt,
+        legacyWebSearch,
+      });
+      payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
+      resp = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } else {
+      resp = {
+        ok: false,
+        status: resp.status,
+        text: async () => body,
+      };
+    }
   }
 
   if (!resp.ok) {
@@ -5302,15 +5376,15 @@ async function openaiReplyStream({
     responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)),
     responseProfile?.language
   );
-  const requestBody = {
+  let legacyWebSearch = false;
+  let requestBody = buildOpenAIResponsesRequestBody({
     model,
     input,
-    tools: buildOpenAITools(),
-    include: ["file_search_call.results", "web_search_call.action.sources"],
+    prompt,
     stream: true,
-  };
-  if (prompt) requestBody.prompt = prompt;
-  const payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
+    legacyWebSearch,
+  });
+  let payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
 
   let resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -5334,6 +5408,37 @@ async function openaiReplyStream({
       },
       body: JSON.stringify(fallbackBody),
     });
+  }
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    if (shouldRetryWithLegacyWebSearch(resp.status, body)) {
+      console.log("OpenAI web_search fallback (stream):", resp.status, body);
+      legacyWebSearch = true;
+      requestBody = buildOpenAIResponsesRequestBody({
+        model,
+        input,
+        prompt,
+        stream: true,
+        legacyWebSearch,
+      });
+      payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
+      resp = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } else {
+      resp = {
+        ok: false,
+        status: resp.status,
+        body: null,
+        text: async () => body,
+      };
+    }
   }
 
   if (!resp.ok || !resp.body) {
@@ -8105,6 +8210,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       : null;
 
     if (cachedReply?.text) {
+      const safeCachedText = repairMojibakeText(String(cachedReply.text || ""));
       const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
         response_language: cachedReply.responseLanguage || userLanguage,
         sources: cachedReply.sources || [],
@@ -8114,7 +8220,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         conversationId: id,
         userId: req.user.sub,
         userText: text,
-        assistantText: cachedReply.text,
+        assistantText: safeCachedText,
         responseProfile,
         responseLanguage: cachedReply.responseLanguage || userLanguage,
         metaObject: cachedMetaObject,
@@ -8132,11 +8238,11 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         context_assembly_ms: contextAssemblyMs,
         persistence_ms: persistMetrics.persistence_ms,
         prompt_chars: text.length,
-        response_chars: cachedReply.text.length,
-        response_bytes: Buffer.byteLength(String(cachedReply.text || ""), "utf8"),
+        response_chars: safeCachedText.length,
+        response_bytes: Buffer.byteLength(String(safeCachedText || ""), "utf8"),
         status: "cache_hit",
       });
-      return res.json({ reply: cachedReply.text, meta: cachedMetaObject });
+      return res.json({ reply: safeCachedText, meta: cachedMetaObject });
     }
 
     const contextLayers = await buildConversationKnowledgeContext({
@@ -8161,7 +8267,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       documentInputs: supportAssets.documentInputs || [],
     });
 
-    let finalAssistantText = String(assistant.text || "").trim();
+    let finalAssistantText = repairMojibakeText(String(assistant.text || "").trim());
     let finalAssistantSources = Array.isArray(assistant.sources) ? assistant.sources : [];
     const combinedToolMetrics = mergeToolUsageMetrics(
       contextLayers.toolMetrics || null,
@@ -8378,6 +8484,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       : null;
 
     if (cachedReply?.text) {
+      const safeCachedText = repairMojibakeText(String(cachedReply.text || ""));
       const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
         response_language: cachedReply.responseLanguage || userLanguage,
         sources: cachedReply.sources || [],
@@ -8387,7 +8494,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         conversationId: id,
         userId: req.user.sub,
         userText: text,
-        assistantText: cachedReply.text,
+        assistantText: safeCachedText,
         responseProfile,
         responseLanguage: cachedReply.responseLanguage || userLanguage,
         metaObject: cachedMetaObject,
@@ -8404,11 +8511,11 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         context_assembly_ms: Date.now() - contextStartedAt,
         persistence_ms: persistMetrics.persistence_ms,
         prompt_chars: text.length,
-        response_chars: cachedReply.text.length,
-        response_bytes: Buffer.byteLength(String(cachedReply.text || ""), "utf8"),
+        response_chars: safeCachedText.length,
+        response_bytes: Buffer.byteLength(String(safeCachedText || ""), "utf8"),
         status: "cache_hit",
       });
-      writeEventStreamPacket(res, "done", { reply: cachedReply.text, meta: cachedMetaObject });
+      writeEventStreamPacket(res, "done", { reply: safeCachedText, meta: cachedMetaObject });
       return res.end();
     }
 
@@ -8442,7 +8549,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       },
     });
 
-    let finalAssistantText = String(assistant.text || "").trim();
+    let finalAssistantText = repairMojibakeText(String(assistant.text || "").trim());
     let finalAssistantSources = Array.isArray(assistant.sources) ? assistant.sources : [];
     const combinedToolMetrics = mergeToolUsageMetrics(
       contextLayers.toolMetrics || null,

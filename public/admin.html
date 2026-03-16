@@ -2229,6 +2229,9 @@ function renderCockpitGauge(chat = {}) {
     { label: 'Uso de memória', value: `${Number(chat.memory_percent || 0).toFixed(1)}%` },
     { label: 'Carga CPU (1m)', value: String(chat.cpu_load_1m ?? '-') },
     { label: 'Requisições simultâneas', value: String(chat.concurrent_requests ?? 0) },
+    { label: 'Buscas web', value: `${Number(chat.total_web_search_calls || 0)}` },
+    { label: 'APIs de dados', value: `${Number(chat.total_data_api_calls || 0)}` },
+    { label: 'Base Talkers', value: `${Number(chat.total_talkers_public_hits || 0)}` },
     { label: 'Prompt médio', value: `${Math.round(Number(chat.average_prompt_chars || 0))} chars` },
     { label: 'Payload médio', value: formatBytes(Number(chat.average_payload_bytes || 0)) },
     { label: 'Resposta média', value: formatBytes(Number(chat.average_response_bytes || 0)) },
@@ -2252,11 +2255,13 @@ async function loadAdminCockpit() {
   const queues = payload.queues?.knowledge_background || {};
   const whatsappQueue = payload.queues?.whatsapp_campaigns || {};
   const alerts = payload.alerts || {};
+  const talkersBase = payload.talkers_public_base || openai.talkers_public_base || {};
   const summaryWrap = document.getElementById('cockpitSummaryCards');
   const summaryCards = [
     { label: 'Storage', value: storage.current || '-' },
     { label: 'Banco', value: database.client || '-' },
     { label: 'OpenAI', value: openai.status || '-' },
+    { label: 'Base Talkers', value: `${Number(talkersBase.source_count || 0)} fontes` },
     { label: 'WhatsApp', value: whatsapp.integration?.status_label || '-' },
     { label: 'Status geral', value: application.status || '-' },
   ];
@@ -2268,7 +2273,7 @@ async function loadAdminCockpit() {
     summaryWrap.appendChild(card);
   });
 
-  document.getElementById('cockpitSummaryLabel').textContent = `Storage ${storage.current || '-'} • Banco ${database.client || '-'} • OpenAI ${openai.status || '-'} • WhatsApp ${whatsapp.integration?.status_label || '-'} • ${Number(alerts.recent_errors_total || 0)} alerta(s) recente(s)`;
+  document.getElementById('cockpitSummaryLabel').textContent = `Storage ${storage.current || '-'} • Banco ${database.client || '-'} • OpenAI ${openai.status || '-'} • Base Talkers ${Number(talkersBase.source_count || 0)} fonte(s) • ${Number(alerts.recent_errors_total || 0)} alerta(s) recente(s)`;
 
   renderCockpitList('cockpitStorageList', [
     { label: 'Storage atual', value: storage.current || '-', description: storage.technical_note || '' },
@@ -2286,6 +2291,8 @@ async function loadAdminCockpit() {
     { label: 'OpenAI API', value: openai.api_configured ? 'Ativo' : 'Inativo', description: openai.prompt_configured ? `Prompt: ${openai.prompt_id || 'configurado'}` : 'Sem prompt reutilizável ativo' },
     { label: 'Vector Store', value: openai.vector_store_configured ? 'Ativo' : 'Inativo', description: openai.vector_store_id || 'Sem ID configurado' },
     { label: 'Arquivos disponíveis para IA', value: String(openai.knowledge_available_total || 0), description: `${String(openai.knowledge_files_total || 0)} arquivo(s) no total` },
+    { label: 'Busca externa e APIs', value: openai.external_search_enabled ? 'Ativo' : 'Inativo', description: openai.current_data_tools_enabled ? 'Web search, dados públicos e APIs de contexto atual habilitados.' : 'Ferramentas externas indisponíveis.' },
+    { label: 'Base pública da Talkers', value: `${Number(talkersBase.source_count || 0)} fonte(s)`, description: talkersBase.technical_note || ((talkersBase.categories || []).join(' • ') || 'Base institucional pronta para sincronização.') },
     { label: 'WhatsApp provider', value: whatsapp.integration?.status_label || '-', description: whatsapp.integration?.technical_note || 'Sem integração ativa para disparo real no momento.' },
   ]);
 

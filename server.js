@@ -52,7 +52,13 @@ const {
   isSupportedOpenAIInputFile,
   uploadFileToOpenAI,
 } = require("./lib/rag");
-const { searchWeb } = require("./lib/webSearch");
+const { resolveExternalToolContext } = require("./lib/webSearch");
+const {
+  buildTalkersPublicKnowledgeBundle,
+  getTalkersPublicKnowledgeDiagnostics,
+  queryLooksAboutTalkers,
+  syncTalkersPublicKnowledge,
+} = require("./lib/talkersPublicKnowledge");
 const {
   analyzeBusinessIntent,
   buildBusinessContextBlock,
@@ -254,6 +260,11 @@ const chatPerformanceState = {
   last_response_chars: 0,
    last_payload_bytes: 0,
    last_response_bytes: 0,
+  last_web_search_calls: 0,
+  last_data_api_calls: 0,
+  last_file_search_calls: 0,
+  last_talkers_public_hits: 0,
+  last_external_context_hits: 0,
   last_status: "idle",
   last_updated_at: null,
 };
@@ -585,6 +596,11 @@ function finalizeChatPerformanceSample(sample = {}, metrics = {}) {
   const responseChars = Math.max(0, Number(metrics.response_chars || 0));
   const payloadBytes = Math.max(0, Number(metrics.payload_bytes || 0));
   const responseBytes = Math.max(0, Number(metrics.response_bytes || 0));
+  const webSearchCalls = Math.max(0, Number(metrics.web_search_calls || 0));
+  const dataApiCalls = Math.max(0, Number(metrics.data_api_calls || 0));
+  const fileSearchCalls = Math.max(0, Number(metrics.file_search_calls || 0));
+  const talkersPublicHits = Math.max(0, Number(metrics.talkers_public_hits || 0));
+  const externalContextHits = Math.max(0, Number(metrics.external_context_hits || 0));
 
   chatPerformanceState.concurrent_requests = Math.max(0, Number(chatPerformanceState.concurrent_requests || 0) - 1);
   chatPerformanceState.last_response_ms = totalResponseMs;
@@ -596,6 +612,11 @@ function finalizeChatPerformanceSample(sample = {}, metrics = {}) {
   chatPerformanceState.last_response_chars = responseChars;
   chatPerformanceState.last_payload_bytes = payloadBytes;
   chatPerformanceState.last_response_bytes = responseBytes;
+  chatPerformanceState.last_web_search_calls = webSearchCalls;
+  chatPerformanceState.last_data_api_calls = dataApiCalls;
+  chatPerformanceState.last_file_search_calls = fileSearchCalls;
+  chatPerformanceState.last_talkers_public_hits = talkersPublicHits;
+  chatPerformanceState.last_external_context_hits = externalContextHits;
   chatPerformanceState.last_status = String(metrics.status || "success");
   chatPerformanceState.last_updated_at = new Date().toISOString();
 
@@ -610,6 +631,11 @@ function finalizeChatPerformanceSample(sample = {}, metrics = {}) {
     response_chars: responseChars,
     payload_bytes: payloadBytes,
     response_bytes: responseBytes,
+    web_search_calls: webSearchCalls,
+    data_api_calls: dataApiCalls,
+    file_search_calls: fileSearchCalls,
+    talkers_public_hits: talkersPublicHits,
+    external_context_hits: externalContextHits,
     status: chatPerformanceState.last_status,
   });
   if (chatPerformanceState.samples.length > CHAT_PERFORMANCE_SAMPLE_LIMIT) {
@@ -624,6 +650,12 @@ function getAverageFromSamples(field) {
   return total / samples.length;
 }
 
+function getTotalFromSamples(field) {
+  const samples = Array.isArray(chatPerformanceState.samples) ? chatPerformanceState.samples : [];
+  if (!samples.length) return 0;
+  return samples.reduce((sum, item) => sum + Number(item?.[field] || 0), 0);
+}
+
 function getChatPerformanceSnapshot() {
   const averageResponseMs = getAverageFromSamples("total_response_ms");
   const averageApiLatencyMs = getAverageFromSamples("api_latency_ms");
@@ -634,6 +666,11 @@ function getChatPerformanceSnapshot() {
   const averageResponseChars = getAverageFromSamples("response_chars");
   const averagePayloadBytes = getAverageFromSamples("payload_bytes");
   const averageResponseBytes = getAverageFromSamples("response_bytes");
+  const averageWebSearchCalls = getAverageFromSamples("web_search_calls");
+  const averageDataApiCalls = getAverageFromSamples("data_api_calls");
+  const averageFileSearchCalls = getAverageFromSamples("file_search_calls");
+  const averageTalkersPublicHits = getAverageFromSamples("talkers_public_hits");
+  const averageExternalContextHits = getAverageFromSamples("external_context_hits");
   const rssBytes = Number(process.memoryUsage?.().rss || 0);
   const heapUsedBytes = Number(process.memoryUsage?.().heapUsed || 0);
   const totalMemoryBytes = Number(os.totalmem?.() || 0);
@@ -666,6 +703,21 @@ function getChatPerformanceSnapshot() {
     last_payload_bytes: Math.round(Number(chatPerformanceState.last_payload_bytes || 0)),
     average_response_bytes: Math.round(averageResponseBytes),
     last_response_bytes: Math.round(Number(chatPerformanceState.last_response_bytes || 0)),
+    average_web_search_calls: Number(averageWebSearchCalls.toFixed(2)),
+    average_data_api_calls: Number(averageDataApiCalls.toFixed(2)),
+    average_file_search_calls: Number(averageFileSearchCalls.toFixed(2)),
+    average_talkers_public_hits: Number(averageTalkersPublicHits.toFixed(2)),
+    average_external_context_hits: Number(averageExternalContextHits.toFixed(2)),
+    total_web_search_calls: getTotalFromSamples("web_search_calls"),
+    total_data_api_calls: getTotalFromSamples("data_api_calls"),
+    total_file_search_calls: getTotalFromSamples("file_search_calls"),
+    total_talkers_public_hits: getTotalFromSamples("talkers_public_hits"),
+    total_external_context_hits: getTotalFromSamples("external_context_hits"),
+    last_web_search_calls: Number(chatPerformanceState.last_web_search_calls || 0),
+    last_data_api_calls: Number(chatPerformanceState.last_data_api_calls || 0),
+    last_file_search_calls: Number(chatPerformanceState.last_file_search_calls || 0),
+    last_talkers_public_hits: Number(chatPerformanceState.last_talkers_public_hits || 0),
+    last_external_context_hits: Number(chatPerformanceState.last_external_context_hits || 0),
     concurrent_requests: Number(chatPerformanceState.concurrent_requests || 0),
     peak_concurrent: Number(chatPerformanceState.peak_concurrent || 0),
     sample_size: Array.isArray(chatPerformanceState.samples) ? chatPerformanceState.samples.length : 0,
@@ -4428,6 +4480,9 @@ async function findSemanticCache(userId, queryText, queryLanguage, queryEmbeddin
   );
 
   if (exact) {
+    if (responseLooksSelfLimiting(exact.response_text) || responseLooksWeak(exact.response_text)) {
+      return null;
+    }
     await run("UPDATE semantic_cache SET hit_count=COALESCE(hit_count, 0)+1, updated_at=datetime('now') WHERE id=?", [exact.id]);
     return {
       text: exact.response_text,
@@ -4454,6 +4509,9 @@ async function findSemanticCache(userId, queryText, queryLanguage, queryEmbeddin
   }
 
   if (best && bestScore >= SEMANTIC_CACHE_MIN_SIMILARITY) {
+    if (responseLooksSelfLimiting(best.response_text) || responseLooksWeak(best.response_text)) {
+      return null;
+    }
     await run("UPDATE semantic_cache SET hit_count=COALESCE(hit_count, 0)+1, updated_at=datetime('now') WHERE id=?", [best.id]);
     return {
       text: best.response_text,
@@ -4486,6 +4544,151 @@ function queryLooksExternalOrCurrent(query = "") {
 function shouldFetchWebContext(query, knowledgeBundle) {
   const hasInternalContext = Boolean(String(knowledgeBundle?.text || "").trim());
   return !hasInternalContext || queryLooksExternalOrCurrent(query);
+}
+
+function responseLooksSelfLimiting(text = "") {
+  const safe = String(text || "").trim().toLowerCase();
+  if (!safe) return true;
+  return /(minhas limita[cç][oõ]es|nao tenho acesso|não tenho acesso|nao consigo verificar|não consigo verificar|consulte outro site|consultar outro site|sou focad[oa] apenas|nao mantenho um historico|não mantenho um histórico|nao tenho informac|não tenho informac|nao consigo acessar|não consigo acessar)/i.test(safe);
+}
+
+function mergeToolUsageMetrics(...metricsList) {
+  const merged = {
+    web_search_calls: 0,
+    data_api_calls: 0,
+    file_search_calls: 0,
+    talkers_public_hits: 0,
+    external_context_hits: 0,
+  };
+
+  for (const metrics of metricsList) {
+    if (!metrics || typeof metrics !== "object") continue;
+    merged.web_search_calls += Number(metrics.web_search_calls || 0);
+    merged.data_api_calls += Number(metrics.data_api_calls || 0);
+    merged.file_search_calls += Number(metrics.file_search_calls || 0);
+    merged.talkers_public_hits += Number(metrics.talkers_public_hits || 0);
+    merged.external_context_hits += Number(metrics.external_context_hits || 0);
+  }
+
+  return merged;
+}
+
+function buildExternalContextFallbackAnswer(externalToolContext = null, userLanguage = "pt") {
+  const direct = String(externalToolContext?.direct_answer || "").trim();
+  if (direct) return direct;
+
+  const lines = String(externalToolContext?.text || "")
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  if (!lines.length) return "";
+  if (String(userLanguage || "pt").startsWith("en")) {
+    return `I found updated public context for this question:\n- ${lines.join("\n- ")}`;
+  }
+  return `Encontrei este contexto público atualizado para a sua pergunta:\n- ${lines.join("\n- ")}`;
+}
+
+async function buildConversationKnowledgeContext({
+  text,
+  userLanguage,
+  currentUser,
+  queryEmbedding,
+  supportAssets,
+}) {
+  const knowledgeBundle = await buildKnowledgeBundle(text, {
+    limit: 4,
+    userLanguage,
+    departments: currentUser?.departments || [],
+  });
+  const knowledgeMemoryEntries = await getRelevantKnowledgeDocumentMemories(text, {
+    limit: 4,
+    queryEmbedding,
+    departments: currentUser?.departments || [],
+  });
+  const knowledgeMemoryBundle = buildKnowledgeMemoryBundle(knowledgeMemoryEntries, userLanguage);
+  const talkersPublicBundle = await buildTalkersPublicKnowledgeBundle(text, {
+    limit: 4,
+    userLanguage,
+  });
+
+  const mergedKnowledgeSources = [];
+  (talkersPublicBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+  (knowledgeBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+  (knowledgeMemoryBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+
+  const layeredKnowledgeText = [
+    talkersPublicBundle.text || "",
+    knowledgeBundle.text || "",
+    knowledgeMemoryBundle.text || "",
+  ].filter(Boolean).join("\n\n");
+
+  const shouldUseExternalTools = shouldFetchWebContext(text, { text: layeredKnowledgeText })
+    || queryLooksAboutTalkers(text)
+    || queryLooksExternalOrCurrent(text);
+
+  const externalToolContext = shouldUseExternalTools
+    ? await resolveExternalToolContext(text, {
+        userLanguage,
+        forceWebSearch: queryLooksExternalOrCurrent(text),
+      }).catch((err) => {
+        console.log("Erro ao montar contexto externo:", err?.message || err);
+        return null;
+      })
+    : null;
+
+  (externalToolContext?.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+
+  const contextText = `
+Data atual no Brasil:
+${nowBrazil()}
+
+Roteamento desta pergunta:
+- Perguntas sobre a Talkers devem priorizar a base pública oficial da Talkers e a base interna da empresa.
+- Perguntas gerais, atuais, públicas ou de mercado devem usar os dados externos atualizados e a busca web quando houver contexto disponível.
+- Nunca diga que voce nao consegue acessar dados atuais se ja houver contexto externo, API ou resultado de busca no contexto.
+
+Idioma detectado do usuário:
+${getLanguageLabel(userLanguage)}
+
+Base pública oficial da Talkers:
+${trimContextText(talkersPublicBundle.text || "Sem bloco público específico da Talkers para esta pergunta.")}
+
+Memória interna da empresa:
+${trimContextText(knowledgeBundle.text || "Sem resultados relevantes da base interna.")}
+
+Memória semântica derivada dos documentos:
+${trimContextText(knowledgeMemoryBundle.text || "Sem memória documental relevante para esta pergunta.")}
+
+Documentos e imagens da conversa:
+${trimContextText(supportAssets.fileContext || "Nenhum anexo recente.")}
+
+Dados externos atualizados e busca web:
+${trimContextText(externalToolContext?.text || (shouldUseExternalTools ? "Nenhum resultado externo adicional foi encontrado nesta tentativa." : "Nao foi necessario consultar fonte externa nesta pergunta."))}
+`.trim();
+
+  return {
+    contextText,
+    knowledgeBundle,
+    knowledgeMemoryEntries,
+    knowledgeMemoryBundle,
+    talkersPublicBundle,
+    externalToolContext: externalToolContext || {
+      text: "",
+      sources: [],
+      metrics: {
+        web_search_calls: 0,
+        data_api_calls: 0,
+        external_context_hits: 0,
+      },
+    },
+    mergedKnowledgeSources,
+    toolMetrics: mergeToolUsageMetrics(
+      talkersPublicBundle.metrics || null,
+      externalToolContext?.metrics || null
+    ),
+  };
 }
 
 function shouldShowSourcesForReply(query) {
@@ -4815,7 +5018,7 @@ async function buildOpenAIInput({
     : trimContextText(memoryBundle.text || 'Sem memorias semanticas relevantes para esta pergunta.', CHAT_MEMORY_BLOCK_MAX_CHARS);
 
   const systemText = `
-Voce e a TALKERS IA, assistente corporativa, educacional e operacional da empresa Talkers.
+Voce e a TALKERS IA, assistente moderna, natural, util e confiavel da empresa Talkers.
 Idioma principal da resposta atual: ${getLanguageLabel(userLanguage)}.
 Tom desejado para esta resposta: ${getToneInstruction(intent)}.
 
@@ -4823,15 +5026,18 @@ Comportamento:
 - Detecte automaticamente o idioma do usuario e responda nesse idioma.
 - Quando o usuario pedir traducao, traduza para o idioma solicitado mantendo contexto e intencao.
 - Quando documentos estiverem em outro idioma, interprete o conteudo no idioma original, traduza silenciosamente quando necessario e responda no idioma do usuario.
+- Para perguntas sobre a Talkers, seus cursos, metodologia, contatos, site, presenca publica e comunicacao institucional, priorize a base oficial da Talkers e a base interna quando estiverem disponiveis.
 - Para perguntas sobre processos, materiais, regras, vendas de cursos, atendimento, operacao pedagogica, marketing, financeiro e informacoes da Talkers, priorize sempre a base interna da empresa, a intranet e os arquivos da conversa.
-- Use a web apenas como complemento ou quando o usuario pedir algo externo, atual, publico ou de mercado.
-- Se houver conflito entre base interna e web em assuntos da empresa, avise e priorize a base interna.
+- Para perguntas gerais, atuais, publicas, de mercado, cotacoes, clima, noticias ou dados recentes, use naturalmente o contexto externo, a busca web e os dados atualizados quando eles aparecerem no contexto.
+- Se houver conflito entre base interna e web em assuntos da empresa, avise e priorize a base interna. Para temas gerais e atuais, priorize os dados externos atualizados.
 - Analise a intencao antes de responder, identifique a area do negocio e adapte o tom naturalmente.
 - Sempre que fizer sentido, entregue contexto, explicacao, passo a passo, exemplos, melhores praticas, alertas e proximo passo recomendado.
 - Se o pedido envolver explicacao, orientacao, passo a passo, melhoria de texto, organizacao de informacao, sugestoes, traducao, resumo, reescrita, roteiro, mensagem comercial, comunicado ou texto pronto para uso, entregue em markdown bem estruturado, com hierarquia visual clara, blocos curtos e reutilizaveis.
 - Se o usuario mudar de assunto, foque totalmente no tema atual sem arrastar contexto irrelevante.
 - Se faltar informacao suficiente, deixe isso claro e peca complemento.
 - Nunca responda de forma rasa quando a pergunta pedir profundidade ou aplicacao pratica.
+- Nunca se compare negativamente com outros assistentes, nunca diga que tem menos capacidade, e nunca responda com frases como "nao tenho acesso" se houver contexto atual disponivel.
+- Quando houver valor atual, faixa de cotacao, dado publico ou resultado de busca no contexto, responda de forma direta e util, citando a natureza aproximada do dado quando cabivel.
 
 Contexto do negocio:
 ${businessContextText}
@@ -4875,6 +5081,13 @@ Perfil desta resposta:
 
 function extractResponsePayload(data, baseSources = []) {
   const sources = [];
+  const toolUsage = {
+    web_search_calls: 0,
+    file_search_calls: 0,
+    data_api_calls: 0,
+    talkers_public_hits: 0,
+    external_context_hits: 0,
+  };
   for (const source of baseSources || []) {
     pushUniqueSource(sources, source);
   }
@@ -4910,6 +5123,7 @@ function extractResponsePayload(data, baseSources = []) {
       }
 
       if (item?.type === "file_search_call" && Array.isArray(item.results)) {
+        toolUsage.file_search_calls += 1;
         for (const result of item.results.slice(0, 6)) {
           pushUniqueSource(sources, {
             type: "file_search",
@@ -4921,6 +5135,8 @@ function extractResponsePayload(data, baseSources = []) {
       }
 
       if (item?.type === "web_search_call" && Array.isArray(item.action?.sources)) {
+        toolUsage.web_search_calls += 1;
+        toolUsage.external_context_hits += 1;
         for (const source of item.action.sources.slice(0, 6)) {
           pushUniqueSource(sources, {
             type: "web",
@@ -4937,6 +5153,7 @@ function extractResponsePayload(data, baseSources = []) {
   return {
     text: (text || "").trim() || "Sem resposta da OpenAI.",
     sources: sources.slice(0, 8),
+    tool_usage: toolUsage,
   };
 }
 
@@ -4956,7 +5173,7 @@ async function openaiReply({
   const apiStartedAt = Date.now();
   if (!apiKey) {
     return {
-      text: "Configure OPENAI_API_KEY no servidor para usar a OpenAI.",
+      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: 0,
@@ -5016,7 +5233,7 @@ async function openaiReply({
     const body = await resp.text();
     console.log("OpenAI error:", resp.status, body);
     return {
-      text: "Erro ao consultar a OpenAI.",
+      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: Date.now() - apiStartedAt,
@@ -5037,6 +5254,7 @@ async function openaiReply({
     model,
     payload_bytes: payloadBytes,
     response_bytes: Buffer.byteLength(String(rawBody || ""), "utf8"),
+    ...(payload.tool_usage || {}),
   };
   return payload;
 }
@@ -5058,7 +5276,7 @@ async function openaiReplyStream({
   const apiStartedAt = Date.now();
   if (!apiKey) {
     return {
-      text: "Configure OPENAI_API_KEY no servidor para usar a OpenAI.",
+      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: 0,
@@ -5122,7 +5340,7 @@ async function openaiReplyStream({
     const body = await resp.text();
     console.log("OpenAI stream error:", resp.status, body);
     return {
-      text: "Erro ao consultar a OpenAI.",
+      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: Date.now() - apiStartedAt,
@@ -5193,6 +5411,7 @@ async function openaiReplyStream({
     model,
     payload_bytes: payloadBytes,
     response_bytes: responseBytes,
+    ...(payload.tool_usage || {}),
   };
   return payload;
 }
@@ -7250,11 +7469,10 @@ function maskConnectionTarget(value = "") {
 }
 
 async function buildAdminCockpitPayload() {
-  const [knowledgeCounts, recentProcessingFailureRow, recentTrainingFailureRow, whatsappGroupsRow, whatsappCampaignsRow, whatsappQueueRow] = await Promise.all([
-    get(`SELECT COUNT(*) AS total,
-                SUM(CASE WHEN availability_status='available' THEN 1 ELSE 0 END) AS available_total,
-                SUM(CASE WHEN availability_status='failed' THEN 1 ELSE 0 END) AS failed_total
-           FROM knowledge_sources`),
+  const [knowledgeSourceRows, recentProcessingFailureRow, recentTrainingFailureRow, whatsappGroupsRow, whatsappCampaignsRow, whatsappQueueRow, talkersPublicDiagnostics] = await Promise.all([
+    all(`SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, processing_state_json
+           FROM knowledge_sources
+          ORDER BY id DESC`),
     get(`SELECT COUNT(*) AS total FROM knowledge_processing_logs WHERE stage_status IN ('failed', 'error') AND datetime(created_at) >= datetime('now', '-7 day')`),
     get(`SELECT COUNT(*) AS total FROM ai_training_events WHERE event_status IN ('failed', 'error', 'warning') AND datetime(created_at) >= datetime('now', '-7 day')`),
     get(`SELECT COUNT(*) AS total,
@@ -7270,7 +7488,12 @@ async function buildAdminCockpitPayload() {
                 SUM(CASE WHEN send_status='sent' THEN 1 ELSE 0 END) AS sent_total,
                 SUM(CASE WHEN send_status='error' THEN 1 ELSE 0 END) AS error_total
            FROM pedagogical_whatsapp_campaign_items`),
+    syncTalkersPublicKnowledge({ force: false }).catch(() => getTalkersPublicKnowledgeDiagnostics()),
   ]);
+
+  const knowledgeCounts = summarizeKnowledgeAdminRows(
+    (knowledgeSourceRows || []).map((row) => buildKnowledgeAdminRow(row))
+  );
 
   const localStorageActive = Boolean(uploadsDir || kbDir);
   const openAiConfigured = Boolean(String(process.env.OPENAI_API_KEY || "").trim());
@@ -7312,14 +7535,32 @@ async function buildAdminCockpitPayload() {
       vector_store_id: OPENAI_VECTOR_STORE_ID || "",
       prompt_configured: promptConfigured,
       prompt_id: OPENAI_PROMPT_ID || "",
+      external_search_enabled: true,
+      current_data_tools_enabled: true,
       knowledge_files_total: Number(knowledgeCounts?.total || 0),
-      knowledge_available_total: Number(knowledgeCounts?.available_total || 0),
+      knowledge_available_total: Number(knowledgeCounts?.available || 0),
+      knowledge_failed_total: Number(knowledgeCounts?.failed || 0),
+      talkers_public_base: {
+        status: talkersPublicDiagnostics?.status || "seed",
+        mode: talkersPublicDiagnostics?.mode || "seed",
+        source_count: Number(talkersPublicDiagnostics?.source_count || 0),
+        last_synced_at: talkersPublicDiagnostics?.last_synced_at || null,
+        categories: talkersPublicDiagnostics?.categories || [],
+        origins: talkersPublicDiagnostics?.origins || [],
+        technical_note: talkersPublicDiagnostics?.technical_note || "",
+      },
     },
     services: {
       integrations: [
         { name: "OpenAI API", status: openAiConfigured ? "Ativo" : "Inativo" },
         { name: "Vector Store", status: vectorConfigured ? "Ativo" : "Inativo" },
         { name: "Prompt reutilizável", status: promptConfigured ? "Ativo" : "Inativo" },
+        { name: "Busca web externa", status: "Ativo" },
+        { name: "APIs de dados atuais", status: "Ativo" },
+        {
+          name: "Base pública da Talkers",
+          status: talkersPublicDiagnostics?.status === "active" ? "Ativo" : "Preparado",
+        },
         {
           name: "WhatsApp provider",
           status: whatsappIntegration.execution_enabled
@@ -7366,8 +7607,8 @@ async function buildAdminCockpitPayload() {
     },
     operational_summary: {
       files_total: Number(knowledgeCounts?.total || 0),
-      files_available: Number(knowledgeCounts?.available_total || 0),
-      files_failed: Number(knowledgeCounts?.failed_total || 0),
+      files_available: Number(knowledgeCounts?.available || 0),
+      files_failed: Number(knowledgeCounts?.failed || 0),
       chat_status: chatPerformance.severity,
     },
     whatsapp: {
@@ -7382,6 +7623,7 @@ async function buildAdminCockpitPayload() {
       },
     },
     chat_performance: chatPerformance,
+    talkers_public_base: talkersPublicDiagnostics,
   };
 }
 
@@ -7897,59 +8139,14 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       return res.json({ reply: cachedReply.text, meta: cachedMetaObject });
     }
 
-    const knowledgeBundle = await buildKnowledgeBundle(text, {
-      limit: 4,
+    const contextLayers = await buildConversationKnowledgeContext({
+      text,
       userLanguage,
-      departments: currentUser?.departments || [],
-    });
-    const knowledgeMemoryEntries = await getRelevantKnowledgeDocumentMemories(text, {
-      limit: 4,
+      currentUser,
       queryEmbedding,
-      departments: currentUser?.departments || [],
+      supportAssets,
     });
-    const knowledgeMemoryBundle = buildKnowledgeMemoryBundle(knowledgeMemoryEntries, userLanguage);
-    const shouldUseWebComplement = shouldFetchWebContext(text, {
-      text: [knowledgeBundle.text, knowledgeMemoryBundle.text].filter(Boolean).join("\n\n"),
-    });
-    const mergedKnowledgeSources = [];
-    (knowledgeBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
-    (knowledgeMemoryBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
-
-    let webContext = "";
-    if (shouldUseWebComplement) {
-      try {
-        webContext = await searchWeb(text);
-      } catch (err) {
-        console.log("Erro busca web:", err?.message || err);
-      }
-    }
-
-    const contextText = `
-Data atual no Brasil:
-${nowBrazil()}
-
-Prioridade de fontes:
-1. Base interna da empresa.
-2. Arquivos e anexos da conversa.
-3. Internet apenas como complemento quando necessário.
-
-Idioma detectado do usuário:
-${getLanguageLabel(userLanguage)}
-
-Memória interna da empresa:
-${trimContextText(knowledgeBundle.text || "Sem resultados relevantes da base interna.")}
-
-Memória semântica derivada dos documentos:
-${trimContextText(knowledgeMemoryBundle.text || "Sem memória documental relevante para esta pergunta.")}
-
-Documentos e imagens da conversa:
-${trimContextText(supportAssets.fileContext || "Nenhum anexo recente.")}
-
-Contexto externo complementar:
-${shouldUseWebComplement
-  ? trimContextText(webContext || "Nenhum resultado externo complementar encontrado.")
-  : "Não foi necessário incluir contexto externo fixo nesta pergunta. Use busca web apenas se faltar contexto interno ou se o usuário pedir atualização externa."}
-`.trim();
+    const contextText = contextLayers.contextText;
     const contextAssemblyMs = Date.now() - contextStartedAt;
 
     const assistant = await openaiReply({
@@ -7957,31 +8154,46 @@ ${shouldUseWebComplement
       userId: req.user.sub,
       userText: text,
       contextText,
-      baseSources: mergedKnowledgeSources,
+      baseSources: contextLayers.mergedKnowledgeSources,
       topicSnapshot,
       responseProfile,
       visionInputs: supportAssets.visionInputs || [],
       documentInputs: supportAssets.documentInputs || [],
     });
 
+    let finalAssistantText = String(assistant.text || "").trim();
+    let finalAssistantSources = Array.isArray(assistant.sources) ? assistant.sources : [];
+    const combinedToolMetrics = mergeToolUsageMetrics(
+      contextLayers.toolMetrics || null,
+      assistant.metrics || null
+    );
+
+    if (responseLooksSelfLimiting(finalAssistantText)) {
+      const directFallback = buildExternalContextFallbackAnswer(contextLayers.externalToolContext, userLanguage);
+      if (directFallback) {
+        finalAssistantText = directFallback;
+        finalAssistantSources = (contextLayers.externalToolContext?.sources || []).slice(0, 8);
+      }
+    }
+
     const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
       response_language: userLanguage,
-      sources: assistant.sources || [],
+      sources: finalAssistantSources || [],
       show_sources: shouldShowSourcesForReply(text),
     });
     const persistMetrics = await persistAssistantTextReply({
       conversationId: id,
       userId: req.user.sub,
       userText: text,
-      assistantText: assistant.text,
+      assistantText: finalAssistantText,
       responseProfile,
       responseLanguage: userLanguage,
       metaObject: assistantMetaObject,
-      sources: assistant.sources || [],
+      sources: finalAssistantSources || [],
       queryEmbedding,
       knowledgeSignature,
       relevantMemoryEntries,
-      knowledgeMemoryEntries,
+      knowledgeMemoryEntries: contextLayers.knowledgeMemoryEntries,
       resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
       cacheSemantic: true,
       recordUsage: true,
@@ -7995,13 +8207,14 @@ ${shouldUseWebComplement
       context_assembly_ms: contextAssemblyMs,
       persistence_ms: persistMetrics.persistence_ms,
       prompt_chars: text.length,
-      response_chars: String(assistant?.text || "").length,
+      response_chars: String(finalAssistantText || "").length,
       payload_bytes: Number(assistant?.metrics?.payload_bytes || 0),
-      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(assistant?.text || ""), "utf8")),
+      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(finalAssistantText || ""), "utf8")),
+      ...combinedToolMetrics,
       status: assistant?.metrics?.status || "success",
     });
 
-    res.json({ reply: assistant.text, meta: assistantMetaObject });
+    res.json({ reply: finalAssistantText, meta: assistantMetaObject });
   } catch (err) {
     finalizeChatPerformanceSample(perfSample, {
       total_response_ms: Date.now() - perfSample.started_at,
@@ -8199,59 +8412,14 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       return res.end();
     }
 
-    const knowledgeBundle = await buildKnowledgeBundle(text, {
-      limit: 4,
+    const contextLayers = await buildConversationKnowledgeContext({
+      text,
       userLanguage,
-      departments: currentUser?.departments || [],
-    });
-    const knowledgeMemoryEntries = await getRelevantKnowledgeDocumentMemories(text, {
-      limit: 4,
+      currentUser,
       queryEmbedding,
-      departments: currentUser?.departments || [],
+      supportAssets,
     });
-    const knowledgeMemoryBundle = buildKnowledgeMemoryBundle(knowledgeMemoryEntries, userLanguage);
-    const shouldUseWebComplement = shouldFetchWebContext(text, {
-      text: [knowledgeBundle.text, knowledgeMemoryBundle.text].filter(Boolean).join("\n\n"),
-    });
-    const mergedKnowledgeSources = [];
-    (knowledgeBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
-    (knowledgeMemoryBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
-
-    let webContext = "";
-    if (shouldUseWebComplement) {
-      try {
-        webContext = await searchWeb(text);
-      } catch (err) {
-        console.log("Erro busca web:", err?.message || err);
-      }
-    }
-
-    const contextText = `
-Data atual no Brasil:
-${nowBrazil()}
-
-Prioridade de fontes:
-1. Base interna da empresa.
-2. Arquivos e anexos da conversa.
-3. Internet apenas como complemento quando necessário.
-
-Idioma detectado do usuário:
-${getLanguageLabel(userLanguage)}
-
-Memória interna da empresa:
-${trimContextText(knowledgeBundle.text || "Sem resultados relevantes da base interna.")}
-
-Memória semântica derivada dos documentos:
-${trimContextText(knowledgeMemoryBundle.text || "Sem memória documental relevante para esta pergunta.")}
-
-Documentos e imagens da conversa:
-${trimContextText(supportAssets.fileContext || "Nenhum anexo recente.")}
-
-Contexto externo complementar:
-${shouldUseWebComplement
-  ? trimContextText(webContext || "Nenhum resultado externo complementar encontrado.")
-  : "Não foi necessário incluir contexto externo fixo nesta pergunta. Use busca web apenas se faltar contexto interno ou se o usuário pedir atualização externa."}
-`.trim();
+    const contextText = contextLayers.contextText;
     const contextAssemblyMs = Date.now() - contextStartedAt;
 
     writeEventStreamPacket(res, "stage", {
@@ -8264,7 +8432,7 @@ ${shouldUseWebComplement
       userId: req.user.sub,
       userText: text,
       contextText,
-      baseSources: mergedKnowledgeSources,
+      baseSources: contextLayers.mergedKnowledgeSources,
       topicSnapshot,
       responseProfile,
       visionInputs: supportAssets.visionInputs || [],
@@ -8274,9 +8442,24 @@ ${shouldUseWebComplement
       },
     });
 
+    let finalAssistantText = String(assistant.text || "").trim();
+    let finalAssistantSources = Array.isArray(assistant.sources) ? assistant.sources : [];
+    const combinedToolMetrics = mergeToolUsageMetrics(
+      contextLayers.toolMetrics || null,
+      assistant.metrics || null
+    );
+
+    if (responseLooksSelfLimiting(finalAssistantText)) {
+      const directFallback = buildExternalContextFallbackAnswer(contextLayers.externalToolContext, userLanguage);
+      if (directFallback) {
+        finalAssistantText = directFallback;
+        finalAssistantSources = (contextLayers.externalToolContext?.sources || []).slice(0, 8);
+      }
+    }
+
     const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
       response_language: userLanguage,
-      sources: assistant.sources || [],
+      sources: finalAssistantSources || [],
       show_sources: shouldShowSourcesForReply(text),
     });
     writeEventStreamPacket(res, "stage", {
@@ -8287,15 +8470,15 @@ ${shouldUseWebComplement
       conversationId: id,
       userId: req.user.sub,
       userText: text,
-      assistantText: assistant.text,
+      assistantText: finalAssistantText,
       responseProfile,
       responseLanguage: userLanguage,
       metaObject: assistantMetaObject,
-      sources: assistant.sources || [],
+      sources: finalAssistantSources || [],
       queryEmbedding,
       knowledgeSignature,
       relevantMemoryEntries,
-      knowledgeMemoryEntries,
+      knowledgeMemoryEntries: contextLayers.knowledgeMemoryEntries,
       resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
       cacheSemantic: true,
       recordUsage: true,
@@ -8309,16 +8492,20 @@ ${shouldUseWebComplement
       context_assembly_ms: contextAssemblyMs,
       persistence_ms: persistMetrics.persistence_ms,
       prompt_chars: text.length,
-      response_chars: String(assistant?.text || "").length,
+      response_chars: String(finalAssistantText || "").length,
       payload_bytes: Number(assistant?.metrics?.payload_bytes || 0),
-      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(assistant?.text || ""), "utf8")),
+      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(finalAssistantText || ""), "utf8")),
+      ...combinedToolMetrics,
       status: assistant?.metrics?.status || "success",
     });
 
     writeEventStreamPacket(res, "done", {
-      reply: assistant.text,
+      reply: finalAssistantText,
       meta: assistantMetaObject,
-      metrics: assistant.metrics || {},
+      metrics: {
+        ...(assistant.metrics || {}),
+        ...combinedToolMetrics,
+      },
     });
     res.end();
   } catch (err) {

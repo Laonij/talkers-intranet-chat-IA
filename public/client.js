@@ -850,6 +850,48 @@ function updateEmptyState() {
   chat.classList.toggle("has-messages", hasMessages);
 }
 
+function ensureTypingLoaderStyles() {
+  if (document.getElementById("typing-loader-style")) return;
+  const style = document.createElement("style");
+  style.id = "typing-loader-style";
+  style.textContent = `
+    .typing-loader-wrap{display:inline-flex;align-items:center;min-height:24px;}
+    .typing-loader{display:inline-flex;align-items:flex-end;gap:6px;height:18px;}
+    .typing-loader-dot{width:8px;height:8px;border-radius:999px;background:#64748b;opacity:.35;animation:talkersTypingBounce 1.25s infinite ease-in-out;}
+    .typing-loader-dot:nth-child(2){animation-delay:.15s;}
+    .typing-loader-dot:nth-child(3){animation-delay:.3s;}
+    @keyframes talkersTypingBounce{
+      0%,80%,100%{transform:translateY(0);opacity:.3;}
+      40%{transform:translateY(-4px);opacity:1;}
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function createTypingLoader() {
+  ensureTypingLoaderStyles();
+  const wrap = document.createElement("div");
+  wrap.className = "typing-loader-wrap";
+
+  const loader = document.createElement("div");
+  loader.className = "typing-loader";
+
+  for (let i = 0; i < 3; i += 1) {
+    const dot = document.createElement("span");
+    dot.className = "typing-loader-dot";
+    loader.appendChild(dot);
+  }
+
+  wrap.appendChild(loader);
+  return wrap;
+}
+
+function setAssistantTypingState(shell) {
+  if (!shell?.textNode) return;
+  shell.textNode.innerHTML = "";
+  shell.textNode.appendChild(createTypingLoader());
+}
+
 function addMessage(role, content, meta = null) {
   const chat = el("chat");
   if (!chat) return null;
@@ -898,7 +940,8 @@ function createAssistantStreamShell() {
 
   const textNode = document.createElement("div");
   textNode.className = "msg-text assistant-stream-text";
-  textNode.textContent = t("common.loading", {}, "Carregando...");
+  textNode.setAttribute("aria-label", "Assistente digitando");
+  setAssistantTypingState({ textNode });
 
   plain.appendChild(label);
   plain.appendChild(textNode);
@@ -915,7 +958,13 @@ function createAssistantStreamShell() {
 
 function updateAssistantStreamShell(shell, text) {
   if (!shell?.textNode) return;
-  shell.textNode.textContent = repairDisplayText(text);
+  const safeText = String(text || "");
+  if (!safeText.trim()) {
+    setAssistantTypingState(shell);
+    scrollChat();
+    return;
+  }
+  shell.textNode.textContent = repairDisplayText(safeText);
   scrollChat();
 }
 
@@ -992,14 +1041,14 @@ async function streamConversationReply(convId, text) {
 
       if (eventName === "stage") {
         if (!replyText) {
-          updateAssistantStreamShell(shell, String(payload.label || t("common.loading", {}, "Carregando...")));
+          setAssistantTypingState(shell);
         }
         return;
       }
 
       if (eventName === "delta") {
         replyText += String(payload.delta || payload.text || "");
-        updateAssistantStreamShell(shell, replyText || t("common.loading", {}, "Carregando..."));
+        updateAssistantStreamShell(shell, replyText);
         return;
       }
 

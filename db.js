@@ -55,6 +55,21 @@ function quoteIdent(value) {
   return `"${String(value || "").replace(/"/g, '""')}"`;
 }
 
+function sanitizeText(value) {
+  if (value === null || value === undefined) return null;
+  return String(value)
+    .replace(/\u0000/g, "")
+    .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
+}
+
+function sanitizeLegacySqliteValue(value) {
+  if (value === null || value === undefined) return null;
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  if (typeof value === "string") return sanitizeText(value);
+  return value;
+}
+
 function normalizeSqlForPostgres(sql) {
   return String(sql || "")
     .replace(/datetime\('now'\)/gi, "CURRENT_TIMESTAMP")
@@ -1768,6 +1783,11 @@ async function importLegacySqliteIntoPostgres() {
     const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
+      const migrationSummary = {
+        inserted: 0,
+        skipped: 0,
+        failed: 0,
+      };
 
       const tableOrder = [
         { name: "users", pk: "id", orderBy: "id" },
@@ -1813,9 +1833,17 @@ async function importLegacySqliteIntoPostgres() {
 
       for (const table of tableOrder) {
         if (!availableTables.has(table.name)) continue;
-        const rows = await sqliteAllFrom(legacyDb, `SELECT * FROM ${table.name} ORDER BY ${table.orderBy}`);
+        let rows = [];
+        try {
+          rows = await sqliteAllFrom(legacyDb, `SELECT * FROM ${table.name} ORDER BY ${table.orderBy}`);
+        } catch (err) {
+          console.error(`Falha ao ler tabela legada ${table.name}:`, err?.message || err);
+          continue;
+        }
+
         for (const row of rows) {
-          const entries = Object.entries(row);
+          const rowId = row?.id ?? row?.[table.pk] ?? row?.conversation_id ?? null;
+          const entries = Object.entries(row).map(([key, value]) => [key, sanitizeLegacySqliteValue(value)]);
           if (!entries.length) continue;
           const columns = entries.map(([key]) => quoteIdent(key)).join(", ");
           const placeholders = entries.map((_, index) => `$${index + 1}`).join(", ");
@@ -1823,10 +1851,31 @@ async function importLegacySqliteIntoPostgres() {
           const conflictTarget = Array.isArray(table.conflictColumns) && table.conflictColumns.length
             ? table.conflictColumns.map((column) => quoteIdent(column)).join(", ")
             : quoteIdent(table.pk);
-          await client.query(
-            `INSERT INTO ${quoteIdent(table.name)} (${columns}) VALUES (${placeholders}) ON CONFLICT (${conflictTarget}) DO NOTHING`,
-            values
-          );
+
+          try {
+            await client.query("SAVEPOINT legacy_row_import");
+            const insertResult = await client.query(
+              `INSERT INTO ${quoteIdent(table.name)} (${columns}) VALUES (${placeholders}) ON CONFLICT (${conflictTarget}) DO NOTHING`,
+              values
+            );
+            await client.query("RELEASE SAVEPOINT legacy_row_import");
+            if (Number(insertResult?.rowCount || 0) > 0) {
+              migrationSummary.inserted += 1;
+            } else {
+              migrationSummary.skipped += 1;
+            }
+          } catch (err) {
+            migrationSummary.failed += 1;
+            try {
+              await client.query("ROLLBACK TO SAVEPOINT legacy_row_import");
+            } catch {}
+            console.error("Failed to migrate row", {
+              table: table.name,
+              row_id: rowId,
+              message: err?.message || String(err || "migration_row_failed"),
+              code: err?.code || null,
+            });
+          }
         }
       }
 
@@ -1862,6 +1911,7 @@ async function importLegacySqliteIntoPostgres() {
   await setPostgresSequence(client, "pedagogical_whatsapp_settings", "id");
 
       await client.query("COMMIT");
+      console.log("Resumo da migracao SQLite -> Postgres:", migrationSummary);
       console.log(`Migracao automatica SQLite -> Postgres concluida a partir de ${sqlitePath}.`);
       return true;
     } catch (err) {
@@ -1880,7 +1930,7 @@ async function importLegacySqliteIntoPostgres() {
       } catch {}
     }
     console.log("Falha ao importar SQLite legado:", err?.message || err);
-    throw err;
+    return false;
   }
 }
 

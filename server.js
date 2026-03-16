@@ -4569,14 +4569,18 @@ function buildChatContextStrategy(query = "", responseProfile = null) {
   const fastExternalOnly = looksExternal
     && !looksTalkers
     && !looksInternal;
+  const fastTalkersOnly = looksTalkers && !looksInternal;
+  const fastPath = fastExternalOnly || fastTalkersOnly;
 
   return {
     fastExternalOnly,
-    skipEmbeddings: fastExternalOnly,
-    skipInternalKnowledge: fastExternalOnly,
-    skipKnowledgeMemories: fastExternalOnly,
-    skipConversationMemories: fastExternalOnly,
-    skipSemanticCache: fastExternalOnly,
+    fastTalkersOnly,
+    skipEmbeddings: fastPath,
+    skipInternalKnowledge: fastPath,
+    skipKnowledgeMemories: fastPath,
+    skipConversationMemories: fastPath,
+    skipSemanticCache: fastPath,
+    skipSupportAssets: fastPath,
     looksTalkers,
     looksExternal,
     looksInternal,
@@ -8223,7 +8227,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     const contextStrategy = buildChatContextStrategy(text, responseProfile);
     const [knowledgeSignature, supportAssets, queryEmbedding] = await Promise.all([
       contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
-      contextStrategy.fastExternalOnly
+      contextStrategy.skipSupportAssets
         ? Promise.resolve({
             cache_key: "fast_external",
             fileContext: "",
@@ -8556,7 +8560,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
     const contextStrategy = buildChatContextStrategy(text, responseProfile);
     const [knowledgeSignature, supportAssets, queryEmbedding] = await Promise.all([
       contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
-      contextStrategy.fastExternalOnly
+      contextStrategy.skipSupportAssets
         ? Promise.resolve({
             cache_key: "fast_external",
             fileContext: "",

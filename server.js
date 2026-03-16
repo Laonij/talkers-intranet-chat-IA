@@ -3250,44 +3250,6 @@ async function getConversationHistory(conversationId, limit = 14) {
   }));
 }
 
-
-async function getRecentConversationMessages(conversationId, limit = 8) {
-  return await all(
-    `SELECT role, content, meta_json
-       FROM messages
-      WHERE conversation_id=?
-      ORDER BY id DESC
-      LIMIT ?`,
-    [conversationId, limit]
-  );
-}
-
-function textLooksLikeArtifactContinuation(text = "") {
-  const safe = String(text || "").trim().toLowerCase();
-  if (!safe) return false;
-  return /^(ok|okay|sim|pode|pode gerar|pode criar|gera|gere|manda ver|segue|continue|continua|pode mandar|faz|faça|pode fazer|aprovado|aprovo|fechado|perfeito|isso|essa|esse)(|[!,.?\s])/.test(safe);
-}
-
-async function resolveArtifactContinuation(conversationId, currentText, supportAssets = {}) {
-  if (!textLooksLikeArtifactContinuation(currentText)) return null;
-  const rows = await getRecentConversationMessages(conversationId, 8);
-  for (const row of rows) {
-    if (row.role !== "user") continue;
-    const candidateText = String(row.content || "").trim();
-    if (!candidateText || candidateText === String(currentText || "").trim()) continue;
-    const kind = detectArtifactKind(candidateText, {
-      referenceImages: supportAssets.imageReferences || [],
-    });
-    if (kind) {
-      return {
-        kind,
-        prompt: candidateText,
-      };
-    }
-  }
-  return null;
-}
-
 async function getConversationMemory(conversationId) {
   const row = await get(
     "SELECT summary_text FROM conversation_memories WHERE conversation_id=?",
@@ -5309,6 +5271,45 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
     used_in_this_turn: false,
     explicit_reference: explicitAttachmentReference,
   };
+}
+
+function looksLikeArtifactRetry(text = "") {
+  const value = normalizeQuery(text);
+  if (!value) return false;
+  return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse)\b/.test(value);
+}
+
+async function resolveArtifactRequestForTurn(conversationId, userText, referenceImages = []) {
+  const currentKind = detectArtifactKind(userText, { referenceImages });
+  if (currentKind) {
+    return { prompt: userText, kind: currentKind, source: "current" };
+  }
+
+  if (!looksLikeArtifactRetry(userText)) {
+    return { prompt: userText, kind: null, source: "none" };
+  }
+
+  const rows = await all(
+    `SELECT role, content
+       FROM messages
+      WHERE conversation_id=?
+        AND role='user'
+        AND content IS NOT NULL
+        AND TRIM(content)<>''
+      ORDER BY id DESC
+      LIMIT 20`,
+    [conversationId]
+  );
+
+  for (const row of rows) {
+    const candidate = String(row?.content || "").trim();
+    if (!candidate) continue;
+    const candidateKind = detectArtifactKind(candidate, { referenceImages });
+    if (!candidateKind) continue;
+    return { prompt: candidate, kind: candidateKind, source: "history" };
+  }
+
+  return { prompt: userText, kind: null, source: "none" };
 }
 
 function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
@@ -8480,19 +8481,11 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequestKind = detectArtifactKind(text, {
-      referenceImages: supportAssets.imageReferences || [],
-    });
-    const artifactContinuation = artifactRequestKind
-      ? null
-      : await resolveArtifactContinuation(id, text, supportAssets);
-    const effectiveArtifactKind = artifactRequestKind || artifactContinuation?.kind || null;
-    const artifactPrompt = artifactRequestKind ? text : (artifactContinuation?.prompt || text);
-    const artifact = effectiveArtifactKind
+    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
-          prompt: artifactPrompt,
-          preferredKind: effectiveArtifactKind,
+          prompt: artifactRequest.prompt,
           outDir: uploadsDir,
           referenceImages: supportAssets.imageReferences || [],
         }).catch((err) => {
@@ -8500,72 +8493,6 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
           return null;
         })
       : null;
-
-    if (effectiveArtifactKind && !artifact) {
-      const fallbackReply = effectiveArtifactKind === "image" || effectiveArtifactKind === "image_edit"
-        ? "A solicitação foi entendida como geração de imagem, mas a geração não concluiu nesta tentativa. Tente novamente em alguns segundos com o mesmo pedido."
-        : `A solicitação foi entendida como geração de ${effectiveArtifactKind.toUpperCase()}, mas a geração não concluiu nesta tentativa. Tente novamente em alguns segundos.`;
-      const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: fallbackReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: artifactMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-      });
-      const contextAssemblyMs = Date.now() - contextStartedAt;
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: contextAssemblyMs,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: fallbackReply.length,
-        response_bytes: Buffer.byteLength(String(fallbackReply || ""), "utf8"),
-        status: "artifact_failed",
-      });
-      return res.json({ reply: fallbackReply, meta: artifactMetaObject });
-    }
-
-    if (artifactRequestKind && !artifact) {
-      const fallbackReply = artifactRequestKind === "image" || artifactRequestKind === "image_edit"
-        ? "A solicitação foi entendida como geração de imagem, mas a geração não concluiu nesta tentativa. Tente novamente em alguns segundos com o mesmo pedido."
-        : `A solicitação foi entendida como geração de ${effectiveArtifactKind.toUpperCase()}, mas a geração não concluiu nesta tentativa. Tente novamente em alguns segundos.`;
-      const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: fallbackReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: artifactMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: Date.now() - contextStartedAt,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: fallbackReply.length,
-        response_bytes: Buffer.byteLength(String(fallbackReply || ""), "utf8"),
-        status: "artifact_failed",
-      });
-      writeEventStreamPacket(res, "done", { reply: fallbackReply, meta: artifactMetaObject });
-      return res.end();
-    }
 
     const quickExternalContext = (contextStrategy.fastExternalOnly || contextStrategy.talkersNeedsLiveSearch)
       ? await resolveExternalToolContext(text, {
@@ -8936,13 +8863,11 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequestKind = detectArtifactKind(text, {
-      referenceImages: supportAssets.imageReferences || [],
-    });
-    const artifact = artifactRequestKind
+    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
-          prompt: text,
+          prompt: artifactRequest.prompt,
           outDir: uploadsDir,
           referenceImages: supportAssets.imageReferences || [],
         }).catch((err) => {

@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
@@ -4643,7 +4643,7 @@ function shouldForceLiveTalkersSearch(query = "") {
   if (!value) return false;
   if (!queryLooksAboutTalkers(value)) return false;
 
-  return /(me fale|fale sobre|quem e|o que e|o que eh|site|instagram|whatsapp|telefone|contato|contatos|endereco|unidade|unidades|cidade|cidades|curso|cursos|idioma|idiomas|modalidade|modalidades|metodologia|presenca publica|presen[aç]a p[úu]blica|rede social|redes sociais|publicamente|hoje|atualmente|2025|2026|novo|novidade|novidades|lancamento|lan[çc]amento)/i.test(value);
+  return /(me fale|fale sobre|quem e|o que e|o que eh|site|instagram|whatsapp|telefone|contato|contatos|endereco|unidade|unidades|cidade|cidades|curso|cursos|idioma|idiomas|modalidade|modalidades|metodologia|presenca publica|presen[açc]a publica|rede social|redes sociais|publicamente|hoje|atualmente|2025|2026|novo|novidade|novidades|lancamento|lan[cç]amento)/i.test(value);
 }
 
 function queryLooksInternalWorkspace(query = "") {
@@ -4714,7 +4714,43 @@ function triggerTalkersKnowledgeSync() {
 function responseLooksSelfLimiting(text = "") {
   const safe = String(text || "").trim().toLowerCase();
   if (!safe) return true;
-  return /(minhas limita[cç][oõ]es|nao tenho acesso|não tenho acesso|nao consigo verificar|não consigo verificar|consulte outro site|consultar outro site|sou focad[oa] apenas|nao mantenho um historico|não mantenho um histórico|nao tenho informac|não tenho informac|nao consigo acessar|não consigo acessar)/i.test(safe);
+  return /(minhas limita[cç][oõ]es|algumas limita[cç][oõ]es incluem|nao tenho acesso|não tenho acesso|nao consigo verificar|não consigo verificar|consulte outro site|consultar outro site|sou focad[oa] apenas|nao mantenho um historico|não mantenho um histórico|nao tenho informac|não tenho informac|nao consigo acessar|não consigo acessar|nao posso criar|não posso criar|nao posso gerar|não posso gerar|nao posso baixar|não posso baixar)/i.test(safe);
+}
+
+function queryAsksAboutCapabilities(query = "") {
+  const value = normalizeQuery(query);
+  if (!value) return false;
+  return /(limitacoes|limitações|capacidade|capacidades|recursos|funcionalidades|o que voce faz|o que você faz|o que consegue|o que pode fazer|como voce pode ajudar|como você pode ajudar)/i.test(value);
+}
+
+function buildCapabilitiesAnswer(userLanguage = "pt") {
+  if (String(userLanguage || "pt").startsWith("en")) {
+    return `Today I can help across a broad range of tasks: answer general questions, explain topics in depth, search the web when needed, work with internal knowledge, analyze uploaded files and images, generate images, create PDFs, DOCX files, spreadsheets, code and audio, and help organize operational and institutional information.
+
+## What I can do well today
+- answer general, technical and institutional questions naturally
+- use live external context when the topic needs updated public information
+- use internal company context when relevant
+- analyze PDFs, documents, spreadsheets, images, audio and other uploaded files
+- generate images ready to download when requested
+- create practical artifacts such as PDF, DOCX, XLSX, code and audio
+- summarize, rewrite, translate, structure and improve texts
+
+✅ If you want, I can also run a quick practical test right now with an image, PDF, spreadsheet or presentation request.`;
+  }
+
+  return `Hoje eu consigo ajudar em uma variedade ampla de tarefas: responder perguntas gerais, explicar assuntos com profundidade, pesquisar na web quando necessário, usar conhecimento interno, analisar arquivos e imagens enviados, gerar imagens, criar PDFs, DOCX, planilhas, código e áudio, além de organizar informações operacionais e institucionais.
+
+## O que eu faço bem hoje
+- responder de forma natural sobre temas gerais, técnicos e institucionais
+- usar contexto externo atualizado quando o assunto pede informação pública recente
+- usar contexto interno da empresa quando ele for relevante
+- analisar PDFs, documentos, planilhas, imagens, áudios e outros arquivos enviados
+- gerar imagens prontas para baixar quando você pedir
+- criar artefatos práticos como PDF, DOCX, XLSX, código e áudio
+- resumir, reescrever, traduzir, estruturar e melhorar textos
+
+✅ Se quiser, eu também posso fazer um teste prático agora com imagem, PDF, planilha ou apresentação.`;
 }
 
 function mergeToolUsageMetrics(...metricsList) {
@@ -5388,6 +5424,9 @@ Comportamento:
 - Se nenhum documento ou anexo foi usado neste turno, nunca diga frases como "no documento que voce enviou", "na base interna" ou equivalentes.
 - Se faltar informacao suficiente, deixe isso claro e peca complemento.
 - Nunca responda de forma rasa quando a pergunta pedir profundidade ou aplicacao pratica.
+- Se o usuario perguntar sobre capacidades, recursos ou funcionalidades, descreva primeiro o que a plataforma consegue fazer hoje em linguagem positiva, objetiva e orientada a resultado. Evite listas genericas de limitacoes.
+- Se o usuario pedir imagem, audio, PDF, DOCX, planilha, codigo ou outro artefato suportado, priorize executar a geracao em vez de explicar como ele poderia fazer manualmente.
+- Nunca diga que nao pode criar, gerar ou baixar imagem se a geracao de imagem estiver disponivel na plataforma.
 - Nunca se compare negativamente com outros assistentes, nunca diga que tem menos capacidade, e nunca responda com frases como "nao tenho acesso" se houver contexto atual disponivel.
 - Quando houver valor atual, faixa de cotacao, dado publico ou resultado de busca no contexto, responda de forma direta e util, citando a natureza aproximada do dado quando cabivel.
 - Quando fizer sentido, encerre a resposta com um bloco curto no estilo "✅ Se quiser, posso tambem..." e ofereca de 2 a 4 proximos passos uteis, sem exagerar.
@@ -8452,6 +8491,36 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       return null;
     });
 
+    if (queryAsksAboutCapabilities(text)) {
+      const capabilityReply = buildCapabilitiesAnswer(userLanguage);
+      const capabilityMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: capabilityReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: capabilityMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: capabilityReply.length,
+        response_bytes: Buffer.byteLength(String(capabilityReply || ""), "utf8"),
+        status: "capabilities_answer",
+      });
+      return res.json({ reply: capabilityReply, meta: capabilityMetaObject });
+    }
+
     const quickExternalContext = (contextStrategy.fastExternalOnly || contextStrategy.talkersNeedsLiveSearch)
       ? await resolveExternalToolContext(text, {
           userLanguage,
@@ -8831,6 +8900,37 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       return null;
     });
 
+    if (queryAsksAboutCapabilities(text)) {
+      const capabilityReply = buildCapabilitiesAnswer(userLanguage);
+      const capabilityMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: capabilityReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: capabilityMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: capabilityReply.length,
+        response_bytes: Buffer.byteLength(String(capabilityReply || ""), "utf8"),
+        status: "capabilities_answer",
+      });
+      writeEventStreamPacket(res, "done", { reply: capabilityReply, meta: capabilityMetaObject });
+      return res.end();
+    }
+
     const quickExternalContext = (contextStrategy.fastExternalOnly || contextStrategy.talkersNeedsLiveSearch)
       ? await resolveExternalToolContext(text, {
           userLanguage,
@@ -9047,7 +9147,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
 
     writeEventStreamPacket(res, "stage", {
       stage: "ai",
-      label: "Recebendo resposta da IA",
+      label: "...",
     });
 
     const assistant = await openaiReplyStream({

@@ -151,7 +151,16 @@
     KNOWN_TEXT_REPAIRS.forEach(([pattern, replacement]) => {
       repaired = repaired.split(pattern).join(replacement);
     });
-    return repaired;
+    return repaired
+      .replace(/\u00a0/g, ' ')
+      .replace(/\u202f/g, ' ');
+  }
+  function countCorruptionSignals(value = '') {
+    const safe = String(value ?? '');
+    if (!safe) return 0;
+    const matches = safe.match(/[ÃÂâ€™â€œâ€â€“â€”ï¿½�]/g);
+    const replacementCount = (safe.match(/�/g) || []).length;
+    return Number(matches?.length || 0) + replacementCount;
   }
   function repairMojibakeText(value = '') {
     const safeValue = String(value ?? '');
@@ -161,14 +170,14 @@
       for (let index = 0; index < 2; index += 1) {
         try {
           const candidate = decodeURIComponent(escape(repaired));
-          if (candidate && candidate !== repaired) {
+          if (candidate && candidate !== repaired && countCorruptionSignals(candidate) <= countCorruptionSignals(repaired)) {
             repaired = candidate;
             continue;
           }
         } catch {}
         try {
           const candidate = new TextDecoder('utf-8').decode(Uint8Array.from(repaired, (char) => char.charCodeAt(0)));
-          if (candidate && candidate !== repaired) {
+          if (candidate && candidate !== repaired && countCorruptionSignals(candidate) <= countCorruptionSignals(repaired)) {
             repaired = candidate;
             continue;
           }

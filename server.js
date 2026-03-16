@@ -4538,7 +4538,7 @@ function queryLooksExternalOrCurrent(query = "") {
   const value = String(query || "").trim().toLowerCase();
   if (!value) return false;
 
-  return /(hoje|agora|atual|atualizado|ultim|recente|noticia|noticias|mercado|cotacao|preco|precos|clima|governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado|today|latest|current|news|market|weather|gobierno|actualidad|noticias|oggi|actuel|nouvelles)/i.test(value);
+  return /(hoje|agora|atual|atualizado|ultim|recente|noticia|noticias|mercado|cotacao|preco|precos|clima|tempo|governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado|resultado|placar|jogo|partida|ganhou|quem ganhou|cotac|weather|today|latest|current|news|market|sports|score|match|won|gobierno|actualidad|noticias|oggi|actuel|nouvelles)/i.test(value);
 }
 
 function shouldFetchWebContext(query, knowledgeBundle) {
@@ -4888,9 +4888,11 @@ function buildOpenAIWebSearchTool(legacyWebSearch = false) {
   return {
     type: "web_search",
     search_context_size: "medium",
+    external_web_access: true,
     user_location: {
       type: "approximate",
       country: "BR",
+      timezone: "America/Sao_Paulo",
     },
   };
 }
@@ -7636,6 +7638,10 @@ async function buildAdminCockpitPayload() {
     openai: {
       status: openAiConfigured ? "Ativo" : "Inativo",
       api_configured: openAiConfigured,
+      api_key_status: openAiConfigured ? "Configurada" : "Ausente",
+      responses_api_active: true,
+      streaming_active: true,
+      model: String(process.env.OPENAI_MODEL || "gpt-4o-mini").trim(),
       vector_store_configured: vectorConfigured,
       vector_store_id: OPENAI_VECTOR_STORE_ID || "",
       prompt_configured: promptConfigured,
@@ -8274,7 +8280,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       assistant.metrics || null
     );
 
-    if (responseLooksSelfLimiting(finalAssistantText)) {
+    if (responseLooksSelfLimiting(finalAssistantText) || responseLooksWeak(finalAssistantText)) {
       const directFallback = buildExternalContextFallbackAnswer(contextLayers.externalToolContext, userLanguage);
       if (directFallback) {
         finalAssistantText = directFallback;
@@ -8556,7 +8562,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       assistant.metrics || null
     );
 
-    if (responseLooksSelfLimiting(finalAssistantText)) {
+    if (responseLooksSelfLimiting(finalAssistantText) || responseLooksWeak(finalAssistantText)) {
       const directFallback = buildExternalContextFallbackAnswer(contextLayers.externalToolContext, userLanguage);
       if (directFallback) {
         finalAssistantText = directFallback;

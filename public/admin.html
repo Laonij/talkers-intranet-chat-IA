@@ -2288,7 +2288,8 @@ async function loadAdminCockpit() {
   ]);
 
   renderCockpitList('cockpitIntegrationsList', [
-    { label: 'OpenAI API', value: openai.api_configured ? 'Ativo' : 'Inativo', description: openai.prompt_configured ? `Prompt: ${openai.prompt_id || 'configurado'}` : 'Sem prompt reutilizável ativo' },
+    { label: 'OpenAI API', value: openai.api_key_status || (openai.api_configured ? 'Ativo' : 'Inativo'), description: openai.prompt_configured ? `Prompt: ${openai.prompt_id || 'configurado'}` : 'Sem prompt reutilizável ativo' },
+    { label: 'Modelo e endpoint', value: openai.model || '-', description: openai.responses_api_active ? 'Responses API ativa com streaming.' : 'Responses API indisponível.' },
     { label: 'Vector Store', value: openai.vector_store_configured ? 'Ativo' : 'Inativo', description: openai.vector_store_id || 'Sem ID configurado' },
     { label: 'Arquivos disponíveis para IA', value: String(openai.knowledge_available_total || 0), description: `${String(openai.knowledge_files_total || 0)} arquivo(s) no total` },
     { label: 'Busca externa e APIs', value: openai.external_search_enabled ? 'Ativo' : 'Inativo', description: openai.current_data_tools_enabled ? 'Web search, dados públicos e APIs de contexto atual habilitados.' : 'Ferramentas externas indisponíveis.' },

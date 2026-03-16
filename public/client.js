@@ -818,13 +818,13 @@ function appendSources(bubble, meta) {
 
     const label = document.createElement("div");
     label.className = "source-label";
-    label.textContent = source?.label || safeUrl || "Fonte";
+    label.textContent = repairDisplayText(source?.label || safeUrl || "Fonte");
     item.appendChild(label);
 
     if (source?.excerpt) {
       const excerpt = document.createElement("div");
       excerpt.className = "source-excerpt";
-      excerpt.textContent = source.excerpt;
+      excerpt.textContent = repairDisplayText(source.excerpt);
       item.appendChild(excerpt);
     }
 

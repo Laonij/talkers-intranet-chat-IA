@@ -52,7 +52,7 @@ const {
   isSupportedOpenAIInputFile,
   uploadFileToOpenAI,
 } = require("./lib/rag");
-const { resolveExternalToolContext } = require("./lib/webSearch");
+const { queryLooksCurrent, resolveExternalToolContext } = require("./lib/webSearch");
 const {
   buildTalkersPublicKnowledgeBundle,
   getTalkersPublicKnowledgeDiagnostics,
@@ -90,6 +90,7 @@ const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
 const MAX_CONVERSATION_MEMORY = 6000;
 const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
 const OPENAI_EMBEDDING_MODEL = String(process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small").trim();
+const OPENAI_EMBEDDING_TIMEOUT_MS = Math.max(1500, Number(process.env.OPENAI_EMBEDDING_TIMEOUT_MS || 3500));
 const OPENAI_PROMPT_ID = String(process.env.OPENAI_PROMPT_ID || "").trim();
 const OPENAI_PROMPT_VERSION = String(process.env.OPENAI_PROMPT_VERSION || "").trim();
 const OPENAI_PROMPT_VARIABLES_JSON = String(process.env.OPENAI_PROMPT_VARIABLES_JSON || "").trim();
@@ -3427,10 +3428,12 @@ async function persistConversationMemories({
   return createdIds;
 }
 
-async function getRelevantMemoryEntries(userId, conversationId, queryText, limit = 4) {
+async function getRelevantMemoryEntries(userId, conversationId, queryText, limit = 4, options = {}) {
   if (!userId || !String(queryText || "").trim()) return [];
 
-  const queryEmbedding = await getEmbeddingForText(queryText);
+  const queryEmbedding = Object.prototype.hasOwnProperty.call(options, "queryEmbedding")
+    ? options.queryEmbedding
+    : await getEmbeddingForText(queryText);
   const topicTerms = new Set(extractTopicTerms(queryText));
   const rows = await all(
     `SELECT id, user_id, conversation_id, memory_scope, memory_kind, title, content_text, topics_json, language, embedding_json, updated_at
@@ -3685,6 +3688,9 @@ async function getEmbeddingForText(text) {
   const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey || !text) return null;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_EMBEDDING_TIMEOUT_MS);
+
   try {
     const resp = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
@@ -3692,6 +3698,7 @@ async function getEmbeddingForText(text) {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
+      signal: controller.signal,
       body: JSON.stringify({
         model: OPENAI_EMBEDDING_MODEL,
         input: String(text).slice(0, 6000),
@@ -3706,8 +3713,14 @@ async function getEmbeddingForText(text) {
     const data = await resp.json();
     return Array.isArray(data?.data?.[0]?.embedding) ? data.data[0].embedding : null;
   } catch (err) {
+    if (err?.name === "AbortError") {
+      console.log("Embedding cancelado por timeout.");
+      return null;
+    }
     console.log('Falha ao gerar embedding:', err?.message || err);
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -4535,10 +4548,39 @@ async function saveSemanticCache(userId, queryText, queryLanguage, responseText,
 }
 
 function queryLooksExternalOrCurrent(query = "") {
-  const value = String(query || "").trim().toLowerCase();
+  const value = normalizeQuery(query);
   if (!value) return false;
 
-  return /(hoje|agora|atual|atualizado|ultim|recente|noticia|noticias|mercado|cotacao|preco|precos|clima|tempo|governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado|resultado|placar|jogo|partida|ganhou|quem ganhou|cotac|weather|today|latest|current|news|market|sports|score|match|won|gobierno|actualidad|noticias|oggi|actuel|nouvelles)/i.test(value);
+  return queryLooksCurrent(value)
+    || /(governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado|gobierno|actualidad|oggi|actuel|nouvelles)/i.test(value);
+}
+
+function queryLooksInternalWorkspace(query = "") {
+  const value = normalizeQuery(query);
+  if (!value) return false;
+
+  return /(talkers|intranet|departamento|departamentos|documento|documentos|arquivo|arquivos|processo|processos|agenda|dashboard|marketing|pedagog|pedag[oó]gic|financeir|comercial|matricula|matr[ií]cula|aluno|alunos|campanha|campanhas|whatsapp|usuario|usu[aá]rio|colaborador|time|crm|closer|rh|jur[ií]dic|professor|professores)/i.test(value);
+}
+
+function buildChatContextStrategy(query = "", responseProfile = null) {
+  const looksTalkers = queryLooksAboutTalkers(query);
+  const looksExternal = queryLooksExternalOrCurrent(query);
+  const looksInternal = queryLooksInternalWorkspace(query);
+  const fastExternalOnly = looksExternal
+    && !looksTalkers
+    && !looksInternal;
+
+  return {
+    fastExternalOnly,
+    skipEmbeddings: fastExternalOnly,
+    skipInternalKnowledge: fastExternalOnly,
+    skipKnowledgeMemories: fastExternalOnly,
+    skipConversationMemories: fastExternalOnly,
+    skipSemanticCache: fastExternalOnly,
+    looksTalkers,
+    looksExternal,
+    looksInternal,
+  };
 }
 
 function shouldFetchWebContext(query, knowledgeBundle) {
@@ -4596,22 +4638,57 @@ async function buildConversationKnowledgeContext({
   currentUser,
   queryEmbedding,
   supportAssets,
+  strategy = null,
+  preloadedExternalToolContext = null,
 }) {
-  const knowledgeBundle = await buildKnowledgeBundle(text, {
-    limit: 4,
-    userLanguage,
-    departments: currentUser?.departments || [],
-  });
-  const knowledgeMemoryEntries = await getRelevantKnowledgeDocumentMemories(text, {
-    limit: 4,
-    queryEmbedding,
-    departments: currentUser?.departments || [],
-  });
+  const contextStrategy = strategy || buildChatContextStrategy(text);
+  const emptyKnowledgeBundle = { text: "", sources: [], rows: [] };
+  const emptyPublicBundle = {
+    text: "",
+    sources: [],
+    categories: [],
+    last_updated_at: null,
+    metrics: { talkers_public_hits: 0 },
+  };
+
+  const knowledgeBundlePromise = contextStrategy.skipInternalKnowledge
+    ? Promise.resolve(emptyKnowledgeBundle)
+    : buildKnowledgeBundle(text, {
+        limit: 4,
+        userLanguage,
+        departments: currentUser?.departments || [],
+      }).catch((err) => {
+        console.log("Erro ao montar base interna da conversa:", err?.message || err);
+        return emptyKnowledgeBundle;
+      });
+
+  const knowledgeMemoryEntriesPromise = contextStrategy.skipKnowledgeMemories
+    ? Promise.resolve([])
+    : getRelevantKnowledgeDocumentMemories(text, {
+        limit: 4,
+        queryEmbedding,
+        departments: currentUser?.departments || [],
+      }).catch((err) => {
+        console.log("Erro ao montar memoria documental da conversa:", err?.message || err);
+        return [];
+      });
+
+  const talkersPublicBundlePromise = contextStrategy.looksTalkers
+    ? buildTalkersPublicKnowledgeBundle(text, {
+        limit: 4,
+        userLanguage,
+      }).catch((err) => {
+        console.log("Erro ao montar base publica da Talkers:", err?.message || err);
+        return emptyPublicBundle;
+      })
+    : Promise.resolve(emptyPublicBundle);
+
+  const [knowledgeBundle, knowledgeMemoryEntries, talkersPublicBundle] = await Promise.all([
+    knowledgeBundlePromise,
+    knowledgeMemoryEntriesPromise,
+    talkersPublicBundlePromise,
+  ]);
   const knowledgeMemoryBundle = buildKnowledgeMemoryBundle(knowledgeMemoryEntries, userLanguage);
-  const talkersPublicBundle = await buildTalkersPublicKnowledgeBundle(text, {
-    limit: 4,
-    userLanguage,
-  });
 
   const mergedKnowledgeSources = [];
   (talkersPublicBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
@@ -4624,19 +4701,22 @@ async function buildConversationKnowledgeContext({
     knowledgeMemoryBundle.text || "",
   ].filter(Boolean).join("\n\n");
 
-  const shouldUseExternalTools = shouldFetchWebContext(text, { text: layeredKnowledgeText })
-    || queryLooksAboutTalkers(text)
-    || queryLooksExternalOrCurrent(text);
+  const shouldUseExternalTools = contextStrategy.fastExternalOnly
+    || shouldFetchWebContext(text, { text: layeredKnowledgeText })
+    || contextStrategy.looksTalkers
+    || contextStrategy.looksExternal;
 
-  const externalToolContext = shouldUseExternalTools
-    ? await resolveExternalToolContext(text, {
-        userLanguage,
-        forceWebSearch: queryLooksExternalOrCurrent(text),
-      }).catch((err) => {
-        console.log("Erro ao montar contexto externo:", err?.message || err);
-        return null;
-      })
-    : null;
+  const externalToolContext = preloadedExternalToolContext
+    ? preloadedExternalToolContext
+    : shouldUseExternalTools
+      ? await resolveExternalToolContext(text, {
+          userLanguage,
+          forceWebSearch: contextStrategy.looksExternal,
+        }).catch((err) => {
+          console.log("Erro ao montar contexto externo:", err?.message || err);
+          return null;
+        })
+      : null;
 
   (externalToolContext?.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
 
@@ -5019,28 +5099,32 @@ async function buildOpenAIInput({
   contextText,
   topicSnapshot = null,
   responseProfile = null,
+  currentUser = null,
+  relevantMemoryEntries = null,
   visionInputs = null,
   documentInputs = null,
 }) {
   const snapshot = topicSnapshot || await getConversationTopicSnapshot(conversationId, userText, CHAT_HISTORY_CONTEXT_LIMIT);
   const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
   const topicShift = snapshot?.topicShift || { isShift: false, reason: 'unknown' };
-  const currentUser = await getUserById(userId);
+  const resolvedUser = currentUser || await getUserById(userId);
   const userLanguage = normalizeLanguageCode(responseProfile?.language || detectConversationLanguage(userText, history));
   const intent = responseProfile || analyzeConversationIntent(userText, userLanguage, {
-    departments: currentUser?.departments || [],
+    departments: resolvedUser?.departments || [],
   });
   const memory = await getConversationMemory(conversationId);
   const userMemory = await getRelevantUserMemory(userId, userText);
-  const memoryEntries = topicShift.isShift
-    ? []
-    : await getRelevantMemoryEntries(userId, conversationId, userText, 4);
+  const memoryEntries = Array.isArray(relevantMemoryEntries)
+    ? relevantMemoryEntries
+    : topicShift.isShift
+      ? []
+      : await getRelevantMemoryEntries(userId, conversationId, userText, 4);
   const memoryBundle = buildMemoryContextBundle(memoryEntries);
   const supportVisionInputs = Array.isArray(visionInputs) ? visionInputs : await getRecentVisionInputs(conversationId, 3);
   const supportDocumentInputs = Array.isArray(documentInputs) ? documentInputs : await getRecentDocumentInputs(conversationId, 2);
   const normalizedUserText = String(userText || '').trim();
   const businessContextText = buildBusinessContextBlock({
-    user: currentUser || {},
+    user: resolvedUser || {},
     businessIntent: intent.businessIntent,
     userLanguageLabel: getLanguageLabel(userLanguage),
   });
@@ -5212,6 +5296,8 @@ async function openaiReply({
   baseSources = [],
   topicSnapshot = null,
   responseProfile = null,
+  currentUser = null,
+  relevantMemoryEntries = null,
   visionInputs = null,
   documentInputs = null,
 }) {
@@ -5237,11 +5323,13 @@ async function openaiReply({
     contextText,
     topicSnapshot,
     responseProfile,
+    currentUser,
+    relevantMemoryEntries,
     visionInputs,
     documentInputs,
   });
-  const currentUser = await getUserById(userId).catch(() => null);
-  const prompt = buildOpenAIPromptConfig(currentUser, responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)), responseProfile?.language);
+  const resolvedUser = currentUser || await getUserById(userId).catch(() => null);
+  const prompt = buildOpenAIPromptConfig(resolvedUser, responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)), responseProfile?.language);
 
   let legacyWebSearch = false;
   let requestBody = buildOpenAIResponsesRequestBody({
@@ -5343,6 +5431,8 @@ async function openaiReplyStream({
   baseSources = [],
   topicSnapshot = null,
   responseProfile = null,
+  currentUser = null,
+  relevantMemoryEntries = null,
   visionInputs = null,
   documentInputs = null,
   onDelta = null,
@@ -5369,12 +5459,14 @@ async function openaiReplyStream({
     contextText,
     topicSnapshot,
     responseProfile,
+    currentUser,
+    relevantMemoryEntries,
     visionInputs,
     documentInputs,
   });
-  const currentUser = await getUserById(userId).catch(() => null);
+  const resolvedUser = currentUser || await getUserById(userId).catch(() => null);
   const prompt = buildOpenAIPromptConfig(
-    currentUser,
+    resolvedUser,
     responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)),
     responseProfile?.language
   );
@@ -8128,12 +8220,23 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     }
 
     const contextStartedAt = Date.now();
-    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift
+    const contextStrategy = buildChatContextStrategy(text, responseProfile);
+    const [knowledgeSignature, supportAssets, queryEmbedding] = await Promise.all([
+      contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
+      contextStrategy.fastExternalOnly
+        ? Promise.resolve({
+            cache_key: "fast_external",
+            fileContext: "",
+            visionInputs: [],
+            documentInputs: [],
+            imageReferences: [],
+          })
+        : getConversationSupportAssets(id),
+      contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
+    ]);
+    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
       ? []
-      : await getRelevantMemoryEntries(req.user.sub, id, text, 4);
-    const knowledgeSignature = await getKnowledgeSignatureValue();
-    const queryEmbedding = await getEmbeddingForText(text);
-    const supportAssets = await getConversationSupportAssets(id);
+      : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
     const artifact = await generateArtifact({
       apiKey: process.env.OPENAI_API_KEY || "",
@@ -8144,6 +8247,16 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       console.log("Erro na geracao de artefato:", err?.message || err);
       return null;
     });
+
+    const quickExternalContext = contextStrategy.fastExternalOnly
+      ? await resolveExternalToolContext(text, {
+          userLanguage,
+          forceWebSearch: true,
+        }).catch((err) => {
+          console.log("Erro no contexto externo rapido:", err?.message || err);
+          return null;
+        })
+      : null;
 
     if (artifact) {
       if (!artifact.fullPath) {
@@ -8211,6 +8324,43 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       return res.json({ reply: artifact.reply, meta: { ...saved.meta, response_language: userLanguage } });
     }
 
+    if (contextStrategy.fastExternalOnly && String(quickExternalContext?.direct_answer || "").trim()) {
+      const directReply = repairMojibakeText(String(quickExternalContext.direct_answer || "").trim());
+      const directSources = Array.isArray(quickExternalContext?.sources) ? quickExternalContext.sources.slice(0, 8) : [];
+      const directMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+        sources: directSources,
+        show_sources: shouldShowSourcesForReply(text),
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: directReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: directMetaObject,
+        sources: directSources,
+        relevantMemoryEntries,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        recordUsage: true,
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: directReply.length,
+        response_bytes: Buffer.byteLength(String(directReply || ""), "utf8"),
+        ...mergeToolUsageMetrics(quickExternalContext?.metrics || null),
+        status: "tool_direct_answer",
+      });
+      return res.json({ reply: directReply, meta: directMetaObject });
+    }
+
     const cachedReply = !queryLooksExternalOrCurrent(text)
       ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
       : null;
@@ -8257,6 +8407,8 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       currentUser,
       queryEmbedding,
       supportAssets,
+      strategy: contextStrategy,
+      preloadedExternalToolContext: quickExternalContext,
     });
     const contextText = contextLayers.contextText;
     const contextAssemblyMs = Date.now() - contextStartedAt;
@@ -8269,6 +8421,8 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       baseSources: contextLayers.mergedKnowledgeSources,
       topicSnapshot,
       responseProfile,
+      currentUser,
+      relevantMemoryEntries,
       visionInputs: supportAssets.visionInputs || [],
       documentInputs: supportAssets.documentInputs || [],
     });
@@ -8399,12 +8553,23 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
     });
 
     const contextStartedAt = Date.now();
-    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift
+    const contextStrategy = buildChatContextStrategy(text, responseProfile);
+    const [knowledgeSignature, supportAssets, queryEmbedding] = await Promise.all([
+      contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
+      contextStrategy.fastExternalOnly
+        ? Promise.resolve({
+            cache_key: "fast_external",
+            fileContext: "",
+            visionInputs: [],
+            documentInputs: [],
+            imageReferences: [],
+          })
+        : getConversationSupportAssets(id),
+      contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
+    ]);
+    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
       ? []
-      : await getRelevantMemoryEntries(req.user.sub, id, text, 4);
-    const knowledgeSignature = await getKnowledgeSignatureValue();
-    const queryEmbedding = await getEmbeddingForText(text);
-    const supportAssets = await getConversationSupportAssets(id);
+      : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
     const artifact = await generateArtifact({
       apiKey: process.env.OPENAI_API_KEY || "",
@@ -8415,6 +8580,16 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       console.log("Erro na geracao de artefato:", err?.message || err);
       return null;
     });
+
+    const quickExternalContext = contextStrategy.fastExternalOnly
+      ? await resolveExternalToolContext(text, {
+          userLanguage,
+          forceWebSearch: true,
+        }).catch((err) => {
+          console.log("Erro no contexto externo rapido:", err?.message || err);
+          return null;
+        })
+      : null;
 
     if (artifact) {
       if (!artifact.fullPath) {
@@ -8485,6 +8660,44 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       return res.end();
     }
 
+    if (contextStrategy.fastExternalOnly && String(quickExternalContext?.direct_answer || "").trim()) {
+      const directReply = repairMojibakeText(String(quickExternalContext.direct_answer || "").trim());
+      const directSources = Array.isArray(quickExternalContext?.sources) ? quickExternalContext.sources.slice(0, 8) : [];
+      const directMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+        sources: directSources,
+        show_sources: shouldShowSourcesForReply(text),
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: directReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: directMetaObject,
+        sources: directSources,
+        relevantMemoryEntries,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        recordUsage: true,
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: directReply.length,
+        response_bytes: Buffer.byteLength(String(directReply || ""), "utf8"),
+        ...mergeToolUsageMetrics(quickExternalContext?.metrics || null),
+        status: "tool_direct_answer",
+      });
+      writeEventStreamPacket(res, "done", { reply: directReply, meta: directMetaObject });
+      return res.end();
+    }
+
     const cachedReply = !queryLooksExternalOrCurrent(text)
       ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
       : null;
@@ -8531,6 +8744,8 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       currentUser,
       queryEmbedding,
       supportAssets,
+      strategy: contextStrategy,
+      preloadedExternalToolContext: quickExternalContext,
     });
     const contextText = contextLayers.contextText;
     const contextAssemblyMs = Date.now() - contextStartedAt;
@@ -8548,6 +8763,8 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       baseSources: contextLayers.mergedKnowledgeSources,
       topicSnapshot,
       responseProfile,
+      currentUser,
+      relevantMemoryEntries,
       visionInputs: supportAssets.visionInputs || [],
       documentInputs: supportAssets.documentInputs || [],
       onDelta: async (delta) => {

@@ -4559,7 +4559,7 @@ function queryLooksInternalWorkspace(query = "") {
   const value = normalizeQuery(query);
   if (!value) return false;
 
-  return /(talkers|intranet|departamento|departamentos|documento|documentos|arquivo|arquivos|processo|processos|agenda|dashboard|marketing|pedagog|pedag[oó]gic|financeir|comercial|matricula|matr[ií]cula|aluno|alunos|campanha|campanhas|whatsapp|usuario|usu[aá]rio|colaborador|time|crm|closer|rh|jur[ií]dic|professor|professores)/i.test(value);
+  return /(intranet|departamento|departamentos|documento|documentos|arquivo|arquivos|processo|processos|agenda|dashboard|marketing|pedagog|pedag[oó]gic|financeir|comercial|matricula|matr[ií]cula|aluno|alunos|campanha|campanhas|whatsapp|usuario|usu[aá]rio|colaborador|time|crm|closer|rh|jur[ií]dic|professor|professores)/i.test(value);
 }
 
 function buildChatContextStrategy(query = "", responseProfile = null) {
@@ -4634,6 +4634,10 @@ function buildExternalContextFallbackAnswer(externalToolContext = null, userLang
     return `I found updated public context for this question:\n- ${lines.join("\n- ")}`;
   }
   return `Encontrei este contexto público atualizado para a sua pergunta:\n- ${lines.join("\n- ")}`;
+}
+
+function buildTalkersContextFallbackAnswer(talkersPublicBundle = null) {
+  return repairMojibakeText(String(talkersPublicBundle?.direct_answer || "").trim());
 }
 
 async function buildConversationKnowledgeContext({
@@ -5019,6 +5023,27 @@ function buildOpenAIResponsesRequestBody({
   return requestBody;
 }
 
+async function postOpenAIResponses(apiKey, requestBody) {
+  try {
+    return await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+  } catch (err) {
+    console.log("Falha de rede ao chamar OpenAI Responses:", err?.message || err);
+    return {
+      ok: false,
+      status: 0,
+      body: null,
+      text: async () => String(err?.message || err || "network_error"),
+    };
+  }
+}
+
 function shouldRetryWithLegacyWebSearch(status, bodyText = "") {
   const safeBody = String(bodyText || "").toLowerCase();
   if (!status || status < 400) return false;
@@ -5344,28 +5369,14 @@ async function openaiReply({
   });
   let payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
 
-  let resp = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
+  let resp = await postOpenAIResponses(apiKey, requestBody);
 
   if (!resp.ok && prompt) {
     const body = await resp.text();
     console.log("OpenAI prompt fallback:", resp.status, body);
     const fallbackBody = { ...requestBody };
     delete fallbackBody.prompt;
-    resp = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(fallbackBody),
-    });
+    resp = await postOpenAIResponses(apiKey, fallbackBody);
   }
 
   if (!resp.ok) {
@@ -5380,14 +5391,7 @@ async function openaiReply({
         legacyWebSearch,
       });
       payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
-      resp = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
+      resp = await postOpenAIResponses(apiKey, requestBody);
     } else {
       resp = {
         ok: false,
@@ -5484,28 +5488,14 @@ async function openaiReplyStream({
   });
   let payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
 
-  let resp = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
+  let resp = await postOpenAIResponses(apiKey, requestBody);
 
   if (!resp.ok && prompt) {
     const body = await resp.text();
     console.log("OpenAI prompt fallback (stream):", resp.status, body);
     const fallbackBody = { ...requestBody };
     delete fallbackBody.prompt;
-    resp = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(fallbackBody),
-    });
+    resp = await postOpenAIResponses(apiKey, fallbackBody);
   }
 
   if (!resp.ok) {
@@ -5521,14 +5511,7 @@ async function openaiReplyStream({
         legacyWebSearch,
       });
       payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
-      resp = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
+      resp = await postOpenAIResponses(apiKey, requestBody);
     } else {
       resp = {
         ok: false,
@@ -8414,6 +8397,46 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       strategy: contextStrategy,
       preloadedExternalToolContext: quickExternalContext,
     });
+    if (contextStrategy.fastTalkersOnly) {
+      const talkersDirectReply = buildTalkersContextFallbackAnswer(contextLayers.talkersPublicBundle);
+      if (talkersDirectReply) {
+        const talkersSources = Array.isArray(contextLayers.talkersPublicBundle?.sources)
+          ? contextLayers.talkersPublicBundle.sources.slice(0, 8)
+          : [];
+        const talkersMetaObject = makeStructuredResponseMeta(responseProfile, {
+          response_language: userLanguage,
+          sources: talkersSources,
+          show_sources: shouldShowSourcesForReply(text),
+        });
+        const persistMetrics = await persistAssistantTextReply({
+          conversationId: id,
+          userId: req.user.sub,
+          userText: text,
+          assistantText: talkersDirectReply,
+          responseProfile,
+          responseLanguage: userLanguage,
+          metaObject: talkersMetaObject,
+          sources: talkersSources,
+          relevantMemoryEntries,
+          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+          recordUsage: true,
+          allowWeakResponseLog: false,
+        });
+        finalizeChatPerformanceSample(perfSample, {
+          total_response_ms: Date.now() - perfSample.started_at,
+          api_latency_ms: 0,
+          internal_processing_ms: Date.now() - perfSample.started_at,
+          context_assembly_ms: Date.now() - contextStartedAt,
+          persistence_ms: persistMetrics.persistence_ms,
+          prompt_chars: text.length,
+          response_chars: talkersDirectReply.length,
+          response_bytes: Buffer.byteLength(String(talkersDirectReply || ""), "utf8"),
+          ...mergeToolUsageMetrics(contextLayers.toolMetrics || null),
+          status: "talkers_direct_answer",
+        });
+        return res.json({ reply: talkersDirectReply, meta: talkersMetaObject });
+      }
+    }
     const contextText = contextLayers.contextText;
     const contextAssemblyMs = Date.now() - contextStartedAt;
 
@@ -8751,6 +8774,47 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       strategy: contextStrategy,
       preloadedExternalToolContext: quickExternalContext,
     });
+    if (contextStrategy.fastTalkersOnly) {
+      const talkersDirectReply = buildTalkersContextFallbackAnswer(contextLayers.talkersPublicBundle);
+      if (talkersDirectReply) {
+        const talkersSources = Array.isArray(contextLayers.talkersPublicBundle?.sources)
+          ? contextLayers.talkersPublicBundle.sources.slice(0, 8)
+          : [];
+        const talkersMetaObject = makeStructuredResponseMeta(responseProfile, {
+          response_language: userLanguage,
+          sources: talkersSources,
+          show_sources: shouldShowSourcesForReply(text),
+        });
+        const persistMetrics = await persistAssistantTextReply({
+          conversationId: id,
+          userId: req.user.sub,
+          userText: text,
+          assistantText: talkersDirectReply,
+          responseProfile,
+          responseLanguage: userLanguage,
+          metaObject: talkersMetaObject,
+          sources: talkersSources,
+          relevantMemoryEntries,
+          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+          recordUsage: true,
+          allowWeakResponseLog: false,
+        });
+        finalizeChatPerformanceSample(perfSample, {
+          total_response_ms: Date.now() - perfSample.started_at,
+          api_latency_ms: 0,
+          internal_processing_ms: Date.now() - perfSample.started_at,
+          context_assembly_ms: Date.now() - contextStartedAt,
+          persistence_ms: persistMetrics.persistence_ms,
+          prompt_chars: text.length,
+          response_chars: talkersDirectReply.length,
+          response_bytes: Buffer.byteLength(String(talkersDirectReply || ""), "utf8"),
+          ...mergeToolUsageMetrics(contextLayers.toolMetrics || null),
+          status: "talkers_direct_answer",
+        });
+        writeEventStreamPacket(res, "done", { reply: talkersDirectReply, meta: talkersMetaObject });
+        return res.end();
+      }
+    }
     const contextText = contextLayers.contextText;
     const contextAssemblyMs = Date.now() - contextStartedAt;
 

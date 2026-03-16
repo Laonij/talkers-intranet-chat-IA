@@ -53,12 +53,12 @@ const {
   uploadFileToOpenAI,
 } = require("./lib/rag");
 const { queryLooksCurrent, resolveExternalToolContext } = require("./lib/webSearch");
+const talkersPublicKnowledge = require("./lib/talkersPublicKnowledge");
 const {
   buildTalkersPublicKnowledgeBundle,
   getTalkersPublicKnowledgeDiagnostics,
   queryLooksAboutTalkers,
-  scheduleTalkersKnowledgeSync,
-} = require("./lib/talkersPublicKnowledge");
+} = talkersPublicKnowledge;
 const {
   analyzeBusinessIntent,
   buildBusinessContextBlock,
@@ -4683,6 +4683,24 @@ function talkersQueryNeedsFreshWebContext(query = "") {
   return /(instagram|facebook|youtube|rede social|redes sociais|post|posts|publicacao|publicação|publicou|publica|blog|site|novidade|novidades|recente|ultim|últim|evento|campanha)/i.test(normalized);
 }
 
+function triggerTalkersKnowledgeSync() {
+  const syncFn = talkersPublicKnowledge?.scheduleTalkersKnowledgeSync;
+  if (typeof syncFn !== "function") {
+    console.warn("Sincronização da base pública da Talkers indisponível neste carregamento.");
+    return Promise.resolve(null);
+  }
+
+  try {
+    return Promise.resolve(syncFn()).catch((err) => {
+      console.error("Erro ao sincronizar base pública da Talkers em segundo plano:", err?.message || err);
+      return null;
+    });
+  } catch (err) {
+    console.error("Erro ao iniciar sincronização da base pública da Talkers:", err?.message || err);
+    return Promise.resolve(null);
+  }
+}
+
 function responseLooksSelfLimiting(text = "") {
   const safe = String(text || "").trim().toLowerCase();
   if (!safe) return true;
@@ -7787,11 +7805,7 @@ function maskConnectionTarget(value = "") {
 }
 
 async function buildAdminCockpitPayload() {
-  scheduleTalkersKnowledgeSync().catch((err) => {
-    console.error("Erro na sincronização em background da base pública da Talkers:", buildExternalErrorDetails(err, {
-      label: "talkers_public_sync_background",
-    }));
-  });
+  triggerTalkersKnowledgeSync();
   const [knowledgeSourceRows, recentProcessingFailureRow, recentTrainingFailureRow, whatsappGroupsRow, whatsappCampaignsRow, whatsappQueueRow, talkersPublicDiagnostics] = await Promise.all([
     all(`SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, processing_state_json
            FROM knowledge_sources
@@ -11242,11 +11256,7 @@ async function startServer() {
     console.log(`Login: ${BASE_URL}/login.html`);
     console.log(`Banco ativo: ${DB_CLIENT}`);
     scheduleKnowledgeBackfillSweep(3 * 1000);
-    scheduleTalkersKnowledgeSync().catch((err) => {
-      console.error("Erro na sincronização da base pública após iniciar o servidor:", buildExternalErrorDetails(err, {
-        label: "talkers_public_sync_startup",
-      }));
-    });
+    triggerTalkersKnowledgeSync();
   });
 }
 

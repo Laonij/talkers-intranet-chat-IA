@@ -4638,6 +4638,14 @@ function queryLooksExternalOrCurrent(query = "") {
     || /(governo|lei|extern|internet|pesquise|pesquisar|web|site|sites|tendencia|publicado|gobierno|actualidad|oggi|actuel|nouvelles)/i.test(value);
 }
 
+function shouldForceLiveTalkersSearch(query = "") {
+  const value = normalizeQuery(query);
+  if (!value) return false;
+  if (!queryLooksAboutTalkers(value)) return false;
+
+  return /(me fale|fale sobre|quem e|o que e|o que eh|site|instagram|whatsapp|telefone|contato|contatos|endereco|unidade|unidades|cidade|cidades|curso|cursos|idioma|idiomas|modalidade|modalidades|metodologia|presenca publica|presen[aç]a p[úu]blica|rede social|redes sociais|publicamente|hoje|atualmente|2025|2026|novo|novidade|novidades|lancamento|lan[çc]amento)/i.test(value);
+}
+
 function queryLooksInternalWorkspace(query = "") {
   const value = normalizeQuery(query);
   if (!value) return false;
@@ -4647,19 +4655,21 @@ function queryLooksInternalWorkspace(query = "") {
 
 function buildChatContextStrategy(query = "", responseProfile = null) {
   const looksTalkers = queryLooksAboutTalkers(query);
-  const looksExternal = queryLooksExternalOrCurrent(query);
+  const talkersNeedsLiveSearch = shouldForceLiveTalkersSearch(query);
+  const looksExternal = queryLooksExternalOrCurrent(query) || talkersNeedsLiveSearch;
   const looksInternal = queryLooksInternalWorkspace(query);
   const fastGeneralOnly = !looksExternal && !looksTalkers && !looksInternal;
   const fastExternalOnly = looksExternal
     && !looksTalkers
     && !looksInternal;
-  const fastTalkersOnly = looksTalkers && !looksInternal;
+  const fastTalkersOnly = looksTalkers && !looksInternal && !talkersNeedsLiveSearch;
   const fastPath = fastExternalOnly || fastTalkersOnly || fastGeneralOnly;
 
   return {
     fastExternalOnly,
     fastTalkersOnly,
     fastGeneralOnly,
+    talkersNeedsLiveSearch,
     skipEmbeddings: fastPath,
     skipInternalKnowledge: fastPath,
     skipKnowledgeMemories: fastPath,
@@ -4841,7 +4851,7 @@ async function buildConversationKnowledgeContext({
     : shouldUseExternalTools
       ? await resolveExternalToolContext(text, {
           userLanguage,
-          forceWebSearch: contextStrategy.looksExternal || shouldUseTalkersWebRefresh,
+          forceWebSearch: contextStrategy.looksExternal || contextStrategy.talkersNeedsLiveSearch || shouldUseTalkersWebRefresh,
         }).catch((err) => {
           console.log("Erro ao montar contexto externo:", err?.message || err);
           return null;
@@ -5319,7 +5329,7 @@ Comportamento:
 - Quando o usuario pedir traducao, traduza para o idioma solicitado mantendo contexto e intencao.
 - Quando documentos estiverem em outro idioma, interprete o conteudo no idioma original, traduza silenciosamente quando necessario e responda no idioma do usuario.
 - Voce e um assistente amplo e inteligente, capaz de responder sobre assuntos gerais, tecnicos, atuais, institucionais e informativos, nao ficando restrito apenas ao contexto da escola.
-- Para perguntas sobre a Talkers, seus cursos, metodologia, contatos, site, presenca publica e comunicacao institucional, priorize a base oficial da Talkers e a base interna quando estiverem disponiveis.
+- Para perguntas sobre a Talkers, seus cursos, metodologia, contatos, site, presenca publica e comunicacao institucional, priorize a base oficial da Talkers e a base interna quando estiverem disponiveis, mas complemente com contexto externo atualizado sempre que a pergunta pedir informacoes publicas, institucionais, verificaveis ou potencialmente desatualizadas.
 - Para perguntas sobre processos, materiais, regras, vendas de cursos, atendimento, operacao pedagogica, marketing, financeiro e informacoes da Talkers, priorize sempre a base interna da empresa, a intranet e os arquivos da conversa.
 - Para perguntas gerais, atuais, publicas, de mercado, cotacoes, clima, noticias ou dados recentes, use naturalmente o contexto externo, a busca web e os dados atualizados quando eles aparecerem no contexto.
 - Se houver conflito entre base interna e web em assuntos da empresa, avise e priorize a base interna. Para temas gerais e atuais, priorize os dados externos atualizados.
@@ -8394,7 +8404,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       return null;
     });
 
-    const quickExternalContext = contextStrategy.fastExternalOnly
+    const quickExternalContext = (contextStrategy.fastExternalOnly || contextStrategy.talkersNeedsLiveSearch)
       ? await resolveExternalToolContext(text, {
           userLanguage,
           forceWebSearch: true,
@@ -8772,7 +8782,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       return null;
     });
 
-    const quickExternalContext = contextStrategy.fastExternalOnly
+    const quickExternalContext = (contextStrategy.fastExternalOnly || contextStrategy.talkersNeedsLiveSearch)
       ? await resolveExternalToolContext(text, {
           userLanguage,
           forceWebSearch: true,

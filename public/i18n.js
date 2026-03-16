@@ -3,6 +3,170 @@
   const STORAGE_KEY = 'talkers_locale_v1';
   const COOKIE_KEY = 'talkers_locale';
   const SUPPORTED_LOCALES = ['pt-BR', 'en', 'es', 'it', 'fr'];
+  const KNOWN_TEXT_REPAIRS = [
+    ['ï¿½ltima', 'Última'],
+    ['perï¿½odo', 'período'],
+    ['Perï¿½odo', 'Período'],
+    ['visï¿½o', 'visão'],
+    ['Visï¿½o', 'Visão'],
+    ['operaï¿½ï¿½o', 'operação'],
+    ['Operaï¿½ï¿½o', 'Operação'],
+    ['reuniï¿½es', 'reuniões'],
+    ['Reuniï¿½es', 'Reuniões'],
+    ['relatï¿½rios', 'relatórios'],
+    ['Relatï¿½rios', 'Relatórios'],
+    ['anï¿½lise', 'análise'],
+    ['Anï¿½lise', 'Análise'],
+    ['histï¿½rico', 'histórico'],
+    ['Histï¿½rico', 'Histórico'],
+    ['mï¿½dulo', 'módulo'],
+    ['Mï¿½dulo', 'Módulo'],
+    ['m�dulo', 'módulo'],
+    ['M�dulo', 'Módulo'],
+    ['ï¿½rea', 'Área'],
+    ['ï¿½reas', 'Áreas'],
+    ['�rea', 'Área'],
+    ['�reas', 'Áreas'],
+    ['regiï¿½o', 'região'],
+    ['Regiï¿½o', 'Região'],
+    ['Regi�o', 'Região'],
+    ['calendï¿½rio', 'calendário'],
+    ['conteï¿½do', 'conteúdo'],
+    ['Conteï¿½do', 'Conteúdo'],
+    ['matrï¿½culas', 'matrículas'],
+    ['Matrï¿½culas', 'Matrículas'],
+    ['lanï¿½amentos', 'lançamentos'],
+    ['Lanï¿½amentos', 'Lançamentos'],
+    ['automï¿½ticos', 'automáticos'],
+    ['clusterizaï¿½ï¿½o', 'clusterização'],
+    ['decisï¿½o', 'decisão'],
+    ['revisï¿½o', 'revisão'],
+    ['prï¿½ximos', 'próximos'],
+    ['prï¿½ximo', 'próximo'],
+    ['Prï¿½ximo', 'Próximo'],
+    ['MÃªs', 'Mês'],
+    ['mÃªs', 'mês'],
+    ['Ã¡', 'á'],
+    ['Ã©', 'é'],
+    ['Ãª', 'ê'],
+    ['Ã­', 'í'],
+    ['Ã³', 'ó'],
+    ['Ãº', 'ú'],
+    ['Ã£', 'ã'],
+    ['Ãµ', 'õ'],
+    ['Ã§', 'ç'],
+    ['Ã', 'Á'],
+    ['Ã‰', 'É'],
+    ['ÃŠ', 'Ê'],
+    ['Ã', 'Í'],
+    ['Ã“', 'Ó'],
+    ['Ãš', 'Ú'],
+    ['Ãƒ', 'Ã'],
+    ['Ã‡', 'Ç'],
+    ['TÃ­tulo', 'Título'],
+    ['tÃ­tulo', 'título'],
+    ['DescriÃ§Ã£o', 'Descrição'],
+    ['descriÃ§Ã£o', 'descrição'],
+    ['ObservaÃ§Ãµes', 'Observações'],
+    ['observaÃ§Ãµes', 'observações'],
+    ['UsuÃ¡rio', 'Usuário'],
+    ['usuÃ¡rio', 'usuário'],
+    ['DireÃ§Ã£o', 'Direção'],
+    ['direÃ§Ã£o', 'direção'],
+    ['LatÃªncia', 'Latência'],
+    ['latÃªncia', 'latência'],
+    ['MemÃ³ria', 'Memória'],
+    ['memÃ³ria', 'memória'],
+    ['AtenÃ§Ã£o', 'Atenção'],
+    ['atenÃ§Ã£o', 'atenção'],
+    ['opera��o', 'operação'],
+    ['Opera��o', 'Operação'],
+    ['vis�o', 'visão'],
+    ['Vis�o', 'Visão'],
+    ['�rea', 'Área'],
+    ['�reas', 'Áreas'],
+    ['m�dulo', 'módulo'],
+    ['m�dulos', 'módulos'],
+    ['M�dulo', 'Módulo'],
+    ['M�dulos', 'Módulos'],
+    ['dispon�vel', 'disponível'],
+    ['dispon�veis', 'disponíveis'],
+    ['per�odo', 'período'],
+    ['Per�odo', 'Período'],
+    ['reuni�es', 'reuniões'],
+    ['Reuni�es', 'Reuniões'],
+    ['compromissos e reuni�es', 'compromissos e reuniões'],
+    ['calend�rio', 'calendário'],
+    ['se��o', 'seção'],
+    ['a��o', 'ação'],
+    ['ações', 'ações'],
+    ['hist�rico', 'histórico'],
+    ['Hist�rico', 'Histórico'],
+    ['M�s', 'Mês'],
+    ['Descri��o', 'Descrição'],
+    ['descri��o', 'descrição'],
+    ['T�tulo', 'Título'],
+    ['t�tulo', 'título'],
+    ['serï¿½o', 'serão'],
+    ['nï¿½o', 'não'],
+    ['Nï¿½o', 'Não'],
+    ['possï¿½vel', 'possível'],
+    ['Aujourd�?Thui', 'Aujourd’hui'],
+    ['�?couter', 'Écouter'],
+    ['�? utiliser', 'À utiliser'],
+    ['�ssalo', 'Úsalo'],
+    ['l�?T', 'l’'],
+    ['d�?T', 'd’'],
+    ['t�?T', 't’'],
+    ['qu�?T', 'qu’'],
+    ['s�?T', 's’'],
+    ['j�?T', 'j’'],
+    ['n�?T', 'n’'],
+    ['c�?T', 'c’'],
+    ['all�?T', 'all’'],
+    ['dell�?T', 'dell’'],
+    ['nell�?T', 'nell’'],
+    ['un�?T', 'un’'],
+  ];
+  function applyKnownTextRepairs(value = '') {
+    let repaired = String(value ?? '');
+    KNOWN_TEXT_REPAIRS.forEach(([pattern, replacement]) => {
+      repaired = repaired.split(pattern).join(replacement);
+    });
+    return repaired;
+  }
+  function repairMojibakeText(value = '') {
+    const safeValue = String(value ?? '');
+    if (!safeValue) return '';
+    let repaired = safeValue;
+    if (/[ÃÂâ€™â€œâ€â€“â€”ï¿½�]/.test(safeValue)) {
+      for (let index = 0; index < 2; index += 1) {
+        try {
+          const candidate = decodeURIComponent(escape(repaired));
+          if (candidate && candidate !== repaired) {
+            repaired = candidate;
+            continue;
+          }
+        } catch {}
+        try {
+          const candidate = new TextDecoder('utf-8').decode(Uint8Array.from(repaired, (char) => char.charCodeAt(0)));
+          if (candidate && candidate !== repaired) {
+            repaired = candidate;
+            continue;
+          }
+        } catch {}
+        break;
+      }
+    }
+    return applyKnownTextRepairs(repaired);
+  }
+  function repairBundle(value) {
+    if (Array.isArray(value)) return value.map(repairBundle);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, repairBundle(nested)]));
+    }
+    return typeof value === 'string' ? repairMojibakeText(value) : value;
+  }
   function toFlagEmoji(countryCode) {
     const safeCode = String(countryCode || '').trim().toUpperCase();
     if (!/^[A-Z]{2}$/.test(safeCode)) return '';
@@ -11,11 +175,11 @@
       .join('');
   }
   const LOCALE_OPTIONS = [
-    { code: 'pt-BR', flag: toFlagEmoji('BR'), label: 'Portugues' },
+    { code: 'pt-BR', flag: toFlagEmoji('BR'), label: 'Português' },
     { code: 'en', flag: toFlagEmoji('US'), label: 'English' },
-    { code: 'es', flag: toFlagEmoji('ES'), label: 'Espanol' },
+    { code: 'es', flag: toFlagEmoji('ES'), label: 'Español' },
     { code: 'it', flag: toFlagEmoji('IT'), label: 'Italiano' },
-    { code: 'fr', flag: toFlagEmoji('FR'), label: 'Francais' },
+    { code: 'fr', flag: toFlagEmoji('FR'), label: 'Français' },
   ];
   const SELECTOR = '[data-i18n], [data-i18n-placeholder], [data-i18n-title], [data-i18n-aria-label]';
 
@@ -67,7 +231,7 @@
 
     try {
       const response = await fetch(`/locales/${safeLocale}.json`, { credentials: 'same-origin' });
-      bundles[safeLocale] = response.ok ? await response.json() : {};
+      bundles[safeLocale] = response.ok ? repairBundle(await response.json()) : {};
     } catch {
       bundles[safeLocale] = {};
     }
@@ -80,7 +244,7 @@
     const localized = getValue(bundles[safeLocale], key);
     const base = getValue(bundles[DEFAULT_LOCALE], key);
     const resolved = localized ?? base ?? fallback ?? key;
-    return typeof resolved === 'string' ? interpolate(resolved, params) : resolved;
+    return typeof resolved === 'string' ? repairMojibakeText(interpolate(resolved, params)) : resolved;
   }
 
   function applyToElement(node) {
@@ -107,12 +271,41 @@
     }
   }
 
+  function repairDomText(root = document) {
+    if (!root || !root.ownerDocument && root !== document) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node?.nodeValue || !node.parentElement) continue;
+      const tagName = node.parentElement.tagName;
+      if (tagName === 'SCRIPT' || tagName === 'STYLE') continue;
+      textNodes.push(node);
+    }
+    textNodes.forEach((node) => {
+      const repaired = repairMojibakeText(node.nodeValue);
+      if (repaired !== node.nodeValue) {
+        node.nodeValue = repaired;
+      }
+    });
+
+    root.querySelectorAll?.('*').forEach((node) => {
+      ['placeholder', 'title', 'aria-label'].forEach((attribute) => {
+        if (!node.hasAttribute?.(attribute)) return;
+        const current = node.getAttribute(attribute);
+        const repaired = repairMojibakeText(current);
+        if (repaired !== current) node.setAttribute(attribute, repaired);
+      });
+    });
+  }
+
   function applyTranslations(root = document) {
     if (!root) return;
     if (root.matches && root.matches(SELECTOR)) {
       applyToElement(root);
     }
     root.querySelectorAll?.(SELECTOR).forEach(applyToElement);
+    repairDomText(root);
   }
 
   function getLocale() {

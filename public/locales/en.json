@@ -1,4 +1,4 @@
-﻿{
+{
     "language":  {
                      "label":  "Language"
                  },
@@ -31,11 +31,14 @@
                    "expandMenu":  "Expand sidebar",
                    "connectedAccount":  "Connected account",
                    "now":  "Now",
-                   "noEnd":  "No end"
+                   "noEnd":  "No end",
+                   "yes":  "Yes",
+                   "no":  "No"
                },
     "chat":  {
                  "brandSubUser":  "School assistant",
                  "brandSubAdmin":  "Administrative panel",
+                 "assistantName":  "Talkers IA",
                  "intranet":  "Talkers Intranet",
                  "newConversation":  "New conversation",
                  "conversations":  "Conversations",
@@ -75,39 +78,7 @@
                                    "document":  "Document",
                                    "presentation":  "Presentation",
                                    "file":  "File"
-                               },
-                 "quickPrompts":  {
-                                      "document":  {
-                                                       "label":  "Generate document",
-                                                       "hint":  "Create announcements, contracts and organized text.",
-                                                       "prompt":  "Create a professional document about this topic:"
-                                                   },
-                                      "spreadsheet":  {
-                                                          "label":  "Create spreadsheet",
-                                                          "hint":  "Build tables with columns ready to use.",
-                                                          "prompt":  "Create an organized spreadsheet with the main fields for:"
-                                                      },
-                                      "audio":  {
-                                                    "label":  "Transcribe audio",
-                                                    "hint":  "Analyze audio uploaded or recorded in the browser.",
-                                                    "prompt":  "Analyze and transcribe the uploaded audio, then provide an objective summary."
-                                                },
-                                      "image":  {
-                                                    "label":  "Generate image",
-                                                    "hint":  "Produce images for school, marketing and materials.",
-                                                    "prompt":  "Generate a realistic and professional image of:"
-                                                },
-                                      "school":  {
-                                                     "label":  "School notice",
-                                                     "hint":  "Create clear and welcoming messages for students and families.",
-                                                     "prompt":  "Create a clear and welcoming school notice about:"
-                                                 },
-                                      "knowledge":  {
-                                                        "label":  "Search internal knowledge",
-                                                        "hint":  "Research company documents and knowledge.",
-                                                        "prompt":  "Search the internal knowledge base and answer me about:"
-                                                    }
-                                  }
+                               }
              },
     "login":  {
                   "title":  "Sign in",
@@ -115,7 +86,7 @@
                   "email":  "Email",
                   "password":  "Password",
                   "button":  "Sign in",
-                  "emailPlaceholder":  "your.email@company.com",
+                  "emailPlaceholder":  "you@company.com",
                   "passwordPlaceholder":  "********",
                   "errorPrefix":  "Error: "
               },
@@ -129,304 +100,60 @@
                      "overviewEyebrow":  "Overview",
                      "overviewTitle":  "Quick view of the internal routine",
                      "quickEyebrow":  "Quick access",
-                     "quickTitle":  "Main entry points",
+                     "quickTitle":  "Main entries",
                      "communicationEyebrow":  "Corporate communication",
                      "communicationTitle":  "Institutional notices and internal announcements",
                      "sidebarDepartments":  "Departments",
                      "sidebarReminders":  "Reminders and schedule",
                      "sidebarUtilityEmpty":  "No upcoming reminders right now.",
                      "brandSubAdminAccess":  "Full administrative access",
-                     "brandSubUserAccess":  "{{count}} area(s) enabled - {{email}}",
-                     "sidebarNoDepartment":  "No departmental area is enabled for this user.",
+                     "brandSubUserAccess":  "{{count}} available area(s) - {{email}}",
+                     "sidebarNoDepartment":  "No department is available for this user.",
                      "departmentDefaultName":  "Department",
                      "departmentMainArea":  "Main area",
                      "departmentSubmenusCount":  "{{count}} submenu(s)",
-                     "departmentDefaultFlow":  "Internal department flow",
-                     "departmentWorkspaceTitle":  "Department workspace",
-                     "departmentWorkspaceDescription":  "Department workspace inside the intranet.",
+                     "departmentWorkspaceTitle":  "Department area",
+                     "departmentWorkspaceDescription":  "Department area inside the intranet.",
                      "generic":  {
                                      "update":  "Update",
-                                     "summary":  "Summary",
                                      "announcement":  "Announcement",
                                      "general":  "General",
                                      "workspace":  "workspace",
                                      "periodUndefined":  "Period not defined",
                                      "notInformed":  "Not informed",
                                      "system":  "System",
-                                     "now":  "Now",
-                                     "noEnd":  "No end",
-                                     "module":  "Module",
-                                     "saveError":  "Could not save the update: {{error}}"
+                                     "internalRoutine":  "Internal routine",
+                                     "reminder":  "Reminder",
+                                     "module":  "Module"
                                  },
                      "nav":  {
                                  "home":  "Home",
+                                 "dashboard":  "Dashboard",
                                  "calendar":  "Schedule",
                                  "sales":  "Sales panel"
                              },
-                     "home":  {
-                                  "greetingCardDescription":  "This is the main intranet entry point, with institutional context, calendar and internal communication.",
-                                  "greetingBadgeAdmin":  "Admin",
-                                  "greetingBadgeUser":  "Active profile",
-                                  "nextMeetings":  "Upcoming meetings",
-                                  "noMeetings":  "No meetings scheduled for the next few days.",
-                                  "meetingsBadge":  "{{count}} event(s)"
-                              },
                      "direction":  {
-                                       "origin":  "Leadership",
-                                       "emptyTitle":  "No leadership announcements",
-                                       "emptyBody":  "When there are highlighted institutional notices, they will appear here.",
+                                       "origin":  "Management",
+                                       "emptyTitle":  "No management notice",
+                                       "emptyBody":  "When there are priority institutional messages, they appear here first.",
                                        "fallbackTitle":  "Institutional announcement"
                                    },
-                     "communication":  {
-                                           "emptyTitle":  "There are no active announcements on the board right now.",
-                                           "nonePublished":  "No announcements have been published yet.",
-                                           "allUsers":  "All users",
-                                           "defaultOrigin":  "Internal announcement",
-                                           "publishTitle":  "Publish announcement",
-                                           "editTitle":  "Edit announcement #{{id}}",
-                                           "save":  "Save announcement",
-                                           "saveChanges":  "Save changes",
-                                           "onePublished":  "1 announcement published",
-                                           "manyPublished":  "{{count}} announcements published",
-                                           "departmentsAudience":  "Departments: {{departments}}",
-                                           "segmentedDepartmentHint":  "Announcement segmented for this area.",
-                                           "segmentedDepartmentsHint":  "Use this when the audience is segmented by department.",
-                                           "publishedTitle":  "Published announcements",
-                                           "activeTitle":  "Active announcement",
-                                           "activeHint":  "Active announcements appear on the Home page, in the communication area and in internal notifications.",
-                                           "titleRequired":  "Enter the announcement title.",
-                                           "departmentsRequired":  "Select at least one department for a segmented announcement.",
-                                           "saveError":  "Could not save the announcement: {{error}}",
-                                           "deleteError":  "Could not delete the announcement: {{error}}",
-                                           "deleteConfirm":  "Do you want to delete the announcement \"{{title}}\"?",
-                                           "fields":  {
-                                                          "title":  "Title",
-                                                          "summary":  "Summary",
-                                                          "content":  "Full content",
-                                                          "type":  "Type",
-                                                          "priority":  "Priority",
-                                                          "audience":  "Audience",
-                                                          "startsAt":  "Start (optional)",
-                                                          "endsAt":  "End (optional)",
-                                                          "departments":  "Announcement departments"
-                                                      },
-                                           "placeholders":  {
-                                                                "title":  "Ex.: Internal training this week",
-                                                                "summary":  "Short text for Home and notifications",
-                                                                "content":  "Main announcement text"
-                                                            }
-                                       },
-                     "departments":  {
-                                         "empty":  "No specific department has been enabled for this profile.",
-                                         "reminderEmpty":  "No operational reminders for this profile right now.",
-                                         "currentLevel":  "Current level: {{level}}",
-                                         "collaborator":  "collaborator",
-                                         "noSubmenus":  "No submenu has been configured for this department yet.",
-                                         "noModules":  "No module is enabled for this area right now."
-                                     },
-                     "departmentSummary":  {
-                                               "currentLevel":  "Current level",
-                                               "permission":  "Permission",
-                                               "activeSubmenus":  "Active submenus",
-                                               "flows":  "Flows",
-                                               "availableModules":  "Enabled modules",
-                                               "resources":  "Resources",
-                                               "activeSubmenu":  "Active submenu",
-                                               "selectedArea":  "Selected area",
-                                               "detail":  "Detail",
-                                               "main":  "Main"
-                                           },
                      "routes":  {
                                     "dashboardTitle":  "Dashboard / BI",
                                     "dashboardEyebrow":  "BI",
-                                    "modulesTitle":  "Modules",
-                                    "modulesEyebrow":  "Workspace",
                                     "calendarEyebrow":  "Corporate calendar",
                                     "departmentsTitle":  "Departments",
                                     "departmentsEyebrow":  "Work areas",
                                     "documentsTitle":  "Documents",
                                     "documentsEyebrow":  "Knowledge base",
-                                    "trainingTitle":  "AI training",
+                                    "trainingTitle":  "AI Training",
                                     "trainingEyebrow":  "Learning and ingestion",
                                     "communicationTitle":  "Communication",
                                     "communicationEyebrow":  "Notices and announcements",
-                                    "salesEyebrow":  "Commercial operations"
-                                },
-                     "reminder":  {
-                                      "meeting":  "Meeting",
-                                      "announcement":  "Notice",
-                                      "empty":  "No operational reminders right now."
-                                  },
-                     "dashboardSectionEyebrow":  "Territory dashboard",
-                     "dashboardSectionTitle":  "Consolidated view of operations and enabled areas",
-                     "dashboardBreakdownTitle":  "Area overview",
-                     "dashboardHighlightsTitle":  "Insights and alerts",
-                     "dashboardEmptyAreas":  "No area is available to compose this profile dashboard.",
-                     "dashboardAreaMetrics":  "{{documents}} doc(s) • {{modules}} module(s)",
-                     "dashboardEmptyDocuments":  "No recent document to highlight on the dashboard.",
-                     "departmentSubmenusEyebrow":  "Submenus",
-                     "departmentSubmenusTitle":  "Area flows and access",
-                     "departmentModulesEyebrow":  "Department modules",
-                     "departmentModulesTitle":  "Available resources",
-                     "workspaceSectionClosed":  "Choose an action above to open only the content you need in this area.",
-                     "dashboardMap":  {
-                                          "eyebrow":  "Territory map",
-                                          "title":  "Coverage and base expansion",
-                                          "description":  "Structure ready to display automatic pins by region, state and city without depending on external maps.",
-                                          "sidebarTitle":  "Monitored territory",
-                                          "clusterHint":  "Clustering and automatic pins will be enabled once the territory base and sales integration are connected.",
-                                          "metricLabelLeads":  "{{count}} leads",
-                                          "metricLabelReady":  "{{count}} ready state(s)",
-                                          "legendLeadCount":  "{{count}} lead(s)",
-                                          "legendReady":  "{{count}} ready city(ies)",
-                                          "emptyLegend":  "Select a region to view monitored states and prepare the future territory reading.",
-                                          "filters":  {
-                                                          "region":  "Region",
-                                                          "state":  "State"
-                                                      },
-                                          "regions":  {
-                                                          "north":  "North",
-                                                          "northeast":  "Northeast",
-                                                          "midwest":  "Midwest",
-                                                          "southeast":  "Southeast",
-                                                          "south":  "South"
-                                                      }
-                                      },
-                     "marketingInfluencer":  {
-                                                 "loading":  "Loading influencer workspace...",
-                                                 "loadingDetail":  "Loading detailed report...",
-                                                 "workspaceDescription":  "Registration, entries, reports and analysis for Marketing influencer operations.",
-                                                 "menuEyebrow":  "Marketing",
-                                                 "menuTitle":  "Influencer",
-                                                 "menuDescription":  "Registration, performance, comparisons and AI support for Marketing partnerships.",
-                                                 "currentPeriod":  "Current period",
-                                                 "submenuTitle":  "Submenu actions",
-                                                 "submenuHint":  "Open only the section you are using right now.",
-                                                 "selectOne":  "Select an influencer",
-                                                 "sections":  {
-                                                                  "register":  "Registration",
-                                                                  "registerDescription":  "Partnership base",
-                                                                  "overview":  "Overview",
-                                                                  "overviewDescription":  "Base and active portfolio",
-                                                                  "reports":  "Reports",
-                                                                  "reportsDescription":  "History and comparisons",
-                                                                  "analysis":  "AI analysis",
-                                                                  "analysisDescription":  "Support reading"
-                                                              },
-                                                 "summary":  {
-                                                                 "register":  "Registration",
-                                                                 "registerDescription":  "Partnership base and data",
-                                                                 "overview":  "Overview",
-                                                                 "overviewDescription":  "Quick period reading",
-                                                                 "reports":  "Reports",
-                                                                 "reportsDescription":  "History and comparisons",
-                                                                 "analysis":  "AI analysis",
-                                                                 "analysisDescription":  "Operational decision support"
-                                                             },
-                                                 "overviewTitle":  "Registered influencers",
-                                                 "metrics":  {
-                                                                 "base":  "Base",
-                                                                 "baseMeta":  "Registered influencers",
-                                                                 "audience":  "Audience",
-                                                                 "audienceMeta":  "Tracked followers",
-                                                                 "result":  "Result",
-                                                                 "resultMeta":  "Enrollments in the period",
-                                                                 "history":  "History",
-                                                                 "historyMeta":  "Recorded entries"
-                                                             },
-                                                 "card":  {
-                                                              "contract":  "Contract",
-                                                              "followers":  "Followers",
-                                                              "enrollments":  "Enrollments",
-                                                              "score":  "Score",
-                                                              "noInstagram":  "Instagram not provided",
-                                                              "partnerSince":  "Partner since {{date}}"
-                                                          },
-                                                 "emptyOverview":  "No influencer has been registered yet. Use Registration to start the Marketing base.",
-                                                 "emptyReports":  "Click \"View more\" on an influencer to open the detailed report, log performance and follow history.",
-                                                 "emptyMetrics":  "There are no performance entries for this influencer yet.",
-                                                 "emptyLogs":  "No administrative log has been registered for this influencer yet.",
-                                                 "filters":  {
-                                                                 "period":  "Period",
-                                                                 "from":  "From",
-                                                                 "to":  "To"
-                                                             },
-                                                 "form":  {
-                                                              "createTitle":  "Register influencer",
-                                                              "editTitle":  "Edit influencer",
-                                                              "helper":  "Open only when you need to create or update the base.",
-                                                              "nameRequired":  "Enter the influencer name.",
-                                                              "success":  "Influencer registered successfully.",
-                                                              "saveError":  "Could not save the influencer: {{error}}",
-                                                              "submitCreate":  "Register",
-                                                              "fields":  {
-                                                                             "name":  "Influencer name",
-                                                                             "types":  "Influence types",
-                                                                             "contractType":  "Contract type",
-                                                                             "photo":  "Photo (URL)",
-                                                                             "instagram":  "Instagram link",
-                                                                             "followers":  "Followers count",
-                                                                             "startDate":  "Partnership start date",
-                                                                             "status":  "Status",
-                                                                             "notes":  "Internal notes"
-                                                                         },
-                                                              "placeholders":  {
-                                                                                   "name":  "Ex.: Maria Andrade",
-                                                                                   "types":  "Ex.: Reels, Stories, Educational content",
-                                                                                   "notes":  "Internal Marketing notes about the partnership, positioning or next steps"
-                                                                               }
-                                                          },
-                                                 "reports":  {
-                                                                 "posts":  "Posts",
-                                                                 "reels":  "Reels",
-                                                                 "stories":  "Stories",
-                                                                 "views":  "Views",
-                                                                 "enrollments":  "Enrollments",
-                                                                 "generalPerformance":  "Overall performance",
-                                                                 "period":  "Selected period",
-                                                                 "history":  "Recorded history",
-                                                                 "launches":  "entry(ies)",
-                                                                 "activeDays":  "Active days",
-                                                                 "instagram":  "Instagram",
-                                                                 "performanceHistory":  "Performance history",
-                                                                 "updateHistory":  "Update history",
-                                                                 "track":  "Track",
-                                                                 "postsShort":  "posts",
-                                                                 "reelsShort":  "reels",
-                                                                 "storiesShort":  "stories",
-                                                                 "viewsShort":  "views",
-                                                                 "enrollmentsShort":  "enrollments",
-                                                                 "flowEyebrow":  "Flows",
-                                                                 "flowTitle":  "Operational performance",
-                                                                 "metricHint":  "Entry for {{name}}",
-                                                                 "metricNotesPlaceholder":  "Record campaign context, period details or operational notes",
-                                                                 "saveLaunch":  "Save entry",
-                                                                 "enrollmentsAttributed":  "Attributed enrollments",
-                                                                 "selectInfluencer":  "Select an influencer to log performance.",
-                                                                 "periodStartRequired":  "Enter at least the entry start date.",
-                                                                 "metricSaved":  "Entry saved successfully.",
-                                                                 "metricSaveError":  "Could not register performance: {{error}}"
-                                                             },
-                                                 "charts":  {
-                                                                "enrollments":  "Enrollments by influencer",
-                                                                "posts":  "Posts by influencer",
-                                                                "reels":  "Reels by influencer",
-                                                                "stories":  "Stories by influencer",
-                                                                "views":  "Views by influencer",
-                                                                "performance":  "Overall performance"
-                                                            },
-                                                 "analysisTitle":  "Comparative reading and operational recommendation",
-                                                 "analysisPlaceholder":  "Select a period and click \"Analyze\" to receive a comparative AI reading about influencer performance.",
-                                                 "analysisFocus":  "Focus",
-                                                 "analysisGeneral":  "General comparison",
-                                                 "analysisRunning":  "Analyzing...",
-                                                 "analysisGeneratedAt":  "Latest analysis on {{date}}",
-                                                 "analysisHint":  "AI uses the recorded data to suggest next steps, partnership reinforcement or review needs.",
-                                                 "analysisError":  "Could not analyze this period: {{error}}"
-                                             }
+                                    "salesEyebrow":  "Sales operation"
+                                }
                  },
     "calendar":  {
-                     "newEvent":  "New event",
                      "previous":  "Previous",
                      "today":  "Today",
                      "next":  "Next",
@@ -434,20 +161,24 @@
                      "week":  "Week",
                      "day":  "Day",
                      "list":  "List",
+                     "views":  {
+                                   "month":  "Month",
+                                   "week":  "Week",
+                                   "day":  "Day",
+                                   "list":  "List"
+                               },
                      "user":  "User",
                      "type":  "Type",
                      "mode":  "Format",
                      "status":  "Status",
                      "search":  "Search",
                      "searchPlaceholder":  "Title, description, location or type",
-                     "all":  "All",
-                     "select":  "Select",
                      "title":  "Title",
                      "description":  "Description",
                      "eventType":  "Type",
                      "meetingMode":  "Mode",
                      "allDay":  "All day",
-                     "allDayHint":  "Use this for events without a fixed time.",
+                     "allDayHint":  "Use for events without a fixed time.",
                      "startDate":  "Start date",
                      "startTime":  "Start time",
                      "endDate":  "End date",
@@ -456,21 +187,21 @@
                      "meetingLink":  "Meeting link",
                      "notes":  "Notes",
                      "participants":  "Participants",
-                     "participantsHint":  "Select one or more people. The event will appear on every participant\u0027s calendar.",
+                     "participantsHint":  "Select one or more people. The event will appear on all participants\u0027 schedules.",
                      "reset":  "Clear",
                      "save":  "Save event",
                      "cancelEvent":  "Cancel event",
                      "editorNew":  "New event",
                      "detailsEyebrow":  "Event details",
-                     "defaultEventTitle":  "Event",
+                     "defaultEventTitle":  "Commitment",
                      "defaultAgenda":  "Schedule",
                      "fullDay":  "All day",
                      "selectedDay":  "Selected day",
-                     "noHistory":  "No history has been recorded for this event yet.",
-                     "noEventsDay":  "No events found for this day.",
-                     "noEventsPeriod":  "No events found for this period.",
+                     "noHistory":  "No history recorded for this event yet.",
+                     "noEventsDay":  "No commitments found for this day.",
+                     "noEventsPeriod":  "No commitments found for this period.",
                      "emptyWeek":  "No events",
-                     "moreEvents":  "+ {{count}} event(s)",
+                     "moreEvents":  "+ {{count}} commitment(s)",
                      "loadError":  "Could not load the event: {{error}}",
                      "saveError":  "Could not save the event: {{error}}",
                      "cancelError":  "Could not cancel the event: {{error}}",
@@ -487,12 +218,12 @@
                                      },
                      "modeLabel":  {
                                        "online":  "Online",
-                                       "presencial":  "On-site",
+                                       "presencial":  "In person",
                                        "hibrida":  "Hybrid"
                                    },
                      "sectionEyebrow":  "Internal planning",
-                     "sectionTitle":  "Meetings and schedule",
-                     "sectionDescription":  "Organize future commitments, follow the team calendar and keep the school schedule up to date."
+                     "sectionTitle":  "Commitments and meetings",
+                     "sectionDescription":  "Organize future commitments, follow the team schedule and keep the school calendar up to date."
                  },
     "admin":  {
                   "title":  "Admin",
@@ -501,11 +232,12 @@
                                "users":  "Users",
                                "departments":  "Departments",
                                "knowledge":  "Knowledge base",
-                               "training":  "AI training",
-                               "logs":  "System logs"
+                               "training":  "AI Training",
+                               "logs":  "System logs",
+                               "cockpit":  "Cockpit"
                            }
               },
     "moderation":  {
-                       "refusal":  "I cannot help with that type of request. This platform is intended for education and language learning."
+                       "refusal":  "I cannot help with that kind of request. This platform is intended for education and language learning."
                    }
 }

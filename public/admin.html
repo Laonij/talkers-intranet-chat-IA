@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
@@ -14,7 +14,7 @@
           <img class="logo-sm" src="/logo.png" alt="Logo" />
           <div>
             <div class="admin-page-title" id="adminPageTitle">Admin</div>
-            <div class="muted small" id="adminPageSubtitle">Usuarios, permissoes e base de conhecimento</div>
+            <div class="muted small" id="adminPageSubtitle">Usuários, permissões e base de conhecimento</div>
           </div>
         </div>
         <div class="admin-header-actions" style="display:flex; align-items:center; gap:12px;">
@@ -24,10 +24,11 @@
       </div>
 
       <div class="admin-tabs" id="adminTabs">
-        <button class="admin-tab-btn is-active" type="button" data-admin-tab="users" id="adminTabUsers">Usuarios</button>
+        <button class="admin-tab-btn is-active" type="button" data-admin-tab="users" id="adminTabUsers">Usuários</button>
         <button class="admin-tab-btn" type="button" data-admin-tab="departments" id="adminTabDepartments">Departamentos</button>
         <button class="admin-tab-btn" type="button" data-admin-tab="knowledge" id="adminTabKnowledge">Base de conhecimento</button>
         <button class="admin-tab-btn" type="button" data-admin-tab="training" id="adminTabTraining">Treinamento da IA</button>
+        <button class="admin-tab-btn" type="button" data-admin-tab="cockpit" id="adminTabCockpit">Cockpit</button>
         <button class="admin-tab-btn" type="button" data-admin-tab="logs" id="adminTabLogs">Logs do sistema</button>
       </div>
 
@@ -36,8 +37,8 @@
           <div class="admin-tab-chunk" data-admin-chunk="users">
             <div class="admin-panel-head">
               <div>
-                <div class="admin-section-title" id="userFormTitle">Criar usuario</div>
-                <div class="small muted">Usuarios e historicos existentes sao preservados. A exclusao administrativa continua bloqueada.</div>
+                <div class="admin-section-title" id="userFormTitle">Criar usuário</div>
+                <div class="small muted">Usuários e históricos existentes são preservados. A exclusão administrativa continua bloqueada.</div>
               </div>
             </div>
 
@@ -58,12 +59,12 @@
               <div>
                 <label>Senha</label>
                 <input id="password" type="password" placeholder="Senha" />
-                <div class="small muted" id="passwordHint">Obrigatoria para criar. Na edicao, deixe em branco para manter.</div>
+                <div class="small muted" id="passwordHint">Obrigatória para criar. Na edição, deixe em branco para manter.</div>
               </div>
               <div>
                 <label>Tipo</label>
                 <select id="role">
-                  <option value="user">Usuario</option>
+                  <option value="user">Usuário</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>
@@ -71,11 +72,11 @@
 
             <div class="row admin-form-grid">
               <div>
-                <label>Cargo (preparado para evolucao)</label>
+                <label>Cargo (preparado para evolução)</label>
                 <input id="jobTitle" placeholder="Ex.: Analista, Coordenador, Professor" />
               </div>
               <div>
-                <label>Unidade (preparado para evolucao)</label>
+                <label>Unidade (preparado para evolução)</label>
                 <input id="unitName" placeholder="Ex.: Unidade Centro" />
               </div>
             </div>
@@ -85,20 +86,20 @@
                 <input id="canAccessIntranet" type="checkbox" />
                 <span>
                   <strong>Permitir acesso a Intranet Talkers</strong>
-                  <small>Quando marcado, o usuario ve o botao da intranet e pode acessar a area corporativa.</small>
+                  <small>Quando marcado, o usuário vê o botão da intranet e pode acessar a área corporativa.</small>
                 </span>
               </label>
             </div>
 
             <div>
               <label>Departamentos</label>
-              <div class="small muted" style="margin-bottom:10px;">Selecione um ou varios departamentos. A estrutura ja fica pronta para novos departamentos no futuro.</div>
+              <div class="small muted" style="margin-bottom:10px;">Selecione um ou vários departamentos. A estrutura já fica pronta para novos departamentos no futuro.</div>
               <div id="departmentsGrid" class="departments-grid"></div>
             </div>
 
             <div class="admin-form-actions">
-              <button class="btn" id="btnCancelEdit" type="button" style="display:none;">Cancelar edicao</button>
-              <button class="btn primary" id="btnSaveUser" type="button">Criar usuario</button>
+              <button class="btn" id="btnCancelEdit" type="button" style="display:none;">Cancelar edição</button>
+              <button class="btn primary" id="btnSaveUser" type="button">Criar usuário</button>
             </div>
           </div>
 
@@ -108,7 +109,7 @@
             <div class="admin-panel-head" style="margin-bottom:0;">
               <div>
                 <div class="admin-section-title" id="departmentFormTitle">Criar departamento</div>
-                <div class="small muted">Crie novos departamentos sem depender de alteracao manual no codigo.</div>
+                <div class="small muted">Crie novos departamentos sem depender de alteração manual no código.</div>
               </div>
             </div>
 
@@ -127,11 +128,11 @@
 
             <div class="row admin-form-grid">
               <div>
-                <label>Descricao</label>
+                <label>Descrição</label>
                 <input id="departmentDescription" placeholder="Resumo do papel e da area" />
               </div>
               <div>
-                <label>Icone (opcional)</label>
+                <label>Ícone (opcional)</label>
                 <input id="departmentIcon" placeholder="Ex.: layers, briefcase, users" />
               </div>
             </div>
@@ -141,13 +142,13 @@
                 <input id="departmentIsActive" type="checkbox" checked />
                 <span>
                   <strong>Departamento ativo</strong>
-                  <small>Departamentos inativos deixam de aparecer na associacao de usuarios e na intranet.</small>
+                  <small>Departamentos inativos deixam de aparecer na associação de usuários e na intranet.</small>
                 </span>
               </label>
             </div>
 
             <div class="admin-form-actions">
-              <button class="btn" id="btnCancelDepartmentEdit" type="button" style="display:none;">Cancelar edicao</button>
+              <button class="btn" id="btnCancelDepartmentEdit" type="button" style="display:none;">Cancelar edição</button>
               <button class="btn primary" id="btnSaveDepartment" type="button">Criar departamento</button>
             </div>
           </div>
@@ -170,7 +171,7 @@
 
           <div class="admin-side-card admin-tab-chunk" data-admin-chunk="knowledge">
             <div class="admin-side-title">Enviar para a base da empresa</div>
-            <div class="small muted" style="margin-bottom:12px;">Os arquivos vao para o armazenamento local do projeto e, se configurado, tambem para a Vector Store da OpenAI.</div>
+            <div class="small muted" style="margin-bottom:12px;">Os arquivos vão para o armazenamento local do projeto e, se configurado, também para a Vector Store da OpenAI.</div>
             <div>
               <label>Departamento relacionado (opcional)</label>
               <select id="ragDepartment">
@@ -185,7 +186,7 @@
             </div>
             <div id="ragSelectionSummary" class="small muted" style="margin-top:12px;">Nenhum arquivo selecionado.</div>
             <div id="ragSelectionList" class="small admin-selection-list"></div>
-            <div class="small muted" style="margin-top:10px;">No Chrome e no Edge, a opcao "Importar pasta" envia todos os arquivos da pasta escolhida. Apenas documentos suportados de ate 25 MB entram na fila.</div>
+            <div class="small muted" style="margin-top:10px;">No Chrome e no Edge, a opção "Importar pasta" envia todos os arquivos da pasta escolhida. Apenas documentos suportados de ate 25 MB entram na fila.</div>
             <div class="admin-form-actions" style="margin-top:14px;">
               <button class="btn primary" id="btnUploadRag" disabled>Enviar arquivos</button>
             </div>
@@ -215,7 +216,7 @@
             <div class="admin-panel-head" style="margin-bottom:0;">
               <div>
                 <div class="admin-side-title" id="closerFormTitle">Cadastrar closer</div>
-                <div class="small muted">Mapeie nome oficial, alias e usuaria vinculada para manter a operacao comercial consistente.</div>
+                <div class="small muted">Mapeie nome oficial, alias e usuária vinculada para manter a operação comercial consistente.</div>
               </div>
             </div>
             <input type="hidden" id="editingCloserId" value="" />
@@ -231,9 +232,9 @@
             </div>
             <div class="row admin-form-grid">
               <div>
-                <label>Usuaria vinculada</label>
+                <label>Usuária vinculada</label>
                 <select id="closerUserId">
-                  <option value="">Sem vinculo direto</option>
+                  <option value="">Sem vínculo direto</option>
                 </select>
               </div>
               <div>
@@ -250,7 +251,7 @@
               <div class="small muted">Separe por virgula, ponto e virgula ou quebra de linha.</div>
             </div>
             <div>
-              <label>Observacoes</label>
+              <label>Observações</label>
               <textarea id="closerNotes" rows="3" placeholder="Anotacoes internas opcionais"></textarea>
             </div>
             <div class="admin-form-actions" style="margin-top:14px;">
@@ -265,8 +266,8 @@
         <section class="admin-panel admin-collapsible admin-tab-panel is-active" data-admin-tab-panel="users" data-section="users">
           <div class="admin-panel-head admin-panel-head-collapsible">
             <div>
-              <div class="admin-section-title">Usuarios</div>
-              <div class="small muted" id="usersCountLabel">Carregando usuarios...</div>
+              <div class="admin-section-title">Usuários</div>
+              <div class="small muted" id="usersCountLabel">Carregando usuários...</div>
             </div>
             <button class="admin-collapse-toggle" type="button" data-toggle-section="users">-</button>
           </div>
@@ -304,8 +305,8 @@
                   <th>Nome</th>
                   <th>Slug</th>
                   <th>Status</th>
-                  <th>Usuarios</th>
-                  <th>Descricao</th>
+                  <th>Usuários</th>
+                  <th>Descrição</th>
                   <th>Acoes</th>
                 </tr>
               </thead>
@@ -328,7 +329,7 @@
                 <tr>
                   <th>Nome oficial</th>
                   <th>Exibicao</th>
-                  <th>Usuaria</th>
+                  <th>Usuária</th>
                   <th>Aliases</th>
                   <th>Status</th>
                   <th>Acoes</th>
@@ -429,7 +430,7 @@
               <thead>
                 <tr>
                   <th>Quando</th>
-                  <th>Usuario</th>
+                  <th>Usuário</th>
                   <th>Acao</th>
                   <th>Registro</th>
                   <th>Campo</th>
@@ -520,8 +521,8 @@
 
             <div class="admin-subsection-head">
               <div>
-                <div class="admin-subsection-title">Memorias recentes da IA</div>
-                <div class="small muted">Memorias documentais, memoria por conversa e memoria global do usuario.</div>
+                <div class="admin-subsection-title">Memórias recentes da IA</div>
+                <div class="small muted">Memórias documentais, memória por conversa e memória global do usuário.</div>
               </div>
             </div>
             <table class="table">
@@ -539,7 +540,7 @@
             <div class="admin-subsection-head">
               <div>
                 <div class="admin-subsection-title">Eventos recentes de treinamento</div>
-                <div class="small muted">Hits de memoria, uso de documentos e respostas fracas registradas.</div>
+                <div class="small muted">Hits de memória, uso de documentos e respostas fracas registradas.</div>
               </div>
             </div>
             <table class="table">
@@ -553,6 +554,50 @@
               </thead>
               <tbody id="trainingEventsBody"></tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="admin-panel admin-collapsible admin-tab-panel" data-admin-tab-panel="cockpit" data-section="cockpit">
+          <div class="admin-panel-head admin-panel-head-collapsible">
+            <div>
+              <div class="admin-section-title">Cockpit administrativo</div>
+              <div class="small muted" id="cockpitSummaryLabel">Carregando diagnóstico técnico da plataforma...</div>
+            </div>
+            <button class="admin-collapse-toggle" type="button" data-toggle-section="cockpit">-</button>
+          </div>
+          <div class="admin-collapsible-body" data-section-body="cockpit">
+            <div class="admin-cockpit-summary" id="cockpitSummaryCards"></div>
+            <div class="admin-cockpit-grid">
+              <article class="admin-cockpit-card">
+                <div class="admin-side-title">Armazenamento de arquivos</div>
+                <div class="admin-cockpit-list" id="cockpitStorageList"></div>
+              </article>
+              <article class="admin-cockpit-card">
+                <div class="admin-side-title">Banco e aplicação</div>
+                <div class="admin-cockpit-list" id="cockpitAppList"></div>
+              </article>
+              <article class="admin-cockpit-card">
+                <div class="admin-side-title">OpenAI e integrações</div>
+                <div class="admin-cockpit-list" id="cockpitIntegrationsList"></div>
+              </article>
+              <article class="admin-cockpit-card">
+                <div class="admin-side-title">Filas e alertas</div>
+                <div class="admin-cockpit-list" id="cockpitAlertsList"></div>
+              </article>
+              <article class="admin-cockpit-card is-span-2">
+                <div class="admin-side-title">Performance do chat</div>
+                <div class="admin-gauge-shell">
+                  <div class="admin-gauge" id="cockpitChatGauge">
+                    <div class="admin-gauge-center">
+                      <strong id="cockpitChatGaugeValue">0,0s</strong>
+                      <span id="cockpitChatGaugeStatus">Normal</span>
+                      <small id="cockpitChatGaugeHint">Tempo médio de resposta</small>
+                    </div>
+                  </div>
+                  <div class="admin-cockpit-metrics" id="cockpitChatMetrics"></div>
+                </div>
+              </article>
+            </div>
           </div>
         </section>
 
@@ -593,7 +638,7 @@
 
             <div class="admin-form-grid">
               <div>
-                <label>Descricao</label>
+                <label>Descrição</label>
                 <input id="submenuDescription" placeholder="Resumo do fluxo interno do submenu" />
               </div>
               <div>
@@ -624,7 +669,7 @@
                   <th>Titulo</th>
                   <th>Slug</th>
                   <th>Status</th>
-                  <th>Descricao</th>
+                  <th>Descrição</th>
                   <th>Acoes</th>
                 </tr>
               </thead>
@@ -684,7 +729,7 @@
               <div>
                 <label>Publico</label>
                 <select id="announcementAudienceScope">
-                  <option value="all">Todos os usuarios</option>
+                  <option value="all">Todos os usuários</option>
                   <option value="departments">Departamentos especificos</option>
                 </select>
               </div>
@@ -751,7 +796,7 @@
               <thead>
                 <tr>
                   <th>Quando</th>
-                  <th>Usuario</th>
+                  <th>Usuário</th>
                   <th>Acao</th>
                   <th>Detalhe</th>
                 </tr>
@@ -798,7 +843,7 @@
               <thead>
                 <tr>
                   <th>Quando</th>
-                  <th>Usuario</th>
+                  <th>Usuário</th>
                   <th>Evento</th>
                   <th>Status</th>
                   <th>Detalhe</th>
@@ -925,15 +970,16 @@ function applyAdminTranslations() {
   const backBtn = document.getElementById('adminBackBtn');
   if (backBtn) backBtn.textContent = t('common.back');
   const tabs = {
-    adminTabUsers: 'admin.tabs.users',
-    adminTabDepartments: 'admin.tabs.departments',
-    adminTabKnowledge: 'admin.tabs.knowledge',
-    adminTabTraining: 'admin.tabs.training',
-    adminTabLogs: 'admin.tabs.logs',
+    adminTabUsers: ['admin.tabs.users', 'Usuários'],
+    adminTabDepartments: ['admin.tabs.departments', 'Departamentos'],
+    adminTabKnowledge: ['admin.tabs.knowledge', 'Base de conhecimento'],
+    adminTabTraining: ['admin.tabs.training', 'Treinamento da IA'],
+    adminTabCockpit: ['admin.tabs.cockpit', 'Cockpit'],
+    adminTabLogs: ['admin.tabs.logs', 'Logs do sistema'],
   };
-  Object.entries(tabs).forEach(([id, key]) => {
+  Object.entries(tabs).forEach(([id, [key, fallback]]) => {
     const node = document.getElementById(id);
-    if (node) node.textContent = t(key);
+    if (node) node.textContent = t(key, {}, fallback);
   });
 }
 
@@ -948,7 +994,7 @@ function formatStageLabel(value = '') {
     available: 'Disponivel',
     local: 'Local',
     synced: 'Sincronizado',
-    warning: 'Atencao',
+    warning: 'Atenção',
     info: 'Informativo',
     success: 'Sucesso',
     healthy: 'Saudavel',
@@ -978,7 +1024,7 @@ function describeRagUploadError(error) {
     return 'Um ou mais arquivos passaram de 25 MB e foram recusados pelo servidor.';
   }
   if (code === 'unsupported_knowledge_file') {
-    return 'Um ou mais arquivos nao sao suportados para a base interna.';
+    return 'Um ou mais arquivos não são suportados para a base interna.';
   }
   if (code === 'rag_batch_too_large') {
     return 'O navegador tentou enviar um lote maior do que o servidor aceita. Atualize a pagina e tente novamente.';
@@ -1166,7 +1212,7 @@ function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
   }
 
   const rejectedSizeLabel = rejectedBySize.length ? ` ${rejectedBySize.length} acima de 25 MB foram descartados.` : '';
-  const rejectedTypeLabel = rejectedByType.length ? ` ${rejectedByType.length} arquivo(s) de formato nao suportado foram ignorados.` : '';
+  const rejectedTypeLabel = rejectedByType.length ? ` ${rejectedByType.length} arquivo(s) de formato não suportado foram ignorados.` : '';
   const rejectedDuplicateLabel = rejectedByDuplicate.length ? ` ${rejectedByDuplicate.length} arquivo(s) duplicado(s) na fila foram ignorados.` : '';
 
   if (accepted.length) {
@@ -1184,7 +1230,7 @@ function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
     notices.push(`${rejectedByDuplicate.length} arquivo(s) repetido(s) na selecao foram ignorados automaticamente${rejectedDuplicateNames.length ? `: ${rejectedDuplicateNames.join(', ')}` : ''}.`);
   }
   if (rejectedByType.length) {
-    notices.push(`${rejectedByType.length} arquivo(s) de formato nao suportado foram ignorados${rejectedTypeNames.length ? `: ${rejectedTypeNames.join(', ')}` : ''}.`);
+    notices.push(`${rejectedByType.length} arquivo(s) de formato não suportado foram ignorados${rejectedTypeNames.length ? `: ${rejectedTypeNames.join(', ')}` : ''}.`);
   }
 
   setMsg(notices.join(' '), Boolean(rejectedBySize.length || rejectedByType.length));
@@ -1218,7 +1264,7 @@ function renderDepartmentsGrid() {
     copy.className = 'department-check-copy';
     copy.innerHTML = `
       <strong>${department.name}</strong>
-      <small>${department.description || 'Area preparada para novos modulos e permissoes.'}</small>
+      <small>${department.description || 'Área preparada para novos módulos e permissões.'}</small>
     `;
 
     label.appendChild(input);
@@ -1306,7 +1352,7 @@ function renderDepartmentTable() {
       <td class="small muted">${department.slug || '-'}</td>
       <td><span class="badge ${department.is_active ? 'admin' : ''}">${department.is_active ? 'Ativo' : 'Inativo'}</span></td>
       <td class="small muted">${Number(department.total_users || 0)}</td>
-      <td class="small muted">${department.description || 'Sem descricao'}</td>
+      <td class="small muted">${department.description || 'Sem descrição'}</td>
       <td></td>
     `;
 
@@ -1375,7 +1421,7 @@ function populateSubmenuForm(submenu) {
   document.getElementById('submenuIcon').value = submenu.icon || '';
   document.getElementById('submenuIsActive').checked = submenu.is_active !== false;
   document.getElementById('btnCancelSubmenuEdit').style.display = '';
-  document.getElementById('btnSaveSubmenu').textContent = 'Salvar alteracoes';
+  document.getElementById('btnSaveSubmenu').textContent = 'Salvar alterações';
   setAdminTab('departments');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1404,7 +1450,7 @@ function renderSubmenuTable() {
       <td>${escapeHtml(submenu.title || '-')}</td>
       <td class="small muted">${escapeHtml(submenu.slug || '-')}</td>
       <td><span class="badge ${submenu.is_active !== false ? 'admin' : ''}">${submenu.is_active !== false ? 'Ativo' : 'Inativo'}</span></td>
-      <td class="small muted">${escapeHtml(submenu.description || 'Sem descricao')}</td>
+      <td class="small muted">${escapeHtml(submenu.description || 'Sem descrição')}</td>
       <td class="admin-inline-actions"></td>
     `;
     const actions = tr.lastElementChild;
@@ -1495,7 +1541,7 @@ function populateAnnouncementForm(announcement) {
   setSelectedAnnouncementDepartments(announcement.department_ids || []);
   syncAnnouncementAudienceControls();
   document.getElementById('btnCancelAnnouncementEdit').style.display = '';
-  document.getElementById('btnSaveAnnouncement').textContent = 'Salvar alteracoes';
+  document.getElementById('btnSaveAnnouncement').textContent = 'Salvar alterações';
   setAdminTab('departments');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1516,7 +1562,7 @@ function renderAnnouncementsTable() {
   announcementCatalog.forEach((announcement) => {
     const audience = announcement.audience_scope === 'departments'
       ? `Departamentos: ${(announcement.department_names || []).join(', ') || '-'}`
-      : 'Todos os usuarios';
+      : 'Todos os usuários';
     const schedule = [announcement.starts_at ? formatDateTime(announcement.starts_at) : 'Agora', announcement.ends_at ? formatDateTime(announcement.ends_at) : 'Sem fim'].join(' - ');
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -1660,8 +1706,8 @@ function setSelectedDepartments(departments = []) {
 
 function resetUserForm() {
   document.getElementById('editingUserId').value = '';
-  document.getElementById('userFormTitle').textContent = 'Criar usuario';
-  document.getElementById('btnSaveUser').textContent = 'Criar usuario';
+  document.getElementById('userFormTitle').textContent = 'Criar usuário';
+  document.getElementById('btnSaveUser').textContent = 'Criar usuário';
   document.getElementById('btnCancelEdit').style.display = 'none';
   document.getElementById('name').value = '';
   document.getElementById('email').value = '';
@@ -1675,8 +1721,8 @@ function resetUserForm() {
 
 function populateUserForm(user) {
   document.getElementById('editingUserId').value = String(user.id);
-  document.getElementById('userFormTitle').textContent = `Editar usuario #${user.id}`;
-  document.getElementById('btnSaveUser').textContent = 'Salvar alteracoes';
+  document.getElementById('userFormTitle').textContent = `Editar usuário #${user.id}`;
+  document.getElementById('btnSaveUser').textContent = 'Salvar alterações';
   document.getElementById('btnCancelEdit').style.display = '';
   document.getElementById('name').value = user.name || '';
   document.getElementById('email').value = user.email || '';
@@ -1781,6 +1827,10 @@ function setAdminTab(tabKey = 'users') {
       .filter(Boolean);
     chunk.hidden = !allowedTabs.includes(tabKey);
   });
+
+  if (tabKey === 'cockpit') {
+    loadAdminCockpit().catch(() => {});
+  }
 }
 
 function bindAdminTabs() {
@@ -1815,8 +1865,8 @@ async function loadUsers() {
   const body = document.getElementById('usersBody');
   body.innerHTML = '';
   document.getElementById('usersCountLabel').textContent = cachedUsers.length === 1
-    ? '1 usuario preservado'
-    : `${cachedUsers.length} usuarios preservados`;
+    ? '1 usuário preservado'
+    : `${cachedUsers.length} usuários preservados`;
 
   for (const user of cachedUsers) {
     const tr = document.createElement('tr');
@@ -1884,8 +1934,8 @@ async function loadRagStatus() {
   const needsReprocess = Number(counts.needs_reprocess || status.needs_reprocess || 0);
   const background = status.background || {};
   el.textContent = status.vector_store_configured
-    ? `Vector Store ativa (${status.vector_store_id}). ${processed} arquivo(s) processado(s), ${analyzed} analisado(s), ${available} disponivel(is) para a IA, ${processing} em processamento e ${needsReprocess} pendente(s) de reprocessamento.`
-    : `Vector Store nao configurada. O indice local segue ativo com ${processed} arquivo(s) processado(s), ${analyzed} analisado(s), ${available} disponivel(is) para a IA, ${processing} em processamento e ${Math.max(needsReprocess, failed)} item(ns) exigindo atencao.`;
+    ? `Vector Store ativa (${status.vector_store_id}). ${processed} arquivo(s) processado(s), ${analyzed} analisado(s), ${available} disponível(is) para a IA, ${processing} em processamento e ${needsReprocess} pendente(s) de reprocessamento.`
+    : `Vector Store não configurada. O índice local segue ativo com ${processed} arquivo(s) processado(s), ${analyzed} analisado(s), ${available} disponível(is) para a IA, ${processing} em processamento e ${Math.max(needsReprocess, failed)} item(ns) exigindo atenção.`;
   const backgroundText = background.running
     ? `Fila em background ativa. ${Number(background.queued || 0)} na fila, ${Number(background.processed || 0)} processado(s) e ${Number(background.failed || 0)} falha(s).`
     : `Fila em background pronta. ${Number(background.queued || 0)} aguardando, ${Number(background.processed || 0)} processado(s) e ${Number(background.failed || 0)} falha(s).`;
@@ -1981,8 +2031,8 @@ function renderTrainingOverviewCards(overview = {}) {
     { label: 'Arquivos na base', value: Number(knowledgeCounts.total || 0), tone: 'primary' },
     { label: 'Arquivos processados', value: Number(knowledgeCounts.processed || 0), tone: 'neutral' },
     { label: 'Arquivos analisados', value: Number(knowledgeCounts.analyzed || 0), tone: 'success' },
-    { label: 'Disponiveis para IA', value: Number(knowledgeCounts.available || 0), tone: 'success' },
-    { label: 'Memorias documentais', value: Number(memories.document_total || 0), tone: 'primary' },
+    { label: 'Disponíveis para IA', value: Number(knowledgeCounts.available || 0), tone: 'success' },
+    { label: 'Memórias documentais', value: Number(memories.document_total || 0), tone: 'primary' },
     { label: 'Arquivos usados em respostas', value: Number(knowledgeCounts.documents_used_in_responses || 0), tone: 'neutral' },
     { label: 'Para reprocessar', value: Number(knowledgeCounts.needs_reprocess || 0), tone: 'warning' },
     { label: 'Respostas fracas', value: Array.isArray(events.weak_responses) ? events.weak_responses.length : 0, tone: 'danger' },
@@ -2070,7 +2120,7 @@ function renderTrainingMemories(memories = []) {
   const body = document.getElementById('trainingMemoriesBody');
   body.innerHTML = '';
   if (!Array.isArray(memories) || !memories.length) {
-    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhuma memoria persistida ainda.</td></tr>';
+    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhuma memória persistida ainda.</td></tr>';
     return;
   }
 
@@ -2119,7 +2169,7 @@ async function loadAiTrainingOverview() {
     ? overview.knowledge.needs_reprocess
     : (overview.knowledge?.recent_failures || []);
   const failureTotal = Math.max(Number(overview.knowledge?.counts?.needs_reprocess || 0), failureItems.length);
-  document.getElementById('trainingCountLabel').textContent = `${knowledgeTotal} arquivo(s), ${knowledgeProcessed} processado(s), ${knowledgeAnalyzed} analisado(s), ${documentMemoryTotal} memoria(s) documental(is) e ${failureTotal} item(ns) para reprocessar`;
+  document.getElementById('trainingCountLabel').textContent = `${knowledgeTotal} arquivo(s), ${knowledgeProcessed} processado(s), ${knowledgeAnalyzed} analisado(s), ${documentMemoryTotal} memória(s) documental(is) e ${failureTotal} item(ns) para reprocessar`;
 
   renderTrainingOverviewCards(overview);
   renderTrainingTopDocuments(overview.knowledge?.top_documents || []);
@@ -2129,10 +2179,130 @@ async function loadAiTrainingOverview() {
   renderTrainingEvents(overview.training_events?.recent || []);
 }
 
+function renderCockpitList(containerId, items = []) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  (items || []).forEach((item) => {
+    const block = document.createElement('div');
+    block.className = 'admin-cockpit-list-item';
+    block.innerHTML = `
+      <div>
+        <strong>${escapeHtml(item.label || '-')}</strong>
+        <div class="small muted">${escapeHtml(item.description || '')}</div>
+      </div>
+      <span class="badge ${item.tone || ''}">${escapeHtml(item.value || '-')}</span>
+    `;
+    wrap.appendChild(block);
+  });
+}
+
+function renderCockpitGauge(chat = {}) {
+  const averageSeconds = Number(chat.average_response_ms || 0) / 1000;
+  const gauge = document.getElementById('cockpitChatGauge');
+  const value = document.getElementById('cockpitChatGaugeValue');
+  const status = document.getElementById('cockpitChatGaugeStatus');
+  const hint = document.getElementById('cockpitChatGaugeHint');
+  const metrics = document.getElementById('cockpitChatMetrics');
+  if (!gauge || !value || !status || !hint || !metrics) return;
+
+  const severity = String(chat.severity || 'normal');
+  const severityMap = {
+    fast: { label: 'Muito rápido', gauge: 18 },
+    normal: { label: 'Normal', gauge: 42 },
+    slow: { label: 'Lento', gauge: 68 },
+    critical: { label: 'Crítico', gauge: 92 },
+  };
+  const current = severityMap[severity] || severityMap.normal;
+  gauge.style.setProperty('--gauge-value', String(current.gauge));
+  value.textContent = `${averageSeconds.toFixed(1)}s`;
+  status.textContent = current.label;
+  hint.textContent = 'Tempo médio de resposta';
+
+  const metricCards = [
+    { label: 'Última resposta', value: `${(Number(chat.last_response_ms || 0) / 1000).toFixed(1)}s` },
+    { label: 'Latência API', value: `${Math.round(Number(chat.average_api_latency_ms || 0))} ms` },
+    { label: 'Processamento interno', value: `${Math.round(Number(chat.average_internal_ms || 0))} ms` },
+    { label: 'Montagem de contexto', value: `${Math.round(Number(chat.average_context_ms || 0))} ms` },
+    { label: 'Persistência', value: `${Math.round(Number(chat.average_persistence_ms || 0))} ms` },
+    { label: 'Memória RSS', value: formatBytes(Number(chat.memory_rss_bytes || 0)) },
+    { label: 'Uso de memória', value: `${Number(chat.memory_percent || 0).toFixed(1)}%` },
+    { label: 'Carga CPU (1m)', value: String(chat.cpu_load_1m ?? '-') },
+    { label: 'Requisições simultâneas', value: String(chat.concurrent_requests ?? 0) },
+    { label: 'Prompt médio', value: `${Math.round(Number(chat.average_prompt_chars || 0))} chars` },
+    { label: 'Payload médio', value: formatBytes(Number(chat.average_payload_bytes || 0)) },
+    { label: 'Resposta média', value: formatBytes(Number(chat.average_response_bytes || 0)) },
+  ];
+  metrics.innerHTML = '';
+  metricCards.forEach((item) => {
+    const article = document.createElement('article');
+    article.innerHTML = `<strong>${escapeHtml(item.value)}</strong><span>${escapeHtml(item.label)}</span>`;
+    metrics.appendChild(article);
+  });
+}
+
+async function loadAdminCockpit() {
+  const { cockpit } = await api('/api/admin/cockpit');
+  const payload = cockpit || {};
+  const storage = payload.storage || {};
+  const database = payload.database || {};
+  const openai = payload.openai || {};
+  const whatsapp = payload.whatsapp || {};
+  const application = payload.application || {};
+  const queues = payload.queues?.knowledge_background || {};
+  const whatsappQueue = payload.queues?.whatsapp_campaigns || {};
+  const alerts = payload.alerts || {};
+  const summaryWrap = document.getElementById('cockpitSummaryCards');
+  const summaryCards = [
+    { label: 'Storage', value: storage.current || '-' },
+    { label: 'Banco', value: database.client || '-' },
+    { label: 'OpenAI', value: openai.status || '-' },
+    { label: 'WhatsApp', value: whatsapp.integration?.status_label || '-' },
+    { label: 'Status geral', value: application.status || '-' },
+  ];
+  summaryWrap.innerHTML = '';
+  summaryCards.forEach((item) => {
+    const card = document.createElement('article');
+    card.className = 'admin-metric-card neutral';
+    card.innerHTML = `<div class="admin-metric-value">${escapeHtml(item.value)}</div><div class="admin-metric-label">${escapeHtml(item.label)}</div>`;
+    summaryWrap.appendChild(card);
+  });
+
+  document.getElementById('cockpitSummaryLabel').textContent = `Storage ${storage.current || '-'} • Banco ${database.client || '-'} • OpenAI ${openai.status || '-'} • WhatsApp ${whatsapp.integration?.status_label || '-'} • ${Number(alerts.recent_errors_total || 0)} alerta(s) recente(s)`;
+
+  renderCockpitList('cockpitStorageList', [
+    { label: 'Storage atual', value: storage.current || '-', description: storage.technical_note || '' },
+    { label: 'Caminho de upload', value: storage.upload_path || '-', description: storage.knowledge_path || '' },
+    { label: 'Tipo', value: storage.type || '-', description: storage.alert || '' },
+  ]);
+
+  renderCockpitList('cockpitAppList', [
+    { label: 'Banco conectado', value: database.client || '-', description: database.target || '' },
+    { label: 'Ambiente', value: database.environment || application.environment || '-', description: database.availability_note || '' },
+    { label: 'Uptime', value: `${Math.round(Number(application.uptime_seconds || 0) / 60)} min`, description: application.base_url || '' },
+  ]);
+
+  renderCockpitList('cockpitIntegrationsList', [
+    { label: 'OpenAI API', value: openai.api_configured ? 'Ativo' : 'Inativo', description: openai.prompt_configured ? `Prompt: ${openai.prompt_id || 'configurado'}` : 'Sem prompt reutilizável ativo' },
+    { label: 'Vector Store', value: openai.vector_store_configured ? 'Ativo' : 'Inativo', description: openai.vector_store_id || 'Sem ID configurado' },
+    { label: 'Arquivos disponíveis para IA', value: String(openai.knowledge_available_total || 0), description: `${String(openai.knowledge_files_total || 0)} arquivo(s) no total` },
+    { label: 'WhatsApp provider', value: whatsapp.integration?.status_label || '-', description: whatsapp.integration?.technical_note || 'Sem integração ativa para disparo real no momento.' },
+  ]);
+
+  renderCockpitList('cockpitAlertsList', [
+    { label: 'Fila de conhecimento', value: queues.running ? 'Ativa' : 'Pronta', description: `${Number(queues.queued || 0)} na fila • ${Number(queues.processed || 0)} processados` },
+    { label: 'Fila de WhatsApp', value: String(whatsappQueue.pending || 0), description: `${Number(whatsappQueue.sending || 0)} enviando • ${Number(whatsappQueue.failed || 0)} com erro` },
+    { label: 'Erros recentes', value: String(alerts.recent_errors_total || 0), description: `Processamento: ${Number(alerts.processing_failures_7d || 0)} • Treinamento: ${Number(alerts.training_failures_7d || 0)}` },
+    { label: 'Alertas do chat', value: (alerts.chat || []).length ? 'Atenção' : 'Normal', description: (alerts.chat || []).join(' • ') || 'Sem gargalos relevantes detectados agora.' },
+  ]);
+
+  renderCockpitGauge(payload.chat_performance || {});
+}
+
 function renderCloserUserOptions() {
   const closerSelect = document.getElementById('closerUserId');
   const previousCloserValue = closerSelect.value;
-  closerSelect.innerHTML = '<option value="">Sem vinculo direto</option>';
+  closerSelect.innerHTML = '<option value="">Sem vínculo direto</option>';
   cachedUsers.forEach((user) => {
     const option = document.createElement('option');
     option.value = String(user.id);
@@ -2201,7 +2371,7 @@ function renderCloserTable() {
     tr.innerHTML = `
       <td>${escapeHtml(closer.official_name)}</td>
       <td class="small muted">${escapeHtml(closer.display_name || closer.official_name)}</td>
-      <td class="small muted">${escapeHtml(closer.user_name || closer.user_email || 'Sem vinculo')}</td>
+      <td class="small muted">${escapeHtml(closer.user_name || closer.user_email || 'Sem vínculo')}</td>
       <td class="small muted">${escapeHtml(aliases.join(', ') || '-')}</td>
       <td><span class="badge ${closer.status !== 'inactive' ? 'admin' : ''}">${closer.status === 'inactive' ? 'Inativa' : 'Ativa'}</span></td>
       <td><button class="btn" type="button" data-edit-closer="${closer.id}">Editar</button></td>
@@ -2262,7 +2432,7 @@ function renderSalesCloserSummary(byCloser = []) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'admin-chip-card';
-    button.innerHTML = `<strong>${escapeHtml(item.closer_name || 'Sem closer')}</strong><span>${Number(item.total || 0)} matricula(s)</span>`;
+    button.innerHTML = `<strong>${escapeHtml(item.closer_name || 'Sem closer')}</strong><span>${Number(item.total || 0)} matrícula(s)</span>`;
     button.onclick = () => {
       document.getElementById('salesFilterCloser').value = item.closer_id ? String(item.closer_id) : '';
       loadSalesRecords();
@@ -2327,7 +2497,7 @@ function renderSalesLogs(logs = []) {
     : `${logs.length} logs comerciais recentes`;
 
   if (!Array.isArray(logs) || !logs.length) {
-    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma alteracao comercial registrada ainda.</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma alteração comercial registrada ainda.</td></tr>';
     return;
   }
 
@@ -2493,13 +2663,13 @@ document.getElementById('btnSaveUser').onclick = async () => {
         method: 'PATCH',
         body: JSON.stringify(payload),
       });
-      setMsg('Usuario atualizado com sucesso.');
+      setMsg('Usuário atualizado com sucesso.');
     } else {
       await api('/api/admin/users', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      setMsg('Usuario criado com sucesso.');
+      setMsg('Usuário criado com sucesso.');
     }
 
     resetUserForm();
@@ -2740,7 +2910,7 @@ document.getElementById('btnUploadRag').onclick = async () => {
 
   const queue = [...sizeCheck.accepted];
   if (!queue.length) {
-    setMsg('Todos os arquivos selecionados foram descartados por exceder 25 MB, formato nao suportado ou duplicidade na fila.', true);
+    setMsg('Todos os arquivos selecionados foram descartados por exceder 25 MB, formato não suportado ou duplicidade na fila.', true);
     setRagUploadState('Nenhum arquivo elegivel para envio. Ajuste a selecao e tente novamente.', 'error');
     return;
   }
@@ -2892,19 +3062,26 @@ async function initAdmin() {
     loadSubmenus(),
     loadRagStatus(),
     loadRagFiles(),
+    loadAdminCockpit(),
     loadSystemLogs(),
     loadAiTrainingOverview().catch((err) => {
       document.getElementById('trainingCountLabel').textContent = 'Painel de treinamento indisponivel no momento';
-      setMsg('Aviso: nao foi possivel carregar o painel de treinamento: ' + err.message, true);
+      setMsg('Aviso: não foi possível carregar o painel de treinamento: ' + err.message, true);
     }),
   ])
     .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
+
+  window.setInterval(() => {
+    loadAdminCockpit().catch(() => {});
+  }, 15000);
 }
 
 initAdmin();
 </script>
 </body>
 </html>
+
+
 
 
 

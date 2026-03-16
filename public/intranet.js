@@ -97,6 +97,33 @@ let influencerState = {
   activeSection: '',
   notice: null,
 };
+let indicatorState = {
+  enabled: false,
+  loading: false,
+  loaded: false,
+  error: '',
+  bootstrap: null,
+  activeSection: '',
+  selectedTabId: null,
+  notice: null,
+};
+let whatsappState = {
+  enabled: false,
+  loading: false,
+  loaded: false,
+  error: '',
+  bootstrap: null,
+  activeSection: 'dashboard',
+  notice: null,
+  editingGroupId: null,
+  editingCampaignId: null,
+  groupDraft: null,
+  campaignDraft: null,
+  groupFilters: {
+    search: '',
+    status: '',
+  },
+};
 const SIDEBAR_STORAGE_KEY = 'talkers_intranet_sidebar_state_v1';
 const VIEW_STORAGE_KEY = 'talkers_intranet_view_state_v1';
 const DEPARTMENT_TREE_STORAGE_KEY = 'talkers_intranet_department_tree_state_v1';
@@ -272,36 +299,34 @@ function renderIntranetChrome() {
   const dashboardEyebrow = el('dashboardSectionEyebrow');
   if (dashboardEyebrow) dashboardEyebrow.textContent = t('intranet.dashboardSectionEyebrow', {}, 'Dashboard territorial');
   const dashboardTitle = el('dashboardSectionTitle');
-  if (dashboardTitle) dashboardTitle.textContent = t('intranet.dashboardSectionTitle', {}, 'Leitura consolidada da operacao e das areas liberadas');
+  if (dashboardTitle) dashboardTitle.textContent = t('intranet.dashboardSectionTitle', {}, 'Leitura consolidada da operação e das áreas liberadas');
   const dashboardMapEyebrow = el('dashboardMapEyebrow');
   if (dashboardMapEyebrow) dashboardMapEyebrow.textContent = t('intranet.dashboardMap.eyebrow', {}, 'Mapa territorial');
   const dashboardMapTitle = el('dashboardMapTitle');
-  if (dashboardMapTitle) dashboardMapTitle.textContent = t('intranet.dashboardMap.title', {}, 'Cobertura e expansao da base');
+  if (dashboardMapTitle) dashboardMapTitle.textContent = t('intranet.dashboardMap.title', {}, 'Cobertura e expansão da base');
   const dashboardMapDescription = el('dashboardMapDescription');
-  if (dashboardMapDescription) dashboardMapDescription.textContent = t('intranet.dashboardMap.description', {}, 'Estrutura pronta para exibir pins automaticos por regiao, estado e cidade, sem depender de mapas externos.');
+  if (dashboardMapDescription) dashboardMapDescription.textContent = t('intranet.dashboardMap.description', {}, 'Estrutura pronta para exibir pins automáticos por região, estado e cidade, sem depender de mapas externos.');
   const dashboardMapRegionLabel = el('dashboardMapRegionLabel');
-  if (dashboardMapRegionLabel) dashboardMapRegionLabel.textContent = t('intranet.dashboardMap.filters.region', {}, 'Regiao');
+  if (dashboardMapRegionLabel) dashboardMapRegionLabel.textContent = t('intranet.dashboardMap.filters.region', {}, 'Região');
   const dashboardMapStateLabel = el('dashboardMapStateLabel');
   if (dashboardMapStateLabel) dashboardMapStateLabel.textContent = t('intranet.dashboardMap.filters.state', {}, 'Estado');
   const dashboardMapSidebarTitle = el('dashboardMapSidebarTitle');
-  if (dashboardMapSidebarTitle) dashboardMapSidebarTitle.textContent = t('intranet.dashboardMap.sidebarTitle', {}, 'Territorio monitorado');
+  if (dashboardMapSidebarTitle) dashboardMapSidebarTitle.textContent = t('intranet.dashboardMap.sidebarTitle', {}, 'Território monitorado');
   const dashboardMapClusterHint = el('dashboardMapClusterHint');
-  if (dashboardMapClusterHint) dashboardMapClusterHint.textContent = t('intranet.dashboardMap.clusterHint', {}, 'A clusterizacao e os pins automaticos serao ativados quando a base territorial e a integracao com vendas estiverem conectadas.');
+  if (dashboardMapClusterHint) dashboardMapClusterHint.textContent = t('intranet.dashboardMap.clusterHint', {}, 'A clusterização e os pins automáticos serão ativados quando a base territorial e a integração com vendas estiverem conectadas.');
   const dashboardBreakdownTitle = el('dashboardBreakdownTitle');
-  if (dashboardBreakdownTitle) dashboardBreakdownTitle.textContent = t('intranet.dashboardBreakdownTitle', {}, 'Visao por area');
+  if (dashboardBreakdownTitle) dashboardBreakdownTitle.textContent = t('intranet.dashboardBreakdownTitle', {}, 'Visão por área');
   const dashboardHighlightsTitle = el('dashboardHighlightsTitle');
   if (dashboardHighlightsTitle) dashboardHighlightsTitle.textContent = t('intranet.dashboardHighlightsTitle', {}, 'Leituras e alertas');
   document.querySelectorAll('.intranet-back-btn, .intranet-topbar-actions .btn[href="/index.html"]').forEach((node) => {
     node.textContent = t('common.backToChat');
   });
-  const newEventBtn = el('btnNewCalendarEvent');
-  if (newEventBtn) newEventBtn.textContent = t('calendar.newEvent');
   const calendarSectionEyebrow = el('calendarSectionEyebrow');
   if (calendarSectionEyebrow) calendarSectionEyebrow.textContent = t('calendar.sectionEyebrow', {}, 'Planejamento interno');
   const calendarSectionTitle = el('calendarSectionTitle');
-  if (calendarSectionTitle) calendarSectionTitle.textContent = t('calendar.sectionTitle', {}, 'Compromissos e reunioes');
+  if (calendarSectionTitle) calendarSectionTitle.textContent = t('calendar.sectionTitle', {}, 'Compromissos e reuniões');
   const calendarSectionDescription = el('calendarSectionDescription');
-  if (calendarSectionDescription) calendarSectionDescription.textContent = t('calendar.sectionDescription', {}, 'Organize compromissos futuros, acompanhe a agenda do time e mantenha o calendario da escola em dia.');
+  if (calendarSectionDescription) calendarSectionDescription.textContent = t('calendar.sectionDescription', {}, 'Organize compromissos futuros, acompanhe a agenda do time e mantenha o calendário da escola em dia.');
   const prevBtn = el('btnCalendarPrev');
   if (prevBtn) prevBtn.textContent = t('calendar.previous');
   const todayBtn = el('btnCalendarToday');
@@ -312,7 +337,7 @@ function renderIntranetChrome() {
   if (rangeLabel && !calendarState.range) rangeLabel.textContent = t('common.loading');
   document.querySelectorAll('#calendarViewSwitch [data-view]').forEach((button) => {
     const view = button.getAttribute('data-view');
-    button.textContent = t(`calendar.${view}`, {}, button.textContent || view);
+    button.textContent = t(`calendar.views.${view}`, {}, button.textContent || view);
   });
   const statusFilter = el('calendarStatusFilter');
   if (statusFilter) {
@@ -385,11 +410,11 @@ function renderIntranetChrome() {
   const departmentSubmenusEyebrow = el('departmentWorkspaceSubmenusEyebrow');
   if (departmentSubmenusEyebrow) departmentSubmenusEyebrow.textContent = t('intranet.departmentSubmenusEyebrow', {}, 'Submenus');
   const departmentSubmenusTitle = el('departmentWorkspaceSubmenusTitle');
-  if (departmentSubmenusTitle) departmentSubmenusTitle.textContent = t('intranet.departmentSubmenusTitle', {}, 'Fluxos e acessos da area');
+  if (departmentSubmenusTitle) departmentSubmenusTitle.textContent = t('intranet.departmentSubmenusTitle', {}, 'Fluxos e acessos da área');
   const departmentModulesEyebrow = el('departmentWorkspaceModulesEyebrow');
-  if (departmentModulesEyebrow) departmentModulesEyebrow.textContent = t('intranet.departmentModulesEyebrow', {}, 'Modulos do departamento');
+  if (departmentModulesEyebrow) departmentModulesEyebrow.textContent = t('intranet.departmentModulesEyebrow', {}, 'Módulos do departamento');
   const departmentModulesTitle = el('departmentWorkspaceModulesTitle');
-  if (departmentModulesTitle) departmentModulesTitle.textContent = t('intranet.departmentModulesTitle', {}, 'Recursos disponiveis');
+  if (departmentModulesTitle) departmentModulesTitle.textContent = t('intranet.departmentModulesTitle', {}, 'Recursos disponíveis');
   const communicationTitleLabel = document.querySelector('label[for="communicationTitle"]');
   const communicationSummaryLabel = document.querySelector('label[for="communicationSummary"]');
   const communicationContentLabel = document.querySelector('label[for="communicationContent"]');
@@ -398,28 +423,28 @@ function renderIntranetChrome() {
   const communicationAudienceLabel = document.querySelector('label[for="communicationAudienceScope"]');
   const communicationStartsAtLabel = document.querySelector('label[for="communicationStartsAt"]');
   const communicationEndsAtLabel = document.querySelector('label[for="communicationEndsAt"]');
-  if (communicationTitleLabel) communicationTitleLabel.textContent = t('intranet.communication.fields.title', {}, 'Titulo');
+  if (communicationTitleLabel) communicationTitleLabel.textContent = t('intranet.communication.fields.title', {}, 'Título');
   if (communicationSummaryLabel) communicationSummaryLabel.textContent = t('intranet.communication.fields.summary', {}, 'Resumo');
-  if (communicationContentLabel) communicationContentLabel.textContent = t('intranet.communication.fields.content', {}, 'Conteudo completo');
+  if (communicationContentLabel) communicationContentLabel.textContent = t('intranet.communication.fields.content', {}, 'Conteúdo completo');
   if (communicationTypeLabel) communicationTypeLabel.textContent = t('intranet.communication.fields.type', {}, 'Tipo');
   if (communicationPriorityLabel) communicationPriorityLabel.textContent = t('intranet.communication.fields.priority', {}, 'Prioridade');
-  if (communicationAudienceLabel) communicationAudienceLabel.textContent = t('intranet.communication.fields.audience', {}, 'Publico');
-  if (communicationStartsAtLabel) communicationStartsAtLabel.textContent = t('intranet.communication.fields.startsAt', {}, 'Inicio (opcional)');
+  if (communicationAudienceLabel) communicationAudienceLabel.textContent = t('intranet.communication.fields.audience', {}, 'Público');
+  if (communicationStartsAtLabel) communicationStartsAtLabel.textContent = t('intranet.communication.fields.startsAt', {}, 'Início (opcional)');
   if (communicationEndsAtLabel) communicationEndsAtLabel.textContent = t('intranet.communication.fields.endsAt', {}, 'Fim (opcional)');
   const communicationTitleInput = el('communicationTitle');
   const communicationSummaryInput = el('communicationSummary');
   const communicationContentInput = el('communicationContent');
   if (communicationTitleInput) communicationTitleInput.placeholder = t('intranet.communication.placeholders.title', {}, 'Ex.: Treinamento interno desta semana');
-  if (communicationSummaryInput) communicationSummaryInput.placeholder = t('intranet.communication.placeholders.summary', {}, 'Texto curto para a Home e notificacoes');
+  if (communicationSummaryInput) communicationSummaryInput.placeholder = t('intranet.communication.placeholders.summary', {}, 'Texto curto para a Home e notificações');
   if (communicationContentInput) communicationContentInput.placeholder = t('intranet.communication.placeholders.content', {}, 'Texto principal do comunicado');
   const communicationDepartmentsLabel = document.querySelector('#communicationDepartmentsWrap > label');
   const communicationDepartmentsHint = document.querySelector('#communicationDepartmentsWrap .small.muted');
   if (communicationDepartmentsLabel) communicationDepartmentsLabel.textContent = t('intranet.communication.fields.departments', {}, 'Departamentos do comunicado');
-  if (communicationDepartmentsHint) communicationDepartmentsHint.textContent = t('intranet.communication.segmentedDepartmentsHint', {}, 'Use quando o publico for segmentado por departamento.');
+  if (communicationDepartmentsHint) communicationDepartmentsHint.textContent = t('intranet.communication.segmentedDepartmentsHint', {}, 'Use quando o público for segmentado por departamento.');
   const communicationActiveStrong = document.querySelector('#communicationIsActive')?.closest('.admin-check-row')?.querySelector('strong');
   const communicationActiveSmall = document.querySelector('#communicationIsActive')?.closest('.admin-check-row')?.querySelector('small');
   if (communicationActiveStrong) communicationActiveStrong.textContent = t('intranet.communication.activeTitle', {}, 'Comunicado ativo');
-  if (communicationActiveSmall) communicationActiveSmall.textContent = t('intranet.communication.activeHint', {}, 'Comunicados ativos aparecem na Home, na area de comunicacao e nas notificacoes internas.');
+  if (communicationActiveSmall) communicationActiveSmall.textContent = t('intranet.communication.activeHint', {}, 'Comunicados ativos aparecem na Home, na área de comunicação e nas notificações internas.');
   const cancelCommunicationBtn = el('btnCancelCommunicationEdit');
   if (cancelCommunicationBtn) cancelCommunicationBtn.textContent = t('common.cancel');
   const publishedTitle = document.querySelector('#communicationManageList')?.previousElementSibling;
@@ -430,17 +455,17 @@ function renderIntranetChrome() {
     ['#dashboard .intranet-section-eyebrow', t('intranet.routes.dashboardEyebrow', {}, 'BI')],
     ['#dashboard .intranet-section-title', t('intranet.routes.dashboardTitle', {}, 'Dashboard / BI')],
     ['#modules .intranet-section-eyebrow', t('intranet.routes.modulesEyebrow', {}, 'Workspace')],
-    ['#modules .intranet-section-title', t('intranet.routes.modulesTitle', {}, 'Modulos')],
-    ['#calendar .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.calendarEyebrow', {}, 'Calendario corporativo')],
+    ['#modules .intranet-section-title', t('intranet.routes.modulesTitle', {}, 'Módulos')],
+    ['#calendar .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.calendarEyebrow', {}, 'Calendário corporativo')],
     ['#calendar .intranet-section-head .intranet-section-title', t('intranet.nav.calendar')],
-    ['#departments .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.departmentsEyebrow', {}, 'Areas de trabalho')],
+    ['#departments .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.departmentsEyebrow', {}, 'Áreas de trabalho')],
     ['#departments .intranet-section-head .intranet-section-title', t('intranet.routes.departmentsTitle', {}, 'Departamentos')],
     ['#documents .intranet-section-eyebrow', t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento')],
     ['#documents .intranet-section-title', t('intranet.routes.documentsTitle', {}, 'Documentos')],
-    ['#training .intranet-section-eyebrow', t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestao')],
+    ['#training .intranet-section-eyebrow', t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestão')],
     ['#training .intranet-section-title', t('intranet.routes.trainingTitle', {}, 'Treinamento IA')],
     ['#communication .intranet-section-eyebrow', t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados')],
-    ['#communication .intranet-section-title', t('intranet.routes.communicationTitle', {}, 'Comunicacao')],
+    ['#communication .intranet-section-title', t('intranet.routes.communicationTitle', {}, 'Comunicação')],
   ];
   staticSectionMap.forEach(([selector, text]) => {
     const node = document.querySelector(selector);
@@ -538,13 +563,13 @@ function getRouteMeta(route = {}, intranet) {
   const map = {
     home: { title: t('intranet.nav.home'), eyebrow: t('intranet.eyebrow') },
     dashboard: { title: t('intranet.routes.dashboardTitle', {}, 'Dashboard / BI'), eyebrow: t('intranet.routes.dashboardEyebrow', {}, 'BI') },
-    modules: { title: t('intranet.routes.modulesTitle', {}, 'Modulos'), eyebrow: t('intranet.routes.modulesEyebrow', {}, 'Workspace') },
-    calendar: { title: t('intranet.nav.calendar'), eyebrow: t('intranet.routes.calendarEyebrow', {}, 'Calendario corporativo') },
-    departments: { title: t('intranet.routes.departmentsTitle', {}, 'Departamentos'), eyebrow: t('intranet.routes.departmentsEyebrow', {}, 'Areas de trabalho') },
+    modules: { title: t('intranet.routes.modulesTitle', {}, 'Módulos'), eyebrow: t('intranet.routes.modulesEyebrow', {}, 'Workspace') },
+    calendar: { title: t('intranet.nav.calendar'), eyebrow: t('intranet.routes.calendarEyebrow', {}, 'Calendário corporativo') },
+    departments: { title: t('intranet.routes.departmentsTitle', {}, 'Departamentos'), eyebrow: t('intranet.routes.departmentsEyebrow', {}, 'Áreas de trabalho') },
     documents: { title: t('intranet.routes.documentsTitle', {}, 'Documentos'), eyebrow: t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento') },
     training: { title: t('intranet.routes.trainingTitle', {}, 'Treinamento IA'), eyebrow: t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestao') },
-    communication: { title: t('intranet.routes.communicationTitle', {}, 'Comunicacao'), eyebrow: t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados') },
-    sales: { title: t('intranet.nav.sales'), eyebrow: t('intranet.routes.salesEyebrow', {}, 'Operacao comercial') },
+    communication: { title: t('intranet.routes.communicationTitle', {}, 'Comunicação'), eyebrow: t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados') },
+    sales: { title: t('intranet.nav.sales'), eyebrow: t('intranet.routes.salesEyebrow', {}, 'Operação comercial') },
   };
 
   return map[route.key] || { title: t('intranet.title'), eyebrow: t('intranet.eyebrow') };
@@ -712,7 +737,7 @@ function renderSidebarUtility(intranet) {
   const items = [
     ...notifications.slice(0, 3).map((item) => ({
       type: item.type || 'notification',
-      title: item.title || t('intranet.generic.update', {}, 'Atualizacao'),
+      title: item.title || t('intranet.generic.update', {}, 'Atualização'),
       description: item.description || '',
     })),
     ...upcoming.slice(0, 3).map((item) => ({
@@ -734,7 +759,7 @@ function renderSidebarUtility(intranet) {
     button.innerHTML = `
       <span class="intranet-nav-link-icon">${renderIcon(item.type === 'event' ? 'calendar' : item.type === 'announcement' ? 'megaphone' : 'general')}</span>
       <span class="intranet-side-link-copy">
-        <strong>${escapeHtml(item.title || t('intranet.generic.update', {}, 'Atualizacao'))}</strong>
+        <strong>${escapeHtml(item.title || t('intranet.generic.update', {}, 'Atualização'))}</strong>
         <small>${escapeHtml(item.description || '')}</small>
       </span>
     `;
@@ -753,7 +778,7 @@ function renderSidebar(user, intranet) {
   const visibleDepartments = getVisibleDepartments(intranet);
   el('intranetBrandSub').textContent = user.role === 'admin'
     ? t('intranet.brandSubAdminAccess', {}, 'Acesso administrativo total')
-    : t('intranet.brandSubUserAccess', { count: visibleDepartments.length, email: user.email || '' }, `${visibleDepartments.length} area(s) liberada(s) - ${user.email || ''}`);
+    : t('intranet.brandSubUserAccess', { count: visibleDepartments.length, email: user.email || '' }, `${visibleDepartments.length} área(s) liberada(s) - ${user.email || ''}`);
 
   const primaryNav = el('intranetPrimaryNav');
   primaryNav.innerHTML = '';
@@ -788,7 +813,7 @@ function renderSidebar(user, intranet) {
           <span class="intranet-nav-link-icon">${renderIcon(department.icon || 'layers')}</span>
           <span class="intranet-department-toggle-copy">
           <strong>${escapeHtml(department.name || t('intranet.departmentDefaultName', {}, 'Departamento'))}</strong>
-          <small>${submenus.length ? t('intranet.departmentSubmenusCount', { count: submenus.length }, `${submenus.length} submenu(s)`) : t('intranet.departmentMainArea', {}, 'Area principal')}</small>
+          <small>${submenus.length ? t('intranet.departmentSubmenusCount', { count: submenus.length }, `${submenus.length} submenu(s)`) : t('intranet.departmentMainArea', {}, 'Área principal')}</small>
           </span>
           <span class="intranet-department-chevron">${renderIcon('chevron')}</span>
         `;
@@ -848,8 +873,8 @@ function renderHomeOverview(user, intranet) {
       directionGrid.innerHTML = `
         <article class="intranet-direction-card is-empty">
           <div class="intranet-card-meta">${escapeHtml(t('intranet.direction.origin'))}</div>
-          <h4>${escapeHtml(t('intranet.direction.emptyTitle', {}, 'Direcao sem novos comunicados agora'))}</h4>
-          <p>${escapeHtml(t('intranet.direction.emptyBody', {}, 'Quando houver avisos prioritarios da Direcao, eles aparecem primeiro neste mural.'))}</p>
+          <h4>${escapeHtml(t('intranet.direction.emptyTitle', {}, 'Direção sem novos comunicados agora'))}</h4>
+          <p>${escapeHtml(t('intranet.direction.emptyBody', {}, 'Quando houver avisos prioritários da Direção, eles aparecem primeiro neste mural.'))}</p>
         </article>
       `;
     } else {
@@ -880,7 +905,7 @@ function renderHomeOverview(user, intranet) {
         meta: item.type === 'announcement'
           ? t('intranet.generic.announcement', {}, 'Comunicado')
           : t('intranet.generic.reminder', {}, 'Lembrete'),
-        title: item.title || t('intranet.generic.update', {}, 'Atualizacao'),
+        title: item.title || t('intranet.generic.update', {}, 'Atualização'),
         description: item.description || '',
         footer: t('intranet.generic.internalRoutine', {}, 'Rotina interna'),
       })) : []),
@@ -978,7 +1003,7 @@ function renderModules(intranet, query = '') {
   });
 
   if (!modules.length) {
-    grid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.modules.empty', {}, 'Nenhum modulo encontrado para este filtro.'))}</div>`;
+    grid.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.modules.empty', {}, 'Nenhum módulo encontrado para este filtro.'))}</div>`;
     return;
   }
 
@@ -1035,7 +1060,7 @@ function renderDepartments(intranet) {
       <p>${escapeHtml(department.description || '')}</p>
       <ul class="intranet-department-modules">${modules}</ul>
       <div class="intranet-card-actions">
-        <button class="btn" type="button" data-open-department="${escapeHtml(department.slug || '')}">Abrir area</button>
+        <button class="btn" type="button" data-open-department="${escapeHtml(department.slug || '')}">Abrir área</button>
       </div>
     `;
     grid.appendChild(card);
@@ -1052,26 +1077,26 @@ function renderDepartments(intranet) {
   if (reminderGrid) {
     const reminderItems = [
       ...(Array.isArray(intranet.home?.upcoming_events) ? intranet.home.upcoming_events.slice(0, 3).map((item) => ({
-        badge: 'Reuniao',
+        badge: 'Reunião',
         title: item.title || 'Compromisso',
         description: item.description || item.meeting_mode_label || 'Agenda corporativa',
         meta: formatDate(item.start_at || item.start_date || ''),
       })) : []),
       ...(Array.isArray(intranet.notifications) ? intranet.notifications.slice(0, 3).map((item) => ({
         badge: item.type === 'announcement' ? 'Aviso' : 'Lembrete',
-        title: item.title || 'Atualizacao',
+        title: item.title || 'Atualização',
         description: item.description || '',
         meta: 'Fluxo interno',
       })) : []),
     ].slice(0, 6);
 
     if (!reminderItems.length) {
-      reminderGrid.innerHTML = '<div class="intranet-empty-card">Nenhuma reuniao, aviso rapido ou lembrete imediato encontrado.</div>';
+      reminderGrid.innerHTML = '<div class="intranet-empty-card">Nenhuma reunião, aviso rápido ou lembrete imediato encontrado.</div>';
     } else {
       reminderGrid.innerHTML = reminderItems.map((item) => `
         <article class="intranet-quick-card intranet-home-overview-card intranet-reminder-card">
           <div class="intranet-card-meta">${escapeHtml(item.badge || 'Lembrete')}</div>
-          <div class="intranet-quick-title">${escapeHtml(item.title || 'Atualizacao')}</div>
+          <div class="intranet-quick-title">${escapeHtml(item.title || 'Atualização')}</div>
           <div class="intranet-quick-text">${escapeHtml(item.description || '')}</div>
           <div class="intranet-home-overview-meta">${escapeHtml(item.meta || '')}</div>
         </article>
@@ -1096,7 +1121,7 @@ function formatDateOnly(value) {
 }
 
 function formatDateRangeLabel(from = '', to = '') {
-  if (!from && !to) return t('intranet.generic.periodUndefined', {}, 'Periodo nao definido');
+  if (!from && !to) return t('intranet.generic.periodUndefined', {}, 'Período não definido');
   if (from && to && from !== to) {
     return `${formatDateOnly(from)} - ${formatDateOnly(to)}`;
   }
@@ -1124,7 +1149,7 @@ function capitalizeLabel(value = '') {
 
 function formatInfluenceTypesList(items = []) {
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
-  return safeItems.length ? safeItems.join(', ') : t('intranet.generic.notInformed', {}, 'Nao informado');
+  return safeItems.length ? safeItems.join(', ') : t('intranet.generic.notInformed', {}, 'Não informado');
 }
 
 function getInfluencerInitials(name = '') {
@@ -1135,9 +1160,9 @@ function getInfluencerInitials(name = '') {
 
 function getMarketingPeriodOptions() {
   return [
-    { value: 'day', label: t('calendar.day') },
-    { value: 'week', label: t('calendar.week') },
-    { value: 'month', label: t('calendar.month') },
+    { value: 'day', label: t('calendar.views.day', {}, 'Dia') },
+    { value: 'week', label: t('calendar.views.week', {}, 'Semana') },
+    { value: 'month', label: t('calendar.views.month', {}, 'Mês') },
   ];
 }
 
@@ -1327,26 +1352,26 @@ function renderInfluencerMonthlyComparison(monthly = []) {
   const rows = Array.isArray(monthly) ? monthly.slice(-6) : [];
   return `
     <article class="influencer-chart-card influencer-chart-card-wide">
-      <div class="intranet-card-meta">${escapeHtml(t('intranet.marketingInfluencer.monthlyEvolutionMeta', {}, 'Evolucao mensal'))}</div>
-      <h4>${escapeHtml(t('intranet.marketingInfluencer.monthlyEvolutionTitle', {}, 'Comparativo entre influencers por periodo'))}</h4>
+      <div class="intranet-card-meta">${escapeHtml(t('intranet.marketingInfluencer.monthlyEvolutionMeta', {}, 'Evolução mensal'))}</div>
+      <h4>${escapeHtml(t('intranet.marketingInfluencer.monthlyEvolutionTitle', {}, 'Comparativo entre influencers por período'))}</h4>
       <div class="influencer-evolution-list">
         ${rows.length ? rows.map((entry) => `
           <div class="influencer-evolution-item">
             <div class="influencer-evolution-head">
-              <strong>${escapeHtml(entry.label || entry.period_key || t('intranet.marketingInfluencer.periodLabel', {}, 'Periodo'))}</strong>
+              <strong>${escapeHtml(entry.label || entry.period_key || t('intranet.marketingInfluencer.periodLabel', {}, 'Período'))}</strong>
               <span>${escapeHtml(t('intranet.marketingInfluencer.influencerCount', { count: String((entry.influencers || []).length || 0) }, `${String((entry.influencers || []).length || 0)} influencer(s)`))}</span>
             </div>
             <div class="influencer-evolution-grid">
               ${(entry.influencers || []).sort((left, right) => Number(right?.enrollments_count || 0) - Number(left?.enrollments_count || 0)).map((item) => `
                 <div class="influencer-evolution-chip">
                   <strong>${escapeHtml(item.name || 'Influencer')}</strong>
-                  <span>${escapeHtml(t('intranet.marketingInfluencer.enrollmentsCount', { count: formatInteger(item.enrollments_count || 0) }, `${formatInteger(item.enrollments_count || 0)} matriculas`))}</span>
+                  <span>${escapeHtml(t('intranet.marketingInfluencer.enrollmentsCount', { count: formatInteger(item.enrollments_count || 0) }, `${formatInteger(item.enrollments_count || 0)} matrículas`))}</span>
                   <small>${escapeHtml(t('intranet.marketingInfluencer.scorePoints', { count: formatInteger(item.performance_score || 0) }, `${formatInteger(item.performance_score || 0)} pts`))}</small>
                 </div>
               `).join('')}
             </div>
           </div>
-        `).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyEvolution', {}, 'A evolucao mensal aparecera conforme os lancamentos forem sendo registrados.'))}</div>`}
+        `).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyEvolution', {}, 'A evolução mensal aparecerá conforme os lançamentos forem sendo registrados.'))}</div>`}
       </div>
     </article>
   `;
@@ -1354,6 +1379,934 @@ function renderInfluencerMonthlyComparison(monthly = []) {
 
 function isMarketingInfluencerWorkspace(department, submenu) {
   return String(department?.slug || '') === 'marketing' && String(submenu?.slug || '') === 'influencer';
+}
+
+function isMarketingIndicatorWorkspace(department, submenu) {
+  return String(department?.slug || '') === 'marketing' && String(submenu?.slug || '') === 'indicador';
+}
+
+function isPedagogicalWhatsAppWorkspace(department, submenu) {
+  return String(department?.slug || '') === 'pedagogico' && String(submenu?.slug || '') === 'whatsapp';
+}
+
+function getMarketingIndicatorTabs() {
+  return Array.isArray(indicatorState.bootstrap?.tabs) ? indicatorState.bootstrap.tabs : [];
+}
+
+function getSelectedMarketingIndicatorTab() {
+  const tabs = getMarketingIndicatorTabs();
+  return tabs.find((item) => Number(item.id) === Number(indicatorState.selectedTabId || 0)) || tabs[0] || null;
+}
+
+function setIndicatorActiveSection(sectionKey = '') {
+  const safeSection = String(sectionKey || '').trim();
+  indicatorState.activeSection = indicatorState.activeSection === safeSection ? '' : safeSection;
+}
+
+function forceIndicatorSection(sectionKey = 'entry') {
+  indicatorState.activeSection = String(sectionKey || 'entry').trim() || 'entry';
+}
+
+function setIndicatorNotice(type = '', text = '') {
+  const safeText = String(text || '').trim();
+  indicatorState.notice = safeText ? { type: type || 'info', text: safeText } : null;
+}
+
+function getIndicatorInputType(column = '') {
+  const normalized = String(column || '').toLowerCase();
+  if (normalized.includes('data')) return 'date';
+  if (normalized.includes('valor') || normalized.includes('quantidade') || normalized.includes('matric') || normalized.includes('lead') || normalized.includes('cac') || normalized.includes('convers') || normalized.includes('meta') || normalized.includes('realizada') || normalized.includes('seguidores') || normalized.includes('views')) {
+    return 'number';
+  }
+  return 'text';
+}
+
+function toIndicatorFieldId(column = '') {
+  return `indicator-${String(column || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'field'}`;
+}
+
+function formatIndicatorValue(value = '') {
+  const safeValue = String(value ?? '').trim();
+  return safeValue || '-';
+}
+
+function buildIndicatorLineChartSvg(chart = {}) {
+  const labels = Array.isArray(chart?.labels) ? chart.labels : [];
+  const series = Array.isArray(chart?.series) ? chart.series.filter((item) => Array.isArray(item?.points) && item.points.length) : [];
+  if (!labels.length || !series.length) {
+    return `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingIndicator.emptyChart', {}, 'Ainda não há dados suficientes para desenhar este gráfico.'))}</div>`;
+  }
+
+  const width = 620;
+  const height = 220;
+  const paddingX = 28;
+  const paddingY = 18;
+  const maxValue = Math.max(...series.flatMap((item) => item.points.map((point) => Number(point || 0))), 1);
+  const stepX = labels.length > 1 ? (width - (paddingX * 2)) / (labels.length - 1) : 0;
+  const colors = ['#10b981', '#2563eb', '#f59e0b', '#7c3aed', '#ef4444', '#0f766e'];
+  const paths = series.map((item, index) => {
+    const path = item.points.map((point, pointIndex) => {
+      const x = paddingX + (pointIndex * stepX);
+      const y = height - paddingY - ((Number(point || 0) / maxValue) * (height - (paddingY * 2)));
+      return `${pointIndex === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(' ');
+    return {
+      color: colors[index % colors.length],
+      path,
+      label: item.label || item.key || `Série ${index + 1}`,
+      lastValue: item.last_value || 0,
+    };
+  });
+
+  const xLabels = labels.map((label, index) => {
+    const x = paddingX + (index * stepX);
+    return `<text x="${x.toFixed(2)}" y="${height - 2}" text-anchor="middle">${escapeHtml(String(label || '').slice(0, 14))}</text>`;
+  }).join('');
+
+  return `
+    <div class="indicator-chart-shell">
+      <svg class="indicator-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+        <line x1="${paddingX}" y1="${height - paddingY}" x2="${width - paddingX}" y2="${height - paddingY}" class="indicator-chart-axis"></line>
+        <line x1="${paddingX}" y1="${paddingY}" x2="${paddingX}" y2="${height - paddingY}" class="indicator-chart-axis"></line>
+        ${paths.map((item) => `<path d="${item.path}" fill="none" stroke="${item.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>`).join('')}
+        <g class="indicator-chart-labels">${xLabels}</g>
+      </svg>
+      <div class="indicator-chart-legend">
+        ${paths.map((item) => `
+          <div class="indicator-chart-legend-item">
+            <span style="--indicator-line:${item.color}"></span>
+            <strong>${escapeHtml(item.label)}</strong>
+            <small>${escapeHtml(String(item.lastValue))}</small>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function buildIndicatorPersonSummary(tab = {}) {
+  if (!tab?.person) return '';
+  const photoMarkup = tab.person.photo_url
+    ? `<img class="influencer-avatar" src="${escapeHtml(tab.person.photo_url)}" alt="${escapeHtml(tab.person.name || 'Pessoa')}" />`
+    : `<span class="influencer-avatar influencer-avatar-fallback">${escapeHtml(tab.person.initials || 'MK')}</span>`;
+  return `
+    <article class="indicator-person-card">
+      <div class="influencer-card-head">
+        ${photoMarkup}
+        <div class="influencer-card-copy">
+          <h4>${escapeHtml(tab.person.name || tab.title || 'Pessoa')}</h4>
+          <div class="small muted">${escapeHtml(tab.title || t('intranet.marketingIndicator.personPanel', {}, 'Painel por pessoa'))}</div>
+        </div>
+      </div>
+      <div class="indicator-person-stats">
+        ${(tab.chart?.series || []).slice(0, 3).map((item) => `
+          <div>
+            <strong>${escapeHtml(String(item.last_value ?? 0))}</strong>
+            <span>${escapeHtml(item.label || item.key || '-')}</span>
+          </div>
+        `).join('')}
+      </div>
+    </article>
+  `;
+}
+
+function renderMarketingIndicatorWorkspace() {
+  const customWrap = el('departmentWorkspaceCustom');
+  if (!customWrap) return;
+
+  if (indicatorState.loading && !indicatorState.bootstrap) {
+    customWrap.hidden = false;
+    customWrap.innerHTML = `<section class="workspace-section-panel"><div class="small muted">${escapeHtml(t('common.loading', {}, 'Carregando...'))}</div></section>`;
+    return;
+  }
+
+  if (indicatorState.error) {
+    customWrap.hidden = false;
+    customWrap.innerHTML = `<section class="workspace-section-panel"><div class="small muted">${escapeHtml(indicatorState.error)}</div></section>`;
+    return;
+  }
+
+  const bootstrap = indicatorState.bootstrap || {};
+  const tabs = getMarketingIndicatorTabs();
+  const selectedTab = getSelectedMarketingIndicatorTab();
+  const activeSection = indicatorState.activeSection || 'entry';
+  const noticeMarkup = indicatorState.notice
+    ? `<div class="workspace-inline-notice is-${escapeHtml(indicatorState.notice.type || 'info')}"><div>${escapeHtml(indicatorState.notice.text || '')}</div><button class="btn workspace-inline-notice-close" type="button" id="btnDismissIndicatorNotice">${renderIcon('chevron')}</button></div>`
+    : '';
+  const actionMenu = buildWorkspaceActionMenu([
+    { key: 'entry', title: t('intranet.marketingIndicator.actions.entry', {}, 'Preenchimento'), description: t('intranet.marketingIndicator.actions.entryHint', {}, 'Entrada em estilo planilha') },
+    { key: 'charts', title: t('intranet.marketingIndicator.actions.charts', {}, 'Indicadores'), description: t('intranet.marketingIndicator.actions.chartsHint', {}, 'Leitura visual da aba atual') },
+    { key: 'dashboard', title: t('intranet.marketingIndicator.actions.dashboard', {}, 'Dashboard'), description: t('intranet.marketingIndicator.actions.dashboardHint', {}, 'Resumo analítico do Marketing') },
+  ], activeSection);
+
+  const tabMenu = tabs.length
+    ? `<div class="indicator-tab-menu">${tabs.map((tab) => `
+        <button class="indicator-tab-button${Number(tab.id) === Number(selectedTab?.id || 0) ? ' is-active' : ''}" type="button" data-indicator-tab="${escapeHtml(tab.id)}">
+          <strong>${escapeHtml(tab.title || t('intranet.marketingIndicator.defaultTab', {}, 'Indicador'))}</strong>
+          <small>${escapeHtml(String(tab.row_count || 0))} ${escapeHtml(t('intranet.marketingIndicator.rows', {}, 'linhas'))}</small>
+        </button>
+      `).join('')}</div>`
+    : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingIndicator.emptyTabs', {}, 'Nenhuma aba de indicador foi preparada ainda.'))}</div>`;
+
+  const entrySection = selectedTab ? `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingIndicator.entryEyebrow', {}, 'Entrada operacional'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(selectedTab.title || t('intranet.marketingIndicator.defaultTab', {}, 'Indicador'))}</h4>
+        </div>
+        <button class="btn" type="button" id="btnOpenIndicatorDashboard">${escapeHtml(t('intranet.marketingIndicator.actions.dashboard', {}, 'Dashboard'))}</button>
+      </div>
+      <form id="indicatorRowForm" class="indicator-entry-form">
+        <div class="indicator-entry-grid">
+          ${(selectedTab.columns || []).map((column) => `
+            <div>
+              <label for="${escapeHtml(toIndicatorFieldId(column))}">${escapeHtml(column)}</label>
+              <input
+                id="${escapeHtml(toIndicatorFieldId(column))}"
+                data-indicator-column="${escapeHtml(column)}"
+                type="${escapeHtml(getIndicatorInputType(column))}"
+                step="${getIndicatorInputType(column) === 'number' ? 'any' : ''}"
+                placeholder="${escapeHtml(column)}"
+              />
+            </div>
+          `).join('')}
+        </div>
+        <div class="influencer-form-actions">
+          <button class="btn" type="button" id="btnResetIndicatorForm">${escapeHtml(t('common.cancel', {}, 'Cancelar'))}</button>
+          <button class="btn primary" type="submit">${escapeHtml(t('common.save', {}, 'Salvar'))}</button>
+        </div>
+      </form>
+      <div class="indicator-sheet-table">
+        <div class="indicator-sheet-row is-head">${(selectedTab.columns || []).map((column) => `<span>${escapeHtml(column)}</span>`).join('')}</div>
+        ${(selectedTab.rows || []).length ? (selectedTab.rows || []).map((row) => `
+          <div class="indicator-sheet-row">
+            ${(selectedTab.columns || []).map((column) => `<span>${escapeHtml(formatIndicatorValue(row.values?.[column]))}</span>`).join('')}
+          </div>
+        `).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingIndicator.emptyRows', {}, 'Nenhuma linha cadastrada ainda para esta aba.'))}</div>`}
+      </div>
+    </section>
+  ` : '';
+
+  const chartsSection = selectedTab ? `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingIndicator.chartsEyebrow', {}, 'Leitura visual'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(selectedTab.title || t('intranet.marketingIndicator.defaultTab', {}, 'Indicador'))}</h4>
+        </div>
+      </div>
+      ${selectedTab.is_person_panel ? buildIndicatorPersonSummary(selectedTab) : ''}
+      <article class="indicator-chart-card">
+        <div class="intranet-card-meta">${escapeHtml(t('intranet.marketingIndicator.chartMeta', {}, 'Gráfico de linha'))}</div>
+        <h4>${escapeHtml(selectedTab.title || t('intranet.marketingIndicator.defaultTab', {}, 'Indicador'))}</h4>
+        ${buildIndicatorLineChartSvg(selectedTab.chart || {})}
+      </article>
+    </section>
+  ` : '';
+
+  const dashboardSection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingIndicator.dashboardEyebrow', {}, 'Resumo analítico'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingIndicator.dashboardTitle', {}, 'Dashboard de indicadores'))}</h4>
+        </div>
+      </div>
+      <div class="indicator-summary-grid">
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingIndicator.summary.tabs', {}, 'Abas'))}</div><div class="influencer-overview-value">${escapeHtml(String(bootstrap.summary?.tabs_total || 0))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingIndicator.summary.rows', {}, 'Linhas'))}</div><div class="influencer-overview-value">${escapeHtml(String(bootstrap.summary?.rows_total || 0))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingIndicator.summary.series', {}, 'Séries'))}</div><div class="influencer-overview-value">${escapeHtml(String(bootstrap.summary?.series_total || 0))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingIndicator.summary.people', {}, 'Pessoas'))}</div><div class="influencer-overview-value">${escapeHtml(String(bootstrap.summary?.person_panels_total || 0))}</div></article>
+      </div>
+      <div class="indicator-dashboard-grid">
+        ${tabs.map((tab) => `
+          <article class="indicator-chart-card">
+            <div class="intranet-card-meta">${escapeHtml(tab.indicator_kind || t('intranet.marketingIndicator.defaultKind', {}, 'Indicador'))}</div>
+            <h4>${escapeHtml(tab.title || t('intranet.marketingIndicator.defaultTab', {}, 'Indicador'))}</h4>
+            ${tab.is_person_panel ? buildIndicatorPersonSummary(tab) : ''}
+            ${buildIndicatorLineChartSvg(tab.chart || {})}
+          </article>
+        `).join('')}
+      </div>
+    </section>
+  `;
+
+  const sectionMarkup = activeSection === 'dashboard'
+    ? dashboardSection
+    : activeSection === 'charts'
+      ? chartsSection
+      : entrySection;
+
+  customWrap.hidden = false;
+  customWrap.innerHTML = `
+    <section class="indicator-workspace">
+      <div class="influencer-toolbar influencer-toolbar-compact">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingIndicator.eyebrow', {}, 'Marketing'))}</div>
+          <h3 class="intranet-section-title">${escapeHtml(t('intranet.marketingIndicator.title', {}, 'Indicador'))}</h3>
+          <p class="small muted">${escapeHtml(t('intranet.marketingIndicator.description', {}, 'Entrada de dados em estilo planilha e leitura analítica organizada a partir das abas da planilha base.'))}</p>
+        </div>
+        <div class="indicator-toolbar-meta">
+          <div class="small muted">${escapeHtml(bootstrap.workbook_source?.source_file || 'indicador geral.xlsx')}</div>
+          <button class="btn" type="button" id="btnRefreshIndicatorWorkspace">${escapeHtml(t('common.refresh', {}, 'Atualizar'))}</button>
+        </div>
+      </div>
+      ${noticeMarkup}
+      <section class="workspace-submenu-shell">
+        <div class="workspace-submenu-header">
+          <div>
+            <div class="intranet-block-title">${escapeHtml(t('intranet.marketingIndicator.submenuTitle', {}, 'Abas do indicador'))}</div>
+            <div class="small muted">${escapeHtml(t('intranet.marketingIndicator.submenuHint', {}, 'Abra a aba que deseja alimentar e consulte o Dashboard do Marketing quando precisar de leitura consolidada.'))}</div>
+          </div>
+        </div>
+        ${tabMenu}
+        ${actionMenu}
+        ${sectionMarkup}
+      </section>
+    </section>
+  `;
+
+  bindWorkspaceActionMenu(customWrap, (sectionKey) => {
+    setIndicatorNotice('', '');
+    setIndicatorActiveSection(sectionKey);
+    renderMarketingIndicatorWorkspace();
+  });
+  el('btnDismissIndicatorNotice')?.addEventListener('click', () => {
+    setIndicatorNotice('', '');
+    renderMarketingIndicatorWorkspace();
+  });
+  el('btnRefreshIndicatorWorkspace')?.addEventListener('click', async () => {
+    await fetchMarketingIndicatorBootstrap({ selectedTabId: selectedTab?.id || null, preserveSelection: true });
+  });
+  el('btnResetIndicatorForm')?.addEventListener('click', () => {
+    el('indicatorRowForm')?.reset();
+  });
+  el('btnOpenIndicatorDashboard')?.addEventListener('click', () => {
+    forceIndicatorSection('dashboard');
+    renderMarketingIndicatorWorkspace();
+  });
+  el('indicatorRowForm')?.addEventListener('submit', handleIndicatorRowSubmit);
+  Array.from(customWrap.querySelectorAll('[data-indicator-tab]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      indicatorState.selectedTabId = Number(button.getAttribute('data-indicator-tab') || 0) || null;
+      renderMarketingIndicatorWorkspace();
+    });
+  });
+}
+
+async function fetchMarketingIndicatorBootstrap(options = {}) {
+  indicatorState.loading = true;
+  indicatorState.error = '';
+  renderMarketingIndicatorWorkspace();
+
+  try {
+    const params = new URLSearchParams();
+    const preferredTabId = Number(options.selectedTabId || indicatorState.selectedTabId || 0);
+    if (preferredTabId) params.set('tab_id', String(preferredTabId));
+    const { indicators } = await api(`/api/intranet/marketing/indicators/bootstrap${params.toString() ? `?${params.toString()}` : ''}`);
+    const payload = indicators || {};
+    indicatorState.enabled = Boolean(payload.enabled !== false);
+    indicatorState.loaded = true;
+    indicatorState.loading = false;
+    indicatorState.bootstrap = payload;
+    const tabs = Array.isArray(payload.tabs) ? payload.tabs : [];
+    if (preferredTabId && tabs.some((item) => Number(item.id) === preferredTabId)) {
+      indicatorState.selectedTabId = preferredTabId;
+    } else {
+      indicatorState.selectedTabId = payload.selected_tab_id || tabs[0]?.id || null;
+    }
+    if (!indicatorState.activeSection) forceIndicatorSection('entry');
+    renderMarketingIndicatorWorkspace();
+  } catch (err) {
+    indicatorState.loading = false;
+    indicatorState.loaded = true;
+    indicatorState.error = err.message || 'Não foi possível carregar os indicadores do Marketing.';
+    indicatorState.bootstrap = null;
+    renderMarketingIndicatorWorkspace();
+  }
+}
+
+async function handleIndicatorRowSubmit(event) {
+  event.preventDefault();
+  const selectedTab = getSelectedMarketingIndicatorTab();
+  if (!selectedTab) return;
+
+  const values = {};
+  Array.from(document.querySelectorAll('#indicatorRowForm [data-indicator-column]')).forEach((input) => {
+    values[input.getAttribute('data-indicator-column')] = input.value || '';
+  });
+
+  const hasAnyValue = Object.values(values).some((value) => String(value || '').trim());
+  if (!hasAnyValue) {
+    window.alert(t('intranet.marketingIndicator.rowRequired', {}, 'Preencha pelo menos um campo para salvar a linha.'));
+    return;
+  }
+
+  try {
+    await api(`/api/intranet/marketing/indicators/tabs/${selectedTab.id}/rows`, {
+      method: 'POST',
+      body: JSON.stringify({ values, source_type: 'manual' }),
+    });
+    setIndicatorNotice('success', t('intranet.marketingIndicator.saveSuccess', {}, 'Indicador salvo com sucesso.'));
+    forceIndicatorSection('dashboard');
+    await fetchMarketingIndicatorBootstrap({ selectedTabId: selectedTab.id, preserveSelection: true });
+  } catch (err) {
+    setIndicatorNotice('error', t('intranet.marketingIndicator.saveError', { error: err.message }, `Não foi possível salvar o indicador: ${err.message}`));
+    renderMarketingIndicatorWorkspace();
+  }
+}
+
+function getPedagogicalWhatsAppGroups() {
+  return sortAlphabetically(
+    Array.isArray(whatsappState.bootstrap?.groups) ? whatsappState.bootstrap.groups : [],
+    (item) => `${item?.name || ''} ${item?.internal_code || ''}`
+  );
+}
+
+function getPedagogicalWhatsAppCampaigns() {
+  return Array.isArray(whatsappState.bootstrap?.campaigns) ? whatsappState.bootstrap.campaigns : [];
+}
+
+function normalizeWhatsAppLabel(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  const map = {
+    active: t('intranet.whatsapp.status.active', {}, 'Ativo'),
+    inactive: t('intranet.whatsapp.status.inactive', {}, 'Inativo'),
+    draft: t('intranet.whatsapp.status.draft', {}, 'Rascunho'),
+    prepared: t('intranet.whatsapp.status.prepared', {}, 'Preparado'),
+    running: t('intranet.whatsapp.status.running', {}, 'Em execução'),
+    completed: t('intranet.whatsapp.status.completed', {}, 'Concluído'),
+    error: t('intranet.whatsapp.status.error', {}, 'Com erro'),
+    cancelled: t('intranet.whatsapp.status.cancelled', {}, 'Cancelado'),
+    queued: t('intranet.whatsapp.status.queued', {}, 'Na fila'),
+    sending: t('intranet.whatsapp.status.sending', {}, 'Enviando'),
+    sent: t('intranet.whatsapp.status.sent', {}, 'Enviado'),
+    pending_provider: t('intranet.whatsapp.status.pendingProvider', {}, 'Aguardando provider'),
+  };
+  return map[safe] || (safe ? safe.charAt(0).toUpperCase() + safe.slice(1) : '-');
+}
+
+function getWhatsAppStatusTone(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (safe === 'completed' || safe === 'sent' || safe === 'active') return 'is-success';
+  if (safe === 'error' || safe === 'cancelled') return 'is-danger';
+  if (safe === 'sending' || safe === 'running') return 'is-warning';
+  if (safe === 'pending_provider') return 'is-muted';
+  return 'is-neutral';
+}
+
+function setWhatsAppNotice(type = '', text = '') {
+  const safeText = String(text || '').trim();
+  whatsappState.notice = safeText ? { type: type || 'info', text: safeText } : null;
+}
+
+function forceWhatsAppSection(sectionKey = 'dashboard') {
+  whatsappState.activeSection = String(sectionKey || 'dashboard').trim() || 'dashboard';
+}
+
+function setWhatsAppActiveSection(sectionKey = '') {
+  const safe = String(sectionKey || '').trim();
+  whatsappState.activeSection = whatsappState.activeSection === safe ? '' : safe;
+}
+
+function resetWhatsAppGroupDraft() {
+  whatsappState.editingGroupId = null;
+  whatsappState.groupDraft = null;
+}
+
+function populateWhatsAppGroupDraft(group = null) {
+  if (!group) {
+    resetWhatsAppGroupDraft();
+    return;
+  }
+  whatsappState.editingGroupId = Number(group.id || 0) || null;
+  whatsappState.groupDraft = {
+    id: group.id || '',
+    internal_code: group.internal_code || '',
+    name: group.name || '',
+    group_link: group.group_link || '',
+    category: group.category || '',
+    status: group.status || 'active',
+    notes: group.notes || '',
+  };
+  forceWhatsAppSection('groups');
+}
+
+function resetWhatsAppCampaignDraft() {
+  whatsappState.editingCampaignId = null;
+  whatsappState.campaignDraft = null;
+}
+
+function populateWhatsAppCampaignDraft(campaign = null) {
+  if (!campaign) {
+    resetWhatsAppCampaignDraft();
+    return;
+  }
+  whatsappState.editingCampaignId = Number(campaign.id || 0) || null;
+  whatsappState.campaignDraft = {
+    id: campaign.id || '',
+    name: campaign.name || '',
+    image_url: campaign.image_url || '',
+    message_text: campaign.message_text || '',
+    campaign_link: campaign.campaign_link || '',
+    interval_seconds: campaign.interval_seconds || 30,
+    group_ids: [...new Set((campaign.selected_group_ids || []).map((item) => Number(item || 0)).filter(Boolean))],
+  };
+  forceWhatsAppSection('campaigns');
+}
+
+function buildWhatsAppCampaignChart(campaigns = []) {
+  const seriesCampaigns = [...campaigns].slice(0, 6).reverse();
+  if (!seriesCampaigns.length) return { labels: [], series: [] };
+  return {
+    labels: seriesCampaigns.map((campaign) => (campaign.name || t('intranet.whatsapp.campaign', {}, 'Campanha')).slice(0, 14)),
+    series: [
+      {
+        key: 'sent',
+        label: t('intranet.whatsapp.chart.sent', {}, 'Enviados'),
+        points: seriesCampaigns.map((campaign) => Number(campaign.total_sent || 0)),
+        last_value: Number(seriesCampaigns[seriesCampaigns.length - 1]?.total_sent || 0),
+      },
+      {
+        key: 'pending',
+        label: t('intranet.whatsapp.chart.pending', {}, 'Pendentes'),
+        points: seriesCampaigns.map((campaign) => Number(campaign.total_pending || 0)),
+        last_value: Number(seriesCampaigns[seriesCampaigns.length - 1]?.total_pending || 0),
+      },
+      {
+        key: 'error',
+        label: t('intranet.whatsapp.chart.error', {}, 'Erros'),
+        points: seriesCampaigns.map((campaign) => Number(campaign.total_error || 0)),
+        last_value: Number(seriesCampaigns[seriesCampaigns.length - 1]?.total_error || 0),
+      },
+    ],
+  };
+}
+
+async function fetchPedagogicalWhatsAppBootstrap() {
+  whatsappState.loading = true;
+  whatsappState.error = '';
+  renderPedagogicalWhatsAppWorkspace();
+
+  try {
+    const { whatsapp } = await api('/api/intranet/pedagogico/whatsapp/bootstrap');
+    whatsappState.bootstrap = whatsapp || {};
+    whatsappState.enabled = Boolean(whatsapp?.enabled !== false);
+    whatsappState.loaded = true;
+    whatsappState.loading = false;
+    if (!whatsappState.activeSection) forceWhatsAppSection('dashboard');
+    renderPedagogicalWhatsAppWorkspace();
+  } catch (err) {
+    whatsappState.loading = false;
+    whatsappState.loaded = true;
+    whatsappState.error = err.message || 'Não foi possível carregar o módulo de WhatsApp.';
+    whatsappState.bootstrap = null;
+    renderPedagogicalWhatsAppWorkspace();
+  }
+}
+
+async function handleWhatsAppGroupSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('whatsappGroupId')?.value || 0) || null,
+    internal_code: el('whatsappGroupCode')?.value.trim() || '',
+    name: el('whatsappGroupName')?.value.trim() || '',
+    group_link: el('whatsappGroupLink')?.value.trim() || '',
+    category: el('whatsappGroupCategory')?.value.trim() || '',
+    status: el('whatsappGroupStatus')?.value || 'active',
+    notes: el('whatsappGroupNotes')?.value.trim() || '',
+  };
+  if (!payload.name) {
+    window.alert(t('intranet.whatsapp.group.nameRequired', {}, 'Informe o nome do grupo.'));
+    return;
+  }
+
+  try {
+    await api('/api/intranet/pedagogico/whatsapp/groups', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setWhatsAppNotice('success', t('intranet.whatsapp.group.saveSuccess', {}, 'Grupo salvo com sucesso.'));
+    resetWhatsAppGroupDraft();
+    forceWhatsAppSection('groups');
+    await fetchPedagogicalWhatsAppBootstrap();
+  } catch (err) {
+    setWhatsAppNotice('error', t('intranet.whatsapp.group.saveError', { error: err.message }, `Não foi possível salvar o grupo: ${err.message}`));
+    renderPedagogicalWhatsAppWorkspace();
+  }
+}
+
+async function handleWhatsAppCampaignSubmit(event) {
+  event.preventDefault();
+  const selectedGroupIds = Array.from(document.querySelectorAll('[data-whatsapp-campaign-group]:checked'))
+    .map((input) => Number(input.value || 0))
+    .filter(Boolean);
+
+  const payload = {
+    id: Number(el('whatsappCampaignId')?.value || 0) || null,
+    name: el('whatsappCampaignName')?.value.trim() || '',
+    image_url: el('whatsappCampaignImage')?.value.trim() || '',
+    message_text: el('whatsappCampaignText')?.value.trim() || '',
+    campaign_link: el('whatsappCampaignLink')?.value.trim() || '',
+    interval_seconds: Number(el('whatsappCampaignInterval')?.value || 30),
+    group_ids: selectedGroupIds,
+  };
+
+  if (!payload.name) {
+    window.alert(t('intranet.whatsapp.campaign.nameRequired', {}, 'Informe o nome da campanha.'));
+    return;
+  }
+  if (!payload.message_text) {
+    window.alert(t('intranet.whatsapp.campaign.textRequired', {}, 'Informe o texto da campanha.'));
+    return;
+  }
+
+  try {
+    await api('/api/intranet/pedagogico/whatsapp/campaigns', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setWhatsAppNotice('success', t('intranet.whatsapp.campaign.saveSuccess', {}, 'Campanha salva com sucesso.'));
+    resetWhatsAppCampaignDraft();
+    forceWhatsAppSection('campaigns');
+    await fetchPedagogicalWhatsAppBootstrap();
+  } catch (err) {
+    setWhatsAppNotice('error', t('intranet.whatsapp.campaign.saveError', { error: err.message }, `Não foi possível salvar a campanha: ${err.message}`));
+    renderPedagogicalWhatsAppWorkspace();
+  }
+}
+
+async function handleWhatsAppCampaignStart(campaignId) {
+  const safeId = Number(campaignId || 0);
+  if (!safeId) return;
+  try {
+    const response = await api(`/api/intranet/pedagogico/whatsapp/campaigns/${safeId}/start`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    const integrationLabel = response?.integration?.execution_enabled
+      ? t('intranet.whatsapp.integration.live', {}, 'execução real')
+      : t('intranet.whatsapp.integration.prepared', {}, 'modo preparado');
+    setWhatsAppNotice('success', t('intranet.whatsapp.campaign.startSuccess', { mode: integrationLabel }, `Campanha preparada com sucesso em ${integrationLabel}.`));
+    forceWhatsAppSection('queue');
+    await fetchPedagogicalWhatsAppBootstrap();
+  } catch (err) {
+    setWhatsAppNotice('error', t('intranet.whatsapp.campaign.startError', { error: err.message }, `Não foi possível iniciar a campanha: ${err.message}`));
+    renderPedagogicalWhatsAppWorkspace();
+  }
+}
+
+function renderPedagogicalWhatsAppWorkspace() {
+  const customWrap = el('departmentWorkspaceCustom');
+  if (!customWrap || customWrap.hidden) return;
+
+  if (whatsappState.loading && !whatsappState.bootstrap) {
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.whatsapp.loading', {}, 'Carregando módulo de WhatsApp...'))}</div>`;
+    return;
+  }
+
+  if (whatsappState.error && !whatsappState.bootstrap) {
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(whatsappState.error)}</div>`;
+    return;
+  }
+
+  const bootstrap = whatsappState.bootstrap || {};
+  const integration = bootstrap.integration || {};
+  const summary = bootstrap.summary || {};
+  const groups = getPedagogicalWhatsAppGroups();
+  const campaigns = getPedagogicalWhatsAppCampaigns();
+  const queueItems = Array.isArray(bootstrap.queue?.items) ? bootstrap.queue.items : [];
+  const history = Array.isArray(bootstrap.history) ? bootstrap.history : [];
+  const activeSection = whatsappState.activeSection || 'dashboard';
+  const groupDraft = whatsappState.groupDraft || {};
+  const campaignDraft = whatsappState.campaignDraft || {};
+  const selectedGroupIds = [...new Set((campaignDraft.group_ids || []).map((item) => Number(item || 0)).filter(Boolean))];
+  const groupStatusOptions = ['active', 'inactive'];
+  const groupSearch = String(whatsappState.groupFilters?.search || '').trim().toLowerCase();
+  const groupStatusFilter = String(whatsappState.groupFilters?.status || '').trim();
+  const visibleGroups = groups.filter((group) => {
+    const searchBlob = `${group.name || ''} ${group.internal_code || ''} ${group.category || ''} ${group.group_link || ''}`.toLowerCase();
+    const matchesSearch = !groupSearch || searchBlob.includes(groupSearch);
+    const matchesStatus = !groupStatusFilter || String(group.status || '') === groupStatusFilter;
+    return matchesSearch && matchesStatus;
+  });
+  const queueChart = buildWhatsAppCampaignChart(campaigns);
+  const sectionActions = [
+    { key: 'dashboard', title: t('intranet.whatsapp.actions.dashboard', {}, 'Dashboard'), description: t('intranet.whatsapp.actions.dashboardHint', {}, 'Leitura rápida da operação') },
+    { key: 'groups', title: t('intranet.whatsapp.actions.groups', {}, 'Cadastro de grupos'), description: t('intranet.whatsapp.actions.groupsHint', {}, 'Base dos grupos pedagógicos') },
+    { key: 'campaigns', title: t('intranet.whatsapp.actions.campaigns', {}, 'Campanhas'), description: t('intranet.whatsapp.actions.campaignsHint', {}, 'Texto, imagem, link e intervalo') },
+    { key: 'queue', title: t('intranet.whatsapp.actions.queue', {}, 'Fila de envio'), description: t('intranet.whatsapp.actions.queueHint', {}, 'Status por grupo e execução') },
+    { key: 'history', title: t('intranet.whatsapp.actions.history', {}, 'Histórico'), description: t('intranet.whatsapp.actions.historyHint', {}, 'Execuções e alterações') },
+    { key: 'settings', title: t('intranet.whatsapp.actions.settings', {}, 'Configurações'), description: t('intranet.whatsapp.actions.settingsHint', {}, 'Integração e modo atual') },
+  ];
+
+  const noticeMarkup = whatsappState.notice?.text ? `
+    <div class="workspace-inline-notice is-${escapeHtml(whatsappState.notice.type || 'info')}">
+      <span>${escapeHtml(whatsappState.notice.text)}</span>
+      <button class="icon-btn workspace-inline-notice-close" type="button" data-whatsapp-dismiss aria-label="${escapeHtml(t('common.close'))}">${renderIcon('chevron')}</button>
+    </div>
+  ` : '';
+
+  const integrationBanner = `
+    <section class="workspace-section-panel whatsapp-integration-banner">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.integration.eyebrow', {}, 'Diagnóstico da integração'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(t('intranet.whatsapp.integration.title', {}, 'WhatsApp pedagógico'))}</h4>
+          <p class="small muted">${escapeHtml(integration.technical_note || t('intranet.whatsapp.integration.note', {}, 'O módulo já opera com cadastro, campanhas, fila, status e histórico. A automação real depende do provider final.'))}</p>
+        </div>
+        <span class="intranet-chip whatsapp-status-chip ${escapeHtml(getWhatsAppStatusTone(integration.mode || 'pending_provider'))}">${escapeHtml(integration.status_label || t('intranet.whatsapp.integration.pending', {}, 'Integração pendente'))}</span>
+      </div>
+    </section>
+  `;
+
+  const dashboardSection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.dashboard.eyebrow', {}, 'Resumo operacional'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(t('intranet.whatsapp.dashboard.title', {}, 'Cockpit do WhatsApp'))}</h4>
+        </div>
+        <div class="small muted">${escapeHtml(integration.provider_name || t('intranet.whatsapp.providerUnknown', {}, 'Provider não configurado'))}</div>
+      </div>
+      <div class="influencer-overview-strip whatsapp-summary-grid">
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.summary.groups', {}, 'Grupos'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.groups_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.whatsapp.summary.groupsMeta', {}, 'Base cadastrada'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.summary.activeGroups', {}, 'Ativos'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.groups_active || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.whatsapp.summary.activeGroupsMeta', {}, 'Grupos prontos para campanha'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.summary.campaigns', {}, 'Campanhas'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.campaigns_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.whatsapp.summary.campaignsMeta', {}, 'Campanhas criadas'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.summary.queue', {}, 'Fila'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.queue_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.whatsapp.summary.queueMeta', {}, 'Itens aguardando execução'))}</div></article>
+      </div>
+      <div class="indicator-dashboard-grid">
+        <article class="indicator-chart-card">
+          <div class="intranet-card-meta">${escapeHtml(t('intranet.whatsapp.dashboard.chartMeta', {}, 'Campanhas recentes'))}</div>
+          <h4>${escapeHtml(t('intranet.whatsapp.dashboard.chartTitle', {}, 'Evolução por campanha'))}</h4>
+          ${buildIndicatorLineChartSvg(queueChart)}
+        </article>
+        <article class="indicator-chart-card">
+          <div class="intranet-card-meta">${escapeHtml(t('intranet.whatsapp.dashboard.integrationMeta', {}, 'Modo operacional'))}</div>
+          <h4>${escapeHtml(t('intranet.whatsapp.dashboard.integrationTitle', {}, 'Integração e execução'))}</h4>
+          <div class="whatsapp-settings-grid">
+            <div><strong>${escapeHtml(t('intranet.whatsapp.settings.mode', {}, 'Modo'))}</strong><span>${escapeHtml(integration.mode || '-')}</span></div>
+            <div><strong>${escapeHtml(t('intranet.whatsapp.settings.provider', {}, 'Provider'))}</strong><span>${escapeHtml(integration.provider_name || '-')}</span></div>
+            <div><strong>${escapeHtml(t('intranet.whatsapp.settings.execution', {}, 'Execução real'))}</strong><span>${escapeHtml(integration.execution_enabled ? t('common.yes', {}, 'Sim') : t('common.no', {}, 'Não'))}</span></div>
+            <div><strong>${escapeHtml(t('intranet.whatsapp.settings.credentials', {}, 'Credenciais'))}</strong><span>${escapeHtml(integration.credentials_ready ? t('intranet.whatsapp.credentialsReady', {}, 'Preparadas') : t('intranet.whatsapp.credentialsPending', {}, 'Pendentes'))}</span></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  `;
+
+  const groupsSection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.sections.groups', {}, 'Cadastro de grupos'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(whatsappState.editingGroupId ? t('intranet.whatsapp.group.editTitle', {}, 'Editar grupo') : t('intranet.whatsapp.group.createTitle', {}, 'Cadastrar grupo'))}</h4>
+        </div>
+        <button class="btn" type="button" data-whatsapp-close>${escapeHtml(t('common.close'))}</button>
+      </div>
+      <form id="whatsappGroupForm" class="influencer-form-grid">
+        <input type="hidden" id="whatsappGroupId" value="${escapeHtml(groupDraft.id || whatsappState.editingGroupId || '')}" />
+        <div><label for="whatsappGroupCode">${escapeHtml(t('intranet.whatsapp.group.fields.code', {}, 'ID interno'))}</label><input id="whatsappGroupCode" placeholder="${escapeHtml(t('intranet.whatsapp.group.placeholders.code', {}, 'Ex.: PED-001'))}" value="${escapeHtml(groupDraft.internal_code || '')}" /></div>
+        <div><label for="whatsappGroupName">${escapeHtml(t('intranet.whatsapp.group.fields.name', {}, 'Nome do grupo'))}</label><input id="whatsappGroupName" placeholder="${escapeHtml(t('intranet.whatsapp.group.placeholders.name', {}, 'Ex.: Alunos B1 noite'))}" value="${escapeHtml(groupDraft.name || '')}" /></div>
+        <div><label for="whatsappGroupLink">${escapeHtml(t('intranet.whatsapp.group.fields.link', {}, 'Link do grupo'))}</label><input id="whatsappGroupLink" type="url" placeholder="https://..." value="${escapeHtml(groupDraft.group_link || '')}" /></div>
+        <div><label for="whatsappGroupCategory">${escapeHtml(t('intranet.whatsapp.group.fields.category', {}, 'Categoria'))}</label><input id="whatsappGroupCategory" placeholder="${escapeHtml(t('intranet.whatsapp.group.placeholders.category', {}, 'Ex.: turma, rematrícula, avisos'))}" value="${escapeHtml(groupDraft.category || '')}" /></div>
+        <div><label for="whatsappGroupStatus">${escapeHtml(t('intranet.whatsapp.group.fields.status', {}, 'Status'))}</label><select id="whatsappGroupStatus">${groupStatusOptions.map((item) => `<option value="${escapeHtml(item)}"${item === (groupDraft.status || 'active') ? ' selected' : ''}>${escapeHtml(normalizeWhatsAppLabel(item))}</option>`).join('')}</select></div>
+        <div class="influencer-form-span"><label for="whatsappGroupNotes">${escapeHtml(t('intranet.whatsapp.group.fields.notes', {}, 'Observações'))}</label><textarea id="whatsappGroupNotes" rows="3" placeholder="${escapeHtml(t('intranet.whatsapp.group.placeholders.notes', {}, 'Observações operacionais, público do grupo ou contexto pedagógico'))}">${escapeHtml(groupDraft.notes || '')}</textarea></div>
+        <div class="influencer-form-actions influencer-form-span"><button class="btn" type="button" id="btnResetWhatsAppGroupForm">${escapeHtml(t('calendar.reset', {}, 'Limpar'))}</button><button class="btn primary" type="submit">${escapeHtml(t('common.save', {}, 'Salvar'))}</button></div>
+      </form>
+      <div class="influencer-toolbar-actions">
+        <div><label for="whatsappGroupSearch">${escapeHtml(t('common.search', {}, 'Busca'))}</label><input id="whatsappGroupSearch" class="intranet-search" placeholder="${escapeHtml(t('intranet.whatsapp.group.searchPlaceholder', {}, 'Nome, categoria, link ou código'))}" value="${escapeHtml(whatsappState.groupFilters?.search || '')}" /></div>
+        <div><label for="whatsappGroupFilterStatus">${escapeHtml(t('intranet.whatsapp.group.filterStatus', {}, 'Status'))}</label><select id="whatsappGroupFilterStatus"><option value="">${escapeHtml(t('common.all', {}, 'Todos'))}</option>${groupStatusOptions.map((item) => `<option value="${escapeHtml(item)}"${item === groupStatusFilter ? ' selected' : ''}>${escapeHtml(normalizeWhatsAppLabel(item))}</option>`).join('')}</select></div>
+      </div>
+      <div class="influencer-list-grid whatsapp-group-grid">
+        ${visibleGroups.length ? visibleGroups.map((group) => `
+          <article class="influencer-card whatsapp-card">
+            <div class="influencer-card-head">
+              <div class="influencer-avatar influencer-avatar-fallback">${escapeHtml((group.name || 'WG').slice(0, 2).toUpperCase())}</div>
+              <div class="influencer-card-copy"><h4>${escapeHtml(group.name || t('intranet.whatsapp.group.defaultName', {}, 'Grupo'))}</h4><div class="small muted">${escapeHtml(group.internal_code || group.category || '-')}</div></div>
+              <span class="intranet-chip whatsapp-status-chip ${escapeHtml(getWhatsAppStatusTone(group.status))}">${escapeHtml(normalizeWhatsAppLabel(group.status))}</span>
+            </div>
+            <div class="small muted">${escapeHtml(group.group_link || t('intranet.whatsapp.group.noLink', {}, 'Link não informado'))}</div>
+            <div class="small muted">${escapeHtml(group.notes || group.category || t('intranet.whatsapp.group.noNotes', {}, 'Sem observações'))}</div>
+            <div class="intranet-card-actions"><button class="btn" type="button" data-whatsapp-group-edit="${escapeHtml(group.id)}">${escapeHtml(t('common.edit', {}, 'Editar'))}</button></div>
+          </article>
+        `).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.whatsapp.group.empty', {}, 'Nenhum grupo encontrado com os filtros atuais.'))}</div>`}
+      </div>
+    </section>
+  `;
+
+  const campaignsSection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.sections.campaigns', {}, 'Campanhas'))}</div>
+          <h4 class="intranet-section-title">${escapeHtml(whatsappState.editingCampaignId ? t('intranet.whatsapp.campaign.editTitle', {}, 'Editar campanha') : t('intranet.whatsapp.campaign.createTitle', {}, 'Montar campanha'))}</h4>
+        </div>
+        <button class="btn" type="button" data-whatsapp-close>${escapeHtml(t('common.close'))}</button>
+      </div>
+      <form id="whatsappCampaignForm" class="influencer-form-grid">
+        <input type="hidden" id="whatsappCampaignId" value="${escapeHtml(campaignDraft.id || whatsappState.editingCampaignId || '')}" />
+        <div><label for="whatsappCampaignName">${escapeHtml(t('intranet.whatsapp.campaign.fields.name', {}, 'Nome da campanha'))}</label><input id="whatsappCampaignName" placeholder="${escapeHtml(t('intranet.whatsapp.campaign.placeholders.name', {}, 'Ex.: Aviso de reposição - sexta'))}" value="${escapeHtml(campaignDraft.name || '')}" /></div>
+        <div><label for="whatsappCampaignImage">${escapeHtml(t('intranet.whatsapp.campaign.fields.image', {}, 'Imagem'))}</label><input id="whatsappCampaignImage" type="url" placeholder="https://..." value="${escapeHtml(campaignDraft.image_url || '')}" /></div>
+        <div class="influencer-form-span"><label for="whatsappCampaignText">${escapeHtml(t('intranet.whatsapp.campaign.fields.text', {}, 'Texto'))}</label><textarea id="whatsappCampaignText" rows="4" placeholder="${escapeHtml(t('intranet.whatsapp.campaign.placeholders.text', {}, 'Escreva a mensagem pedagógica que será enviada aos grupos selecionados'))}">${escapeHtml(campaignDraft.message_text || '')}</textarea></div>
+        <div><label for="whatsappCampaignLink">${escapeHtml(t('intranet.whatsapp.campaign.fields.link', {}, 'Link'))}</label><input id="whatsappCampaignLink" type="url" placeholder="https://..." value="${escapeHtml(campaignDraft.campaign_link || '')}" /></div>
+        <div><label for="whatsappCampaignInterval">${escapeHtml(t('intranet.whatsapp.campaign.fields.interval', {}, 'Intervalo entre envios (s)'))}</label><input id="whatsappCampaignInterval" type="number" min="5" step="5" value="${escapeHtml(String(campaignDraft.interval_seconds || 30))}" /></div>
+        <div class="influencer-form-span">
+          <label>${escapeHtml(t('intranet.whatsapp.campaign.fields.groups', {}, 'Grupos selecionados'))}</label>
+          <div class="whatsapp-selection-grid">
+            ${groups.length ? groups.map((group) => `<label class="whatsapp-selection-item"><input type="checkbox" data-whatsapp-campaign-group value="${escapeHtml(group.id)}"${selectedGroupIds.includes(Number(group.id)) ? ' checked' : ''} /><span><strong>${escapeHtml(group.name || t('intranet.whatsapp.group.defaultName', {}, 'Grupo'))}</strong><small>${escapeHtml(group.category || group.internal_code || normalizeWhatsAppLabel(group.status))}</small></span></label>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.whatsapp.campaign.noGroups', {}, 'Cadastre grupos antes de montar a campanha.'))}</div>`}
+          </div>
+        </div>
+        <div class="influencer-form-actions influencer-form-span"><button class="btn" type="button" id="btnResetWhatsAppCampaignForm">${escapeHtml(t('calendar.reset', {}, 'Limpar'))}</button><button class="btn primary" type="submit">${escapeHtml(t('intranet.whatsapp.campaign.save', {}, 'Salvar campanha'))}</button></div>
+      </form>
+      <div class="influencer-list-grid whatsapp-campaign-grid">
+        ${campaigns.length ? campaigns.map((campaign) => `<article class="influencer-card whatsapp-card"><div class="influencer-card-head"><div class="influencer-card-copy"><h4>${escapeHtml(campaign.name || t('intranet.whatsapp.campaign', {}, 'Campanha'))}</h4><div class="small muted">${escapeHtml(formatDate(campaign.created_at || campaign.started_at || ''))}</div></div><span class="intranet-chip whatsapp-status-chip ${escapeHtml(getWhatsAppStatusTone(campaign.status))}">${escapeHtml(normalizeWhatsAppLabel(campaign.status))}</span></div><div class="influencer-card-metrics"><div><strong>${escapeHtml(formatInteger(campaign.total_groups || 0))}</strong><span>${escapeHtml(t('intranet.whatsapp.campaign.metrics.groups', {}, 'Grupos'))}</span></div><div><strong>${escapeHtml(formatInteger(campaign.total_sent || 0))}</strong><span>${escapeHtml(t('intranet.whatsapp.campaign.metrics.sent', {}, 'Enviados'))}</span></div><div><strong>${escapeHtml(formatInteger(campaign.total_pending || 0))}</strong><span>${escapeHtml(t('intranet.whatsapp.campaign.metrics.pending', {}, 'Pendentes'))}</span></div><div><strong>${escapeHtml(formatInteger(campaign.total_error || 0))}</strong><span>${escapeHtml(t('intranet.whatsapp.campaign.metrics.error', {}, 'Erros'))}</span></div></div><div class="small muted">${escapeHtml(campaign.last_error || integration.technical_note || '')}</div><div class="intranet-card-actions"><button class="btn" type="button" data-whatsapp-campaign-edit="${escapeHtml(campaign.id)}">${escapeHtml(t('common.edit', {}, 'Editar'))}</button><button class="btn primary" type="button" data-whatsapp-campaign-start="${escapeHtml(campaign.id)}">${escapeHtml(t('intranet.whatsapp.campaign.start', {}, 'Iniciar campanha'))}</button></div></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.whatsapp.campaign.empty', {}, 'Nenhuma campanha criada ainda.'))}</div>`}
+      </div>
+    </section>
+  `;
+
+  const queueSection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.sections.queue', {}, 'Fila de envio'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.whatsapp.queue.title', {}, 'Status por grupo'))}</h4></div><button class="btn" type="button" data-whatsapp-close>${escapeHtml(t('common.close'))}</button></div>
+      <div class="influencer-overview-strip whatsapp-summary-grid">
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.queue.pending', {}, 'Pendentes'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(bootstrap.queue?.pending_total || 0))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.queue.sending', {}, 'Enviando'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(bootstrap.queue?.sending_total || 0))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.queue.sent', {}, 'Enviados'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(bootstrap.queue?.sent_total || 0))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.whatsapp.queue.error', {}, 'Erros'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(bootstrap.queue?.error_total || 0))}</div></article>
+      </div>
+      <div class="whatsapp-queue-list">
+        ${queueItems.length ? queueItems.map((item) => `<article class="whatsapp-queue-item"><div><strong>${escapeHtml(item.group_name || t('intranet.whatsapp.group.defaultName', {}, 'Grupo'))}</strong><div class="small muted">${escapeHtml(t('intranet.whatsapp.queue.orderLabel', { value: String(item.queue_order || 0) }, `Ordem ${String(item.queue_order || 0)}`))}</div></div><div class="whatsapp-queue-meta"><span class="intranet-chip whatsapp-status-chip ${escapeHtml(getWhatsAppStatusTone(item.send_status))}">${escapeHtml(normalizeWhatsAppLabel(item.send_status))}</span><small>${escapeHtml(item.error_message || item.metadata?.provider_mode || '')}</small></div></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.whatsapp.queue.empty', {}, 'Nenhum item aguardando na fila neste momento.'))}</div>`}
+      </div>
+    </section>
+  `;
+
+  const historySection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.sections.history', {}, 'Histórico'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.whatsapp.history.title', {}, 'Execuções e alterações recentes'))}</h4></div><button class="btn" type="button" data-whatsapp-close>${escapeHtml(t('common.close'))}</button></div>
+      <div class="influencer-history-list">
+        ${history.length ? history.map((item) => `<article class="influencer-history-card"><div class="influencer-history-head"><strong>${escapeHtml(item.action || t('intranet.generic.update', {}, 'Atualização'))}</strong><span>${escapeHtml(formatDate(item.created_at || ''))}</span></div><div class="small muted">${escapeHtml(item.actor_name || t('intranet.generic.system', {}, 'Sistema'))}</div><p>${escapeHtml(JSON.stringify(item.detail || {}))}</p></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.whatsapp.history.empty', {}, 'Nenhum histórico registrado até agora.'))}</div>`}
+      </div>
+    </section>
+  `;
+
+  const settingsSection = `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.sections.settings', {}, 'Configurações'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.whatsapp.settings.title', {}, 'Integração e parâmetros atuais'))}</h4></div><button class="btn" type="button" data-whatsapp-close>${escapeHtml(t('common.close'))}</button></div>
+      <div class="whatsapp-settings-grid">
+        <div><strong>${escapeHtml(t('intranet.whatsapp.settings.provider', {}, 'Provider'))}</strong><span>${escapeHtml(integration.provider_name || '-')}</span></div>
+        <div><strong>${escapeHtml(t('intranet.whatsapp.settings.status', {}, 'Status'))}</strong><span>${escapeHtml(integration.status_label || '-')}</span></div>
+        <div><strong>${escapeHtml(t('intranet.whatsapp.settings.apiUrl', {}, 'Endpoint'))}</strong><span>${escapeHtml(integration.api_url || '-')}</span></div>
+        <div><strong>${escapeHtml(t('intranet.whatsapp.settings.tokenConfigured', {}, 'Token'))}</strong><span>${escapeHtml(integration.token_configured ? t('intranet.whatsapp.tokenConfigured', {}, 'Configurado') : t('intranet.whatsapp.tokenMissing', {}, 'Não configurado'))}</span></div>
+        ${(bootstrap.settings || []).map((item) => `<div><strong>${escapeHtml(item.key || '-')}</strong><span>${escapeHtml(item.value || '-')}</span></div>`).join('')}
+      </div>
+      <div class="intranet-empty-card">${escapeHtml(integration.next_step || t('intranet.whatsapp.integration.nextStep', {}, 'Conecte o provider final antes de liberar o disparo real.'))}</div>
+    </section>
+  `;
+
+  const sectionMarkup = activeSection === 'groups'
+    ? groupsSection
+    : activeSection === 'campaigns'
+      ? campaignsSection
+      : activeSection === 'queue'
+        ? queueSection
+        : activeSection === 'history'
+          ? historySection
+          : activeSection === 'settings'
+            ? settingsSection
+            : dashboardSection;
+
+  customWrap.innerHTML = `
+    <section class="influencer-workspace whatsapp-workspace">
+      <div class="influencer-toolbar influencer-toolbar-compact">
+        <div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.whatsapp.menuEyebrow', {}, 'Pedagógico'))}</div>
+          <h3 class="intranet-section-title">${escapeHtml(t('intranet.whatsapp.menuTitle', {}, 'WhatsApp'))}</h3>
+          <p class="small muted">${escapeHtml(t('intranet.whatsapp.menuDescription', {}, 'Cadastro de grupos, campanhas pedagógicas, fila de envio, histórico e diagnóstico técnico de integração.'))}</p>
+        </div>
+        <div class="influencer-toolbar-actions">
+          <div><label>${escapeHtml(t('intranet.whatsapp.providerLabel', {}, 'Provider'))}</label><div class="small muted">${escapeHtml(integration.provider_name || t('intranet.whatsapp.providerUnknown', {}, 'Não configurado'))}</div></div>
+          <div><label>${escapeHtml(t('intranet.whatsapp.modeLabel', {}, 'Modo'))}</label><div class="small muted">${escapeHtml(integration.mode || '-')}</div></div>
+          <button class="btn" type="button" id="btnRefreshWhatsAppWorkspace">${escapeHtml(whatsappState.loading ? t('common.loading', {}, 'Carregando...') : t('common.refresh', {}, 'Atualizar'))}</button>
+        </div>
+      </div>
+      ${noticeMarkup}
+      ${integrationBanner}
+      <section class="workspace-submenu-shell">
+        <div class="workspace-submenu-header">
+          <div class="intranet-block-title">${escapeHtml(t('intranet.whatsapp.submenuTitle', {}, 'Ações do submenu'))}</div>
+          <div class="small muted">${escapeHtml(t('intranet.whatsapp.submenuHint', {}, 'Abra apenas a seção que estiver usando agora. O envio real só será ativado quando o provider final estiver conectado.'))}</div>
+        </div>
+        ${buildWorkspaceActionMenu(sectionActions, activeSection)}
+        ${sectionMarkup}
+      </section>
+    </section>
+  `;
+
+  bindWorkspaceActionMenu(customWrap, (sectionKey) => {
+    setWhatsAppNotice('', '');
+    setWhatsAppActiveSection(sectionKey);
+    renderPedagogicalWhatsAppWorkspace();
+  });
+  el('btnRefreshWhatsAppWorkspace')?.addEventListener('click', async () => {
+    await fetchPedagogicalWhatsAppBootstrap();
+  });
+  Array.from(customWrap.querySelectorAll('[data-whatsapp-close]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      whatsappState.activeSection = '';
+      renderPedagogicalWhatsAppWorkspace();
+    });
+  });
+  customWrap.querySelector('[data-whatsapp-dismiss]')?.addEventListener('click', () => {
+    setWhatsAppNotice('', '');
+    renderPedagogicalWhatsAppWorkspace();
+  });
+  el('whatsappGroupForm')?.addEventListener('submit', handleWhatsAppGroupSubmit);
+  el('whatsappCampaignForm')?.addEventListener('submit', handleWhatsAppCampaignSubmit);
+  el('btnResetWhatsAppGroupForm')?.addEventListener('click', () => {
+    resetWhatsAppGroupDraft();
+    renderPedagogicalWhatsAppWorkspace();
+  });
+  el('btnResetWhatsAppCampaignForm')?.addEventListener('click', () => {
+    resetWhatsAppCampaignDraft();
+    renderPedagogicalWhatsAppWorkspace();
+  });
+  el('whatsappGroupSearch')?.addEventListener('input', (event) => {
+    whatsappState.groupFilters.search = event.target.value || '';
+    renderPedagogicalWhatsAppWorkspace();
+  });
+  el('whatsappGroupFilterStatus')?.addEventListener('change', (event) => {
+    whatsappState.groupFilters.status = event.target.value || '';
+    renderPedagogicalWhatsAppWorkspace();
+  });
+  Array.from(customWrap.querySelectorAll('[data-whatsapp-group-edit]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      const groupId = Number(button.getAttribute('data-whatsapp-group-edit') || 0);
+      const group = groups.find((item) => Number(item.id) === groupId) || null;
+      if (!group) return;
+      populateWhatsAppGroupDraft(group);
+      renderPedagogicalWhatsAppWorkspace();
+    });
+  });
+  Array.from(customWrap.querySelectorAll('[data-whatsapp-campaign-edit]')).forEach((button) => {
+    button.addEventListener('click', () => {
+      const campaignId = Number(button.getAttribute('data-whatsapp-campaign-edit') || 0);
+      const campaign = campaigns.find((item) => Number(item.id) === campaignId) || null;
+      if (!campaign) return;
+      populateWhatsAppCampaignDraft(campaign);
+      renderPedagogicalWhatsAppWorkspace();
+    });
+  });
+  Array.from(customWrap.querySelectorAll('[data-whatsapp-campaign-start]')).forEach((button) => {
+    button.addEventListener('click', async () => {
+      await handleWhatsAppCampaignStart(Number(button.getAttribute('data-whatsapp-campaign-start') || 0));
+    });
+  });
 }
 
 function setDashboardSectionVisible(isVisible) {
@@ -1529,26 +2482,46 @@ function renderDepartmentWorkspace(intranet) {
 
   section.hidden = false;
   el('departmentWorkspaceEyebrow').textContent = submenu ? department.name : t('intranet.departmentDefaultName', {}, 'Departamento');
-  el('departmentWorkspaceTitle').textContent = submenu?.title || department.name || t('intranet.departmentWorkspaceTitle', {}, 'Area departamental');
-  const isCustomWorkspace = isMarketingInfluencerWorkspace(department, submenu);
-  el('departmentWorkspaceDescription').textContent = isCustomWorkspace
-    ? t('intranet.marketingInfluencer.workspaceDescription', {}, 'Cadastro, lancamentos, relatorios e analise da operacao de influencers do Marketing.')
-    : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Area departamental da intranet.'));
+  el('departmentWorkspaceTitle').textContent = submenu?.title || department.name || t('intranet.departmentWorkspaceTitle', {}, 'Área departamental');
+  const isInfluencerWorkspace = isMarketingInfluencerWorkspace(department, submenu);
+  const isIndicatorWorkspace = isMarketingIndicatorWorkspace(department, submenu);
+  const isWhatsAppWorkspace = isPedagogicalWhatsAppWorkspace(department, submenu);
+  const isCustomWorkspace = isInfluencerWorkspace || isIndicatorWorkspace || isWhatsAppWorkspace;
+  el('departmentWorkspaceDescription').textContent = isInfluencerWorkspace
+    ? t('intranet.marketingInfluencer.workspaceDescription', {}, 'Cadastro, lançamentos, relatórios e análise da operação de influencers do Marketing.')
+    : isIndicatorWorkspace
+      ? t('intranet.marketingIndicator.description', {}, 'Entrada de dados em estilo planilha e acompanhamento dos indicadores que alimentam o Dashboard do Marketing.')
+      : isWhatsAppWorkspace
+        ? t('intranet.whatsapp.workspaceDescription', {}, 'Cadastro de grupos, campanhas pedagógicas, fila, histórico e diagnóstico de integração do WhatsApp.')
+      : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Área departamental da intranet.'));
 
   const summary = el('departmentWorkspaceSummary');
   summary.innerHTML = '';
-  const summaryCards = isCustomWorkspace
+  const summaryCards = isInfluencerWorkspace
     ? [
       { title: t('intranet.marketingInfluencer.summary.register', {}, 'Cadastro'), description: t('intranet.marketingInfluencer.summary.registerDescription', {}, 'Base e dados da parceria'), badge: t('intranet.departmentSummary.main', {}, 'Principal') },
-      { title: t('intranet.marketingInfluencer.summary.overview', {}, 'Visao geral'), description: t('intranet.marketingInfluencer.summary.overviewDescription', {}, 'Leitura rapida do periodo'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
-      { title: t('intranet.marketingInfluencer.summary.reports', {}, 'Relatorios'), description: t('intranet.marketingInfluencer.summary.reportsDescription', {}, 'Historico e comparativos'), badge: t('intranet.departmentSummary.detail', {}, 'Detalhe') },
-      { title: t('intranet.marketingInfluencer.summary.analysis', {}, 'Analise IA'), description: t('intranet.marketingInfluencer.summary.analysisDescription', {}, 'Apoio para a decisao operacional'), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
+      { title: t('intranet.marketingInfluencer.summary.overview', {}, 'Visão geral'), description: t('intranet.marketingInfluencer.summary.overviewDescription', {}, 'Leitura rápida do período'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+      { title: t('intranet.marketingInfluencer.summary.reports', {}, 'Relatórios'), description: t('intranet.marketingInfluencer.summary.reportsDescription', {}, 'Histórico e comparativos'), badge: t('intranet.departmentSummary.detail', {}, 'Detalhe') },
+      { title: t('intranet.marketingInfluencer.summary.analysis', {}, 'Análise IA'), description: t('intranet.marketingInfluencer.summary.analysisDescription', {}, 'Apoio para a decisão operacional'), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
     ]
+    : isIndicatorWorkspace
+      ? [
+        { title: t('intranet.marketingIndicator.actions.entry', {}, 'Preenchimento'), description: t('intranet.marketingIndicator.actions.entryHint', {}, 'Entrada em estilo planilha'), badge: t('intranet.departmentSummary.main', {}, 'Principal') },
+        { title: t('intranet.marketingIndicator.actions.charts', {}, 'Indicadores'), description: t('intranet.marketingIndicator.actions.chartsHint', {}, 'Leitura visual da aba atual'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+        { title: t('intranet.marketingIndicator.actions.dashboard', {}, 'Dashboard'), description: t('intranet.marketingIndicator.actions.dashboardHint', {}, 'Resumo analítico do Marketing'), badge: t('intranet.departmentSummary.detail', {}, 'Detalhe') },
+      ]
+      : isWhatsAppWorkspace
+        ? [
+          { title: t('intranet.whatsapp.actions.dashboard', {}, 'Dashboard'), description: t('intranet.whatsapp.actions.dashboardHint', {}, 'Leitura rápida da operação'), badge: t('intranet.departmentSummary.main', {}, 'Principal') },
+          { title: t('intranet.whatsapp.actions.groups', {}, 'Cadastro de grupos'), description: t('intranet.whatsapp.actions.groupsHint', {}, 'Base dos grupos pedagógicos'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+          { title: t('intranet.whatsapp.actions.campaigns', {}, 'Campanhas'), description: t('intranet.whatsapp.actions.campaignsHint', {}, 'Texto, imagem, link e intervalo'), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
+          { title: t('intranet.whatsapp.actions.queue', {}, 'Fila de envio'), description: t('intranet.whatsapp.actions.queueHint', {}, 'Status por grupo e execução'), badge: t('intranet.departmentSummary.detail', {}, 'Detalhe') },
+        ]
     : [
-      { title: t('intranet.departmentSummary.currentLevel', {}, 'Nivel atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissao') },
+      { title: t('intranet.departmentSummary.currentLevel', {}, 'Nível atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissão') },
       { title: t('intranet.departmentSummary.activeSubmenus', {}, 'Submenus ativos'), description: String((department.submenus || []).length || 0), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
-      { title: t('intranet.departmentSummary.availableModules', {}, 'Modulos liberados'), description: String((department.modules || []).length || 0), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
-      { title: submenu ? t('intranet.departmentSummary.activeSubmenu', {}, 'Submenu ativo') : t('intranet.departmentSummary.selectedArea', {}, 'Area selecionada'), description: submenu?.title || department.name, badge: submenu ? t('intranet.departmentSummary.detail', {}, 'Detalhe') : t('intranet.departmentSummary.main', {}, 'Principal') },
+      { title: t('intranet.departmentSummary.availableModules', {}, 'Módulos liberados'), description: String((department.modules || []).length || 0), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+      { title: submenu ? t('intranet.departmentSummary.activeSubmenu', {}, 'Submenu ativo') : t('intranet.departmentSummary.selectedArea', {}, 'Área selecionada'), description: submenu?.title || department.name, badge: submenu ? t('intranet.departmentSummary.detail', {}, 'Detalhe') : t('intranet.departmentSummary.main', {}, 'Principal') },
     ];
   summaryCards.forEach((item) => {
     const card = document.createElement('article');
@@ -1588,18 +2561,32 @@ function renderDepartmentWorkspace(intranet) {
   if (modulesSection) modulesSection.hidden = isCustomWorkspace;
 
   if (isCustomWorkspace) {
-    renderMarketingInfluencerWorkspace();
-    if (!influencerState.bootstrap && !influencerState.loading) {
-      fetchMarketingInfluencerBootstrap({
-        filters: getMarketingInfluencerPeriodFilters(),
-        preserveSelection: true,
-      });
+    if (isInfluencerWorkspace) {
+      renderMarketingInfluencerWorkspace();
+      if (!influencerState.bootstrap && !influencerState.loading) {
+        fetchMarketingInfluencerBootstrap({
+          filters: getMarketingInfluencerPeriodFilters(),
+          preserveSelection: true,
+        });
+      }
+    } else if (isIndicatorWorkspace) {
+      renderMarketingIndicatorWorkspace();
+      if (!indicatorState.bootstrap && !indicatorState.loading) {
+        fetchMarketingIndicatorBootstrap({
+          preserveSelection: true,
+        });
+      }
+    } else if (isWhatsAppWorkspace) {
+      renderPedagogicalWhatsAppWorkspace();
+      if (!whatsappState.bootstrap && !whatsappState.loading) {
+        fetchPedagogicalWhatsAppBootstrap();
+      }
     }
     return;
   }
 
   if (!modules.length) {
-    modulesWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.departments.noModules', {}, 'Nenhum modulo liberado para esta area no momento.'))}</div>`;
+    modulesWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.departments.noModules', {}, 'Nenhum módulo liberado para esta área no momento.'))}</div>`;
   } else {
     modules.forEach((module) => {
       const card = document.createElement('article');
@@ -1609,7 +2596,7 @@ function renderDepartmentWorkspace(intranet) {
           <span class="intranet-module-icon">${renderIcon(module.icon || department.icon || 'workspace')}</span>
           <span class="intranet-chip">${escapeHtml(department.name || t('intranet.departmentDefaultName', {}, 'Departamento'))}</span>
         </div>
-        <h4>${escapeHtml(module.title || t('intranet.generic.module', {}, 'Modulo'))}</h4>
+        <h4>${escapeHtml(module.title || t('intranet.generic.module', {}, 'Módulo'))}</h4>
         <p>${escapeHtml(module.description || '')}</p>
         <div class="intranet-module-type">${escapeHtml(module.type || t('intranet.generic.workspace', {}, 'workspace'))}</div>
       `;
@@ -1653,12 +2640,12 @@ function renderMarketingInfluencerWorkspace() {
   const activeSection = influencerState.activeSection || '';
   const submitLabel = influencerState.editingId ? t('common.save') : t('intranet.marketingInfluencer.form.submitCreate', {}, 'Cadastrar');
   const refreshLabel = influencerState.loading ? t('common.loading') : t('common.refresh');
-  const analysisText = influencerState.analysis.result || t('intranet.marketingInfluencer.analysisPlaceholder', {}, 'Selecione um periodo e clique em "Analisar" para receber uma leitura comparativa da IA sobre o desempenho das influencers.');
+  const analysisText = influencerState.analysis.result || t('intranet.marketingInfluencer.analysisPlaceholder', {}, 'Selecione um período e clique em "Analisar" para receber uma leitura comparativa da IA sobre o desempenho das influencers.');
   const sectionActions = [
     { key: 'register', title: t('intranet.marketingInfluencer.sections.register', {}, 'Cadastro'), description: t('intranet.marketingInfluencer.sections.registerDescription', {}, 'Base da parceria') },
     { key: 'overview', title: t('intranet.marketingInfluencer.sections.overview', {}, 'Visao geral'), description: t('intranet.marketingInfluencer.sections.overviewDescription', {}, 'Base e carteira ativa') },
-    { key: 'reports', title: t('intranet.marketingInfluencer.sections.reports', {}, 'Relatorios'), description: t('intranet.marketingInfluencer.sections.reportsDescription', {}, 'Historico e comparativos') },
-    { key: 'analysis', title: t('intranet.marketingInfluencer.sections.analysis', {}, 'Analise IA'), description: t('intranet.marketingInfluencer.sections.analysisDescription', {}, 'Leitura de apoio') },
+    { key: 'reports', title: t('intranet.marketingInfluencer.sections.reports', {}, 'Relatórios'), description: t('intranet.marketingInfluencer.sections.reportsDescription', {}, 'Histórico e comparativos') },
+    { key: 'analysis', title: t('intranet.marketingInfluencer.sections.analysis', {}, 'Análise IA'), description: t('intranet.marketingInfluencer.sections.analysisDescription', {}, 'Leitura de apoio') },
   ];
 
   const noticeMarkup = influencerState.notice?.text ? `
@@ -1685,8 +2672,8 @@ function renderMarketingInfluencerWorkspace() {
           <input id="influencerName" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.name', {}, 'Ex.: Maria Andrade'))}" value="${escapeHtml(formDraft.name || '')}" />
         </div>
         <div>
-          <label for="influencerTypes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.types', {}, 'Tipos de influencia'))}</label>
-          <input id="influencerTypes" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.types', {}, 'Ex.: Reels, Stories, Conteudo educacional'))}" list="influencerTypesSuggestions" value="${escapeHtml(formDraft.influence_types || '')}" />
+          <label for="influencerTypes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.types', {}, 'Tipos de influência'))}</label>
+          <input id="influencerTypes" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.types', {}, 'Ex.: Reels, Stories, Conteúdo educacional'))}" list="influencerTypesSuggestions" value="${escapeHtml(formDraft.influence_types || '')}" />
           <datalist id="influencerTypesSuggestions">
             ${(suggestions.influence_types || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join('')}
           </datalist>
@@ -1711,7 +2698,7 @@ function renderMarketingInfluencerWorkspace() {
           <input id="influencerFollowers" type="number" min="0" step="1" placeholder="0" value="${escapeHtml(formDraft.followers_count ?? '')}" />
         </div>
         <div>
-          <label for="influencerStartDate">${escapeHtml(t('intranet.marketingInfluencer.form.fields.startDate', {}, 'Data de inicio da parceria'))}</label>
+          <label for="influencerStartDate">${escapeHtml(t('intranet.marketingInfluencer.form.fields.startDate', {}, 'Data de início da parceria'))}</label>
           <input id="influencerStartDate" type="date" value="${escapeHtml(formDraft.partnership_start_date || '')}" />
         </div>
         <div>
@@ -1721,8 +2708,8 @@ function renderMarketingInfluencerWorkspace() {
           </select>
         </div>
         <div class="influencer-form-span">
-          <label for="influencerNotes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.notes', {}, 'Observacoes internas'))}</label>
-          <textarea id="influencerNotes" rows="3" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.notes', {}, 'Anotacoes internas do Marketing sobre a parceria, posicionamento ou proximos passos'))}">${escapeHtml(formDraft.notes || '')}</textarea>
+          <label for="influencerNotes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.notes', {}, 'Observações internas'))}</label>
+          <textarea id="influencerNotes" rows="3" placeholder="${escapeHtml(t('intranet.marketingInfluencer.form.placeholders.notes', {}, 'Anotações internas do Marketing sobre a parceria, posicionamento ou próximos passos'))}">${escapeHtml(formDraft.notes || '')}</textarea>
         </div>
         <div class="influencer-form-actions influencer-form-span">
           <button class="btn" type="button" id="btnResetInfluencerForm">${escapeHtml(t('calendar.reset', {}, 'Limpar'))}</button>
@@ -1736,52 +2723,52 @@ function renderMarketingInfluencerWorkspace() {
     <section class="workspace-section-panel">
       <div class="workspace-section-head">
         <div>
-          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.overview', {}, 'Visao geral'))}</div>
+          <div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.overview', {}, 'Visão geral'))}</div>
           <h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.overviewTitle', {}, 'Influencers cadastradas'))}</h4>
         </div>
-        <div class="small muted">${escapeHtml(period.label || t('intranet.marketingInfluencer.currentPeriod', {}, 'Periodo atual'))}</div>
+        <div class="small muted">${escapeHtml(period.label || t('intranet.marketingInfluencer.currentPeriod', {}, 'Período atual'))}</div>
       </div>
       <div class="influencer-overview-strip">
         <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.base', {}, 'Base'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.total_influencers || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.baseMeta', {}, 'Influencers cadastradas'))}</div></article>
-        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.audience', {}, 'Audiencia'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.followers_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.audienceMeta', {}, 'Seguidores monitorados'))}</div></article>
-        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.result', {}, 'Resultado'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.enrollments_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.resultMeta', {}, 'Matriculas no periodo'))}</div></article>
-        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.history', {}, 'Historico'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.launches_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.historyMeta', {}, 'Lancamentos registrados'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.audience', {}, 'Audiência'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.followers_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.audienceMeta', {}, 'Seguidores monitorados'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.result', {}, 'Resultado'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.enrollments_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.resultMeta', {}, 'Matrículas no período'))}</div></article>
+        <article class="influencer-overview-card"><div class="influencer-overview-label">${escapeHtml(t('intranet.marketingInfluencer.metrics.history', {}, 'Histórico'))}</div><div class="influencer-overview-value">${escapeHtml(formatInteger(summary.launches_total || 0))}</div><div class="influencer-overview-meta">${escapeHtml(t('intranet.marketingInfluencer.metrics.historyMeta', {}, 'Lançamentos registrados'))}</div></article>
       </div>
       <div class="influencer-list-grid">
-        ${cards.length ? cards.map((item) => `<article class="influencer-card${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' is-active' : ''}"><div class="influencer-card-head">${item.photo_url ? `<img class="influencer-avatar" src="${escapeHtml(item.photo_url)}" alt="${escapeHtml(item.name || 'Influencer')}" />` : `<div class="influencer-avatar influencer-avatar-fallback">${escapeHtml(getInfluencerInitials(item.name || 'Influencer'))}</div>`}<div class="influencer-card-copy"><h4>${escapeHtml(item.name || 'Influencer')}</h4><div class="small muted">${escapeHtml(formatInfluenceTypesList(item.influence_types || []))}</div></div><span class="intranet-chip">${escapeHtml(getMarketingStatusLabel(item.influencer_status))}</span></div><div class="influencer-card-metrics"><div><strong>${escapeHtml(item.contract_type || '-')}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.contract', {}, 'Contrato'))}</span></div><div><strong>${escapeHtml(formatCompactInteger(item.followers_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.followers', {}, 'Seguidores'))}</span></div><div><strong>${escapeHtml(formatInteger(item.metrics_summary?.enrollments_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.enrollments', {}, 'Matriculas'))}</span></div><div><strong>${escapeHtml(formatInteger(item.metrics_summary?.performance_score || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.score', {}, 'Pontuacao'))}</span></div></div><div class="small muted">${escapeHtml(item.instagram_url || t('intranet.marketingInfluencer.card.noInstagram', {}, 'Instagram nao informado'))}</div><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.card.partnerSince', { date: formatDateOnly(item.partnership_start_date || '') }, `Parceria desde ${formatDateOnly(item.partnership_start_date || '')}`))}</div><div class="intranet-card-actions"><button class="btn" type="button" data-influencer-view="${escapeHtml(item.id)}">${escapeHtml(t('common.viewMore'))}</button><button class="btn" type="button" data-influencer-edit="${escapeHtml(item.id)}">${escapeHtml(t('common.edit'))}</button></div></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyOverview', {}, 'Nenhuma influencer cadastrada ainda. Use Cadastro para iniciar a base de Marketing.'))}</div>`}
+        ${cards.length ? cards.map((item) => `<article class="influencer-card${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' is-active' : ''}"><div class="influencer-card-head">${item.photo_url ? `<img class="influencer-avatar" src="${escapeHtml(item.photo_url)}" alt="${escapeHtml(item.name || 'Influencer')}" />` : `<div class="influencer-avatar influencer-avatar-fallback">${escapeHtml(getInfluencerInitials(item.name || 'Influencer'))}</div>`}<div class="influencer-card-copy"><h4>${escapeHtml(item.name || 'Influencer')}</h4><div class="small muted">${escapeHtml(formatInfluenceTypesList(item.influence_types || []))}</div></div><span class="intranet-chip">${escapeHtml(getMarketingStatusLabel(item.influencer_status))}</span></div><div class="influencer-card-metrics"><div><strong>${escapeHtml(item.contract_type || '-')}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.contract', {}, 'Contrato'))}</span></div><div><strong>${escapeHtml(formatCompactInteger(item.followers_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.followers', {}, 'Seguidores'))}</span></div><div><strong>${escapeHtml(formatInteger(item.metrics_summary?.enrollments_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.enrollments', {}, 'Matrículas'))}</span></div><div><strong>${escapeHtml(formatInteger(item.metrics_summary?.performance_score || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.card.score', {}, 'Pontuação'))}</span></div></div><div class="small muted">${escapeHtml(item.instagram_url || t('intranet.marketingInfluencer.card.noInstagram', {}, 'Instagram não informado'))}</div><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.card.partnerSince', { date: formatDateOnly(item.partnership_start_date || '') }, `Parceria desde ${formatDateOnly(item.partnership_start_date || '')}`))}</div><div class="intranet-card-actions"><button class="btn" type="button" data-influencer-view="${escapeHtml(item.id)}">${escapeHtml(t('common.viewMore'))}</button><button class="btn" type="button" data-influencer-edit="${escapeHtml(item.id)}">${escapeHtml(t('common.edit'))}</button></div></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyOverview', {}, 'Nenhuma influencer cadastrada ainda. Use Cadastro para iniciar a base de Marketing.'))}</div>`}
       </div>
     </section>
   `;
 
   const reportsSection = selectedCard ? `
     <section class="workspace-section-panel">
-      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.reports', {}, 'Relatorios'))}</div><h4 class="intranet-section-title">${escapeHtml(selectedCard.name || t('intranet.marketingInfluencer.selectOne', {}, 'Selecione uma influencer'))}</h4></div><div class="small muted">${escapeHtml(period.label || t('intranet.marketingInfluencer.currentPeriod', {}, 'Periodo atual'))}</div></div>
-      ${influencerState.detailLoading ? `<div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.loadingDetail', {}, 'Carregando relatorio detalhado...'))}</div>` : ''}
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.reports', {}, 'Relatórios'))}</div><h4 class="intranet-section-title">${escapeHtml(selectedCard.name || t('intranet.marketingInfluencer.selectOne', {}, 'Selecione uma influencer'))}</h4></div><div class="small muted">${escapeHtml(period.label || t('intranet.marketingInfluencer.currentPeriod', {}, 'Período atual'))}</div></div>
+      ${influencerState.detailLoading ? `<div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.loadingDetail', {}, 'Carregando relatório detalhado...'))}</div>` : ''}
       ${influencerState.detailError ? `<div class="small muted">${escapeHtml(influencerState.detailError)}</div>` : ''}
       <div class="influencer-detail-layout">
         <section class="influencer-detail-panel is-embedded">
-          <div class="influencer-detail-summary"><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.posts_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.posts', {}, 'Postagens'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.reels_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.reels', {}, 'Reels'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.stories_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.stories', {}, 'Stories'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.views_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.views', {}, 'Views'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.enrollments_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.enrollments', {}, 'Matriculas'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(detailSummary.performance_label || t('intranet.marketingInfluencer.reports.track', {}, 'Acompanhar'))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.generalPerformance', {}, 'Desempenho geral'))}</span></article></div>
-          <div class="influencer-detail-meta"><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.period', {}, 'Periodo consultado'))}</strong><span>${escapeHtml(detail.period?.label || period.label || '-')}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.history', {}, 'Historico registrado'))}</strong><span>${escapeHtml(formatInteger(detailSummary.launches_total || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.launches', {}, 'lancamento(s)'))}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.activeDays', {}, 'Dias com atividade'))}</strong><span>${escapeHtml(formatInteger(detailSummary.reported_days_total || 0))}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.instagram', {}, 'Instagram'))}</strong><span>${escapeHtml(selectedCard.instagram_url || '-')}</span></div></div>
+          <div class="influencer-detail-summary"><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.posts_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.posts', {}, 'Postagens'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.reels_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.reels', {}, 'Reels'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.stories_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.stories', {}, 'Stories'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.views_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.views', {}, 'Views'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(formatInteger(detailSummary.enrollments_count || 0))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.enrollments', {}, 'Matrículas'))}</span></article><article class="intranet-sales-card"><strong>${escapeHtml(detailSummary.performance_label || t('intranet.marketingInfluencer.reports.track', {}, 'Acompanhar'))}</strong><span>${escapeHtml(t('intranet.marketingInfluencer.reports.generalPerformance', {}, 'Desempenho geral'))}</span></article></div>
+          <div class="influencer-detail-meta"><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.period', {}, 'Período consultado'))}</strong><span>${escapeHtml(detail.period?.label || period.label || '-')}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.history', {}, 'Histórico registrado'))}</strong><span>${escapeHtml(formatInteger(detailSummary.launches_total || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.launches', {}, 'lançamento(s)'))}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.activeDays', {}, 'Dias com atividade'))}</strong><span>${escapeHtml(formatInteger(detailSummary.reported_days_total || 0))}</span></div><div><strong>${escapeHtml(t('intranet.marketingInfluencer.reports.instagram', {}, 'Instagram'))}</strong><span>${escapeHtml(selectedCard.instagram_url || '-')}</span></div></div>
           <div class="influencer-detail-columns">
-            <div><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.reports.performanceHistory', {}, 'Historico de performance'))}</div><div class="influencer-history-list">${metricHistory.length ? metricHistory.map((item) => `<article class="influencer-history-card"><div class="influencer-history-head"><strong>${escapeHtml(item.period_label || formatDateRangeLabel(item.period_start, item.period_end))}</strong><span>${escapeHtml(item.period_type || 'month')}</span></div><div class="influencer-history-stats"><span>${escapeHtml(formatInteger(item.posts_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.postsShort', {}, 'posts'))}</span><span>${escapeHtml(formatInteger(item.reels_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.reelsShort', {}, 'reels'))}</span><span>${escapeHtml(formatInteger(item.stories_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.storiesShort', {}, 'stories'))}</span><span>${escapeHtml(formatInteger(item.views_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.viewsShort', {}, 'views'))}</span><span>${escapeHtml(formatInteger(item.enrollments_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.enrollmentsShort', {}, 'matriculas'))}</span></div>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}</article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyMetrics', {}, 'Ainda nao ha lancamentos de performance para esta influencer.'))}</div>`}</div></div>
-            <div><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.reports.updateHistory', {}, 'Historico de atualizacoes'))}</div><div class="influencer-history-list">${detailHistory.length ? detailHistory.map((item) => `<article class="influencer-history-card"><div class="influencer-history-head"><strong>${escapeHtml(item.action || t('intranet.generic.update', {}, 'Atualizacao'))}</strong><span>${escapeHtml(formatDate(item.created_at || ''))}</span></div><div class="small muted">${escapeHtml(item.actor_name || t('intranet.generic.system', {}, 'Sistema'))}</div><p>${escapeHtml(item.field_name ? `${item.field_name}: ${item.old_value || '-'} -> ${item.new_value || '-'}` : JSON.stringify(item.detail || {}))}</p></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyLogs', {}, 'Nenhum log administrativo registrado para esta influencer ainda.'))}</div>`}</div></div>
+            <div><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.reports.performanceHistory', {}, 'Histórico de performance'))}</div><div class="influencer-history-list">${metricHistory.length ? metricHistory.map((item) => `<article class="influencer-history-card"><div class="influencer-history-head"><strong>${escapeHtml(item.period_label || formatDateRangeLabel(item.period_start, item.period_end))}</strong><span>${escapeHtml(item.period_type || 'month')}</span></div><div class="influencer-history-stats"><span>${escapeHtml(formatInteger(item.posts_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.postsShort', {}, 'posts'))}</span><span>${escapeHtml(formatInteger(item.reels_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.reelsShort', {}, 'reels'))}</span><span>${escapeHtml(formatInteger(item.stories_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.storiesShort', {}, 'stories'))}</span><span>${escapeHtml(formatInteger(item.views_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.viewsShort', {}, 'views'))}</span><span>${escapeHtml(formatInteger(item.enrollments_count || 0))} ${escapeHtml(t('intranet.marketingInfluencer.reports.enrollmentsShort', {}, 'matrículas'))}</span></div>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}</article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyMetrics', {}, 'Ainda não há lançamentos de performance para esta influencer.'))}</div>`}</div></div>
+            <div><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.reports.updateHistory', {}, 'Histórico de atualizações'))}</div><div class="influencer-history-list">${detailHistory.length ? detailHistory.map((item) => `<article class="influencer-history-card"><div class="influencer-history-head"><strong>${escapeHtml(item.action || t('intranet.generic.update', {}, 'Atualização'))}</strong><span>${escapeHtml(formatDate(item.created_at || ''))}</span></div><div class="small muted">${escapeHtml(item.actor_name || t('intranet.generic.system', {}, 'Sistema'))}</div><p>${escapeHtml(item.field_name ? `${item.field_name}: ${item.old_value || '-'} -> ${item.new_value || '-'}` : JSON.stringify(item.detail || {}))}</p></article>`).join('') : `<div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyLogs', {}, 'Nenhum log administrativo registrado para esta influencer ainda.'))}</div>`}</div></div>
           </div>
         </section>
         <aside class="influencer-metric-panel is-embedded">
           <div class="intranet-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.reports.flowEyebrow', {}, 'Fluxos'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.reports.flowTitle', {}, 'Performance operacional'))}</h4></div></div>
-          <form id="influencerMetricForm" class="influencer-metric-form"><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.reports.metricHint', { name: selectedCard.name || 'Influencer' }, `Lancamento para ${selectedCard.name || 'Influencer'}`))}</div><div class="influencer-form-grid influencer-metric-grid"><div><label for="metricPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Periodo'))}</label><select id="metricPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="metricPeriodStart">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="metricPeriodStart" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="metricPeriodEnd">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Ate'))}</label><input id="metricPeriodEnd" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><div><label for="metricPosts">${escapeHtml(t('intranet.marketingInfluencer.reports.posts', {}, 'Postagens'))}</label><input id="metricPosts" type="number" min="0" step="1" value="0" /></div><div><label for="metricReels">${escapeHtml(t('intranet.marketingInfluencer.reports.reels', {}, 'Reels'))}</label><input id="metricReels" type="number" min="0" step="1" value="0" /></div><div><label for="metricStories">${escapeHtml(t('intranet.marketingInfluencer.reports.stories', {}, 'Stories'))}</label><input id="metricStories" type="number" min="0" step="1" value="0" /></div><div><label for="metricViews">${escapeHtml(t('intranet.marketingInfluencer.reports.views', {}, 'Views'))}</label><input id="metricViews" type="number" min="0" step="1" value="0" /></div><div><label for="metricEnrollments">${escapeHtml(t('intranet.marketingInfluencer.reports.enrollmentsAttributed', {}, 'Matriculas atribuidas'))}</label><input id="metricEnrollments" type="number" min="0" step="1" value="0" /></div><div class="influencer-form-span"><label for="metricNotes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.notes', {}, 'Observacoes'))}</label><textarea id="metricNotes" rows="3" placeholder="${escapeHtml(t('intranet.marketingInfluencer.reports.metricNotesPlaceholder', {}, 'Anote contexto da campanha, particularidades do periodo ou observacoes operacionais'))}"></textarea></div></div><div class="influencer-form-actions"><button class="btn primary" type="submit">${escapeHtml(t('intranet.marketingInfluencer.reports.saveLaunch', {}, 'Salvar lancamento'))}</button></div></form>
+          <form id="influencerMetricForm" class="influencer-metric-form"><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.reports.metricHint', { name: selectedCard.name || 'Influencer' }, `Lançamento para ${selectedCard.name || 'Influencer'}`))}</div><div class="influencer-form-grid influencer-metric-grid"><div><label for="metricPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Período'))}</label><select id="metricPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="metricPeriodStart">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="metricPeriodStart" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="metricPeriodEnd">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Até'))}</label><input id="metricPeriodEnd" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><div><label for="metricPosts">${escapeHtml(t('intranet.marketingInfluencer.reports.posts', {}, 'Postagens'))}</label><input id="metricPosts" type="number" min="0" step="1" value="0" /></div><div><label for="metricReels">${escapeHtml(t('intranet.marketingInfluencer.reports.reels', {}, 'Reels'))}</label><input id="metricReels" type="number" min="0" step="1" value="0" /></div><div><label for="metricStories">${escapeHtml(t('intranet.marketingInfluencer.reports.stories', {}, 'Stories'))}</label><input id="metricStories" type="number" min="0" step="1" value="0" /></div><div><label for="metricViews">${escapeHtml(t('intranet.marketingInfluencer.reports.views', {}, 'Views'))}</label><input id="metricViews" type="number" min="0" step="1" value="0" /></div><div><label for="metricEnrollments">${escapeHtml(t('intranet.marketingInfluencer.reports.enrollmentsAttributed', {}, 'Matrículas atribuídas'))}</label><input id="metricEnrollments" type="number" min="0" step="1" value="0" /></div><div class="influencer-form-span"><label for="metricNotes">${escapeHtml(t('intranet.marketingInfluencer.form.fields.notes', {}, 'Observações'))}</label><textarea id="metricNotes" rows="3" placeholder="${escapeHtml(t('intranet.marketingInfluencer.reports.metricNotesPlaceholder', {}, 'Anote o contexto da campanha, as particularidades do período ou observações operacionais'))}"></textarea></div></div><div class="influencer-form-actions"><button class="btn primary" type="submit">${escapeHtml(t('intranet.marketingInfluencer.reports.saveLaunch', {}, 'Salvar lançamento'))}</button></div></form>
         </aside>
       </div>
-      <div class="influencer-chart-grid">${renderInfluencerMetricBars(comparisonItems, 'enrollments_count', t('intranet.marketingInfluencer.charts.enrollments', {}, 'Matriculas por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'posts_count', t('intranet.marketingInfluencer.charts.posts', {}, 'Postagens por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'reels_count', t('intranet.marketingInfluencer.charts.reels', {}, 'Reels por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'stories_count', t('intranet.marketingInfluencer.charts.stories', {}, 'Stories por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'views_count', t('intranet.marketingInfluencer.charts.views', {}, 'Views por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'performance_score', t('intranet.marketingInfluencer.charts.performance', {}, 'Desempenho geral'))}${renderInfluencerMonthlyComparison(comparison.monthly_evolution || [])}</div>
+      <div class="influencer-chart-grid">${renderInfluencerMetricBars(comparisonItems, 'enrollments_count', t('intranet.marketingInfluencer.charts.enrollments', {}, 'Matrículas por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'posts_count', t('intranet.marketingInfluencer.charts.posts', {}, 'Postagens por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'reels_count', t('intranet.marketingInfluencer.charts.reels', {}, 'Reels por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'stories_count', t('intranet.marketingInfluencer.charts.stories', {}, 'Stories por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'views_count', t('intranet.marketingInfluencer.charts.views', {}, 'Views por influencer'))}${renderInfluencerMetricBars(comparisonItems, 'performance_score', t('intranet.marketingInfluencer.charts.performance', {}, 'Desempenho geral'))}${renderInfluencerMonthlyComparison(comparison.monthly_evolution || [])}</div>
     </section>
-  ` : `<section class="workspace-section-panel"><div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyReports', {}, 'Clique em "Ver mais" em uma influencer para abrir o relatorio detalhado, registrar performance e acompanhar o historico.'))}</div></section>`;
+  ` : `<section class="workspace-section-panel"><div class="intranet-empty-card">${escapeHtml(t('intranet.marketingInfluencer.emptyReports', {}, 'Clique em "Ver mais" em uma influencer para abrir o relatório detalhado, registrar performance e acompanhar o histórico.'))}</div></section>`;
 
   const analysisSection = `
     <section class="workspace-section-panel influencer-analysis-box">
-      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.analysis', {}, 'Analise IA'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.analysisTitle', {}, 'Leitura comparativa e recomendacao operacional'))}</h4></div><button class="btn" type="button" id="btnCloseInfluencerSection">${escapeHtml(t('common.close'))}</button></div>
-      <div class="influencer-analysis-toolbar"><div><label for="influencerAnalysisPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Periodo'))}</label><select id="influencerAnalysisPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.analysis.periodType || influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="influencerAnalysisFrom">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="influencerAnalysisFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="influencerAnalysisTo">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Ate'))}</label><input id="influencerAnalysisTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><div><label for="influencerAnalysisFocus">${escapeHtml(t('intranet.marketingInfluencer.analysisFocus', {}, 'Foco'))}</label><select id="influencerAnalysisFocus"><option value="">${escapeHtml(t('intranet.marketingInfluencer.analysisGeneral', {}, 'Comparativo geral'))}</option>${cards.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' selected' : ''}>${escapeHtml(item.name || 'Influencer')}</option>`).join('')}</select></div><button class="btn primary" type="button" id="btnRunInfluencerAnalysis" ${cards.length ? '' : 'disabled'}>${escapeHtml(influencerState.analysis.loading ? t('intranet.marketingInfluencer.analysisRunning', {}, 'Analisando...') : t('common.analyze'))}</button></div>
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.sections.analysis', {}, 'Análise IA'))}</div><h4 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.analysisTitle', {}, 'Leitura comparativa e recomendação operacional'))}</h4></div><button class="btn" type="button" id="btnCloseInfluencerSection">${escapeHtml(t('common.close'))}</button></div>
+      <div class="influencer-analysis-toolbar"><div><label for="influencerAnalysisPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Período'))}</label><select id="influencerAnalysisPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.analysis.periodType || influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="influencerAnalysisFrom">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="influencerAnalysisFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="influencerAnalysisTo">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Até'))}</label><input id="influencerAnalysisTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><div><label for="influencerAnalysisFocus">${escapeHtml(t('intranet.marketingInfluencer.analysisFocus', {}, 'Foco'))}</label><select id="influencerAnalysisFocus"><option value="">${escapeHtml(t('intranet.marketingInfluencer.analysisGeneral', {}, 'Comparativo geral'))}</option>${cards.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(influencerState.selectedInfluencerId || 0) ? ' selected' : ''}>${escapeHtml(item.name || 'Influencer')}</option>`).join('')}</select></div><button class="btn primary" type="button" id="btnRunInfluencerAnalysis" ${cards.length ? '' : 'disabled'}>${escapeHtml(influencerState.analysis.loading ? t('intranet.marketingInfluencer.analysisRunning', {}, 'Analisando...') : t('common.analyze'))}</button></div>
       <div class="influencer-analysis-result" id="influencerAnalysisResult">${escapeHtml(analysisText)}</div>
-      <div class="small muted">${influencerState.analysis.generatedAt ? escapeHtml(t('intranet.marketingInfluencer.analysisGeneratedAt', { date: formatDate(influencerState.analysis.generatedAt) }, `Ultima analise em ${formatDate(influencerState.analysis.generatedAt)}`)) : escapeHtml(t('intranet.marketingInfluencer.analysisHint', {}, 'A IA usa os dados registrados para sugerir proximos passos, reforco de parceria ou necessidade de revisao.'))}</div>
+      <div class="small muted">${influencerState.analysis.generatedAt ? escapeHtml(t('intranet.marketingInfluencer.analysisGeneratedAt', { date: formatDate(influencerState.analysis.generatedAt) }, `Última análise em ${formatDate(influencerState.analysis.generatedAt)}`)) : escapeHtml(t('intranet.marketingInfluencer.analysisHint', {}, 'A IA usa os dados registrados para sugerir próximos passos, reforço de parceria ou necessidade de revisão.'))}</div>
     </section>
   `;
 
@@ -1793,13 +2780,13 @@ function renderMarketingInfluencerWorkspace() {
         ? analysisSection
         : activeSection === 'overview'
           ? overviewSection
-          : `<div class="workspace-section-empty">${escapeHtml(t('intranet.workspaceSectionClosed', {}, 'Escolha uma acao acima para abrir somente o conteudo necessario desta area.'))}</div>`;
+          : `<div class="workspace-section-empty">${escapeHtml(t('intranet.workspaceSectionClosed', {}, 'Escolha uma ação acima para abrir somente o conteúdo necessário desta área.'))}</div>`;
 
   customWrap.innerHTML = `
     <section class="influencer-workspace">
-      <div class="influencer-toolbar influencer-toolbar-compact"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.menuEyebrow', {}, 'Marketing'))}</div><h3 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.menuTitle', {}, 'Influencer'))}</h3><p class="small muted">${escapeHtml(t('intranet.marketingInfluencer.menuDescription', {}, 'Cadastro, desempenho, comparativos e apoio de IA para as parcerias do Marketing.'))}</p></div><div class="influencer-toolbar-actions"><div><label for="influencerFilterPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Periodo'))}</label><select id="influencerFilterPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="influencerFilterFrom">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="influencerFilterFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="influencerFilterTo">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Ate'))}</label><input id="influencerFilterTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><button class="btn" type="button" id="btnRefreshInfluencerWorkspace">${escapeHtml(refreshLabel)}</button></div></div>
+      <div class="influencer-toolbar influencer-toolbar-compact"><div><div class="intranet-section-eyebrow">${escapeHtml(t('intranet.marketingInfluencer.menuEyebrow', {}, 'Marketing'))}</div><h3 class="intranet-section-title">${escapeHtml(t('intranet.marketingInfluencer.menuTitle', {}, 'Influencer'))}</h3><p class="small muted">${escapeHtml(t('intranet.marketingInfluencer.menuDescription', {}, 'Cadastro, desempenho, comparativos e apoio de IA para as parcerias do Marketing.'))}</p></div><div class="influencer-toolbar-actions"><div><label for="influencerFilterPeriodType">${escapeHtml(t('intranet.marketingInfluencer.filters.period', {}, 'Período'))}</label><select id="influencerFilterPeriodType">${getMarketingPeriodOptions().map((item) => `<option value="${escapeHtml(item.value)}"${item.value === (influencerState.filters?.periodType || 'month') ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div><div><label for="influencerFilterFrom">${escapeHtml(t('intranet.marketingInfluencer.filters.from', {}, 'De'))}</label><input id="influencerFilterFrom" type="date" value="${escapeHtml(influencerState.filters?.from || period.from || '')}" /></div><div><label for="influencerFilterTo">${escapeHtml(t('intranet.marketingInfluencer.filters.to', {}, 'Até'))}</label><input id="influencerFilterTo" type="date" value="${escapeHtml(influencerState.filters?.to || period.to || '')}" /></div><button class="btn" type="button" id="btnRefreshInfluencerWorkspace">${escapeHtml(refreshLabel)}</button></div></div>
       ${noticeMarkup}
-      <section class="workspace-submenu-shell"><div class="workspace-submenu-header"><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.submenuTitle', {}, 'Acoes do submenu'))}</div><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.submenuHint', {}, 'Abra apenas a secao que estiver usando agora.'))}</div></div>${buildWorkspaceActionMenu(sectionActions, activeSection)}${sectionMarkup}</section>
+      <section class="workspace-submenu-shell"><div class="workspace-submenu-header"><div class="intranet-block-title">${escapeHtml(t('intranet.marketingInfluencer.submenuTitle', {}, 'Ações do submenu'))}</div><div class="small muted">${escapeHtml(t('intranet.marketingInfluencer.submenuHint', {}, 'Abra apenas a seção que estiver usando agora.'))}</div></div>${buildWorkspaceActionMenu(sectionActions, activeSection)}${sectionMarkup}</section>
     </section>
   `;
 
@@ -1933,7 +2920,7 @@ async function fetchMarketingInfluencerDetail(influencerId, options = {}) {
     renderMarketingInfluencerWorkspace();
   } catch (err) {
     influencerState.detailLoading = false;
-    influencerState.detailError = err.message || 'Nao foi possivel carregar o relatorio da influencer.';
+    influencerState.detailError = err.message || 'Não foi possível carregar o relatório da influencer.';
     renderMarketingInfluencerWorkspace();
   }
 }
@@ -1978,7 +2965,7 @@ async function handleInfluencerFormSubmit(event) {
   } catch (err) {
     setInfluencerNotice(
       'error',
-      t('intranet.marketingInfluencer.form.saveError', { error: err.message }, `Nao foi possivel salvar a influencer: ${err.message}`)
+      t('intranet.marketingInfluencer.form.saveError', { error: err.message }, `Não foi possível salvar a influencer: ${err.message}`)
     );
     renderMarketingInfluencerWorkspace();
   }
@@ -2006,7 +2993,7 @@ async function handleInfluencerMetricSubmit(event) {
   };
 
   if (!payload.period_start) {
-    window.alert(t('intranet.marketingInfluencer.reports.periodStartRequired', {}, 'Informe ao menos a data inicial do lancamento.'));
+    window.alert(t('intranet.marketingInfluencer.reports.periodStartRequired', {}, 'Informe ao menos a data inicial do lançamento.'));
     return;
   }
 
@@ -2017,7 +3004,7 @@ async function handleInfluencerMetricSubmit(event) {
     });
     setInfluencerNotice(
       'success',
-      t('intranet.marketingInfluencer.reports.metricSaved', {}, 'Lancamento salvo com sucesso.')
+      t('intranet.marketingInfluencer.reports.metricSaved', {}, 'Lançamento salvo com sucesso.')
     );
     forceInfluencerSection('reports');
     await fetchMarketingInfluencerBootstrap({
@@ -2028,7 +3015,7 @@ async function handleInfluencerMetricSubmit(event) {
   } catch (err) {
     setInfluencerNotice(
       'error',
-      t('intranet.marketingInfluencer.reports.metricSaveError', { error: err.message }, `Nao foi possivel registrar a performance: ${err.message}`)
+      t('intranet.marketingInfluencer.reports.metricSaveError', { error: err.message }, `Não foi possível registrar a performance: ${err.message}`)
     );
     renderMarketingInfluencerWorkspace();
   }
@@ -2052,12 +3039,12 @@ async function handleInfluencerAnalysis() {
     });
     influencerState.analysis.loading = false;
     influencerState.analysis.periodType = payload.period_type;
-    influencerState.analysis.result = response.analysis_text || 'Nao foi possivel gerar a analise.';
+    influencerState.analysis.result = response.analysis_text || 'Não foi possível gerar a análise.';
     influencerState.analysis.generatedAt = response.generated_at || new Date().toISOString();
     renderMarketingInfluencerWorkspace();
   } catch (err) {
     influencerState.analysis.loading = false;
-    influencerState.analysis.result = t('intranet.marketingInfluencer.analysisError', { error: err.message }, `Nao foi possivel analisar este periodo: ${err.message}`);
+    influencerState.analysis.result = t('intranet.marketingInfluencer.analysisError', { error: err.message }, `Não foi possível analisar este período: ${err.message}`);
     influencerState.analysis.generatedAt = new Date().toISOString();
     renderMarketingInfluencerWorkspace();
   }
@@ -2084,8 +3071,22 @@ function setActiveView(viewKey, options = {}) {
   closeSidebarOnMobile();
 }
 
+function renderDashboardIndicatorWidgets(marketingIndicator = {}) {
+  const tabs = Array.isArray(marketingIndicator?.tabs) ? marketingIndicator.tabs : [];
+  if (!tabs.length) return '';
+  return tabs.map((tab) => `
+    <article class="indicator-chart-card dashboard-indicator-card">
+      <div class="intranet-card-meta">${escapeHtml(tab.indicator_kind || t('intranet.marketingIndicator.defaultKind', {}, 'Indicador'))}</div>
+      <h4>${escapeHtml(tab.title || t('intranet.marketingIndicator.defaultTab', {}, 'Indicador'))}</h4>
+      ${tab.is_person_panel ? buildIndicatorPersonSummary(tab) : ''}
+      ${buildIndicatorLineChartSvg(tab.chart || {})}
+    </article>
+  `).join('');
+}
+
 function renderDashboard(intranet) {
   const dashboard = intranet.dashboard || { enabled: false };
+  const marketingIndicator = dashboard.marketing_indicator || { enabled: false };
   const summaryWrap = el('dashboardSummaryCards');
   const breakdownWrap = el('dashboardDepartmentBreakdown');
   const highlightsWrap = el('dashboardHighlightsList');
@@ -2098,13 +3099,13 @@ function renderDashboard(intranet) {
       summaryWrap.innerHTML = `
         <article class="intranet-stat-card">
           <div class="intranet-stat-value">-</div>
-          <div class="intranet-stat-label">${escapeHtml(t('intranet.dashboardComingSoonTitle', {}, 'Dashboard em preparacao'))}</div>
-          <div class="small muted">${escapeHtml(t('intranet.dashboardComingSoonDescription', {}, 'Os paineis por area serao liberados conforme as fontes e indicadores forem sendo conectados.'))}</div>
+          <div class="intranet-stat-label">${escapeHtml(t('intranet.dashboardComingSoonTitle', {}, 'Dashboard em preparação'))}</div>
+          <div class="small muted">${escapeHtml(t('intranet.dashboardComingSoonDescription', {}, 'Os painéis por área serão liberados conforme as fontes e indicadores forem sendo conectados.'))}</div>
         </article>
       `;
     }
     if (breakdownWrap) {
-      breakdownWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardComingSoonAreas', {}, 'A estrutura ja esta pronta para dashboards Comercial, Pedagogico, Financeiro e Geral.'))}</div>`;
+      breakdownWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardComingSoonAreas', {}, 'A estrutura já está pronta para dashboards Comercial, Pedagógico, Financeiro e Geral.'))}</div>`;
     }
     if (highlightsWrap) {
       highlightsWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardComingSoonHighlights', {}, 'Por enquanto, use Home, Agenda e os departamentos para acompanhar a rotina interna.'))}</div>`;
@@ -2115,7 +3116,22 @@ function renderDashboard(intranet) {
 
   if (summaryWrap) {
     summaryWrap.innerHTML = '';
-    (dashboard.cards || []).forEach((card) => {
+    const cards = [...(dashboard.cards || [])];
+    if (marketingIndicator?.enabled) {
+      cards.push(
+        {
+          label: t('intranet.marketingIndicator.summary.tabs', {}, 'Abas'),
+          value: String(marketingIndicator.summary?.tabs_total || 0),
+          description: t('intranet.marketingIndicator.dashboardTitle', {}, 'Dashboard de indicadores do Marketing.'),
+        },
+        {
+          label: t('intranet.marketingIndicator.summary.people', {}, 'Pessoas'),
+          value: String(marketingIndicator.summary?.person_panels_total || 0),
+          description: t('intranet.marketingIndicator.personPanel', {}, 'Painéis por pessoa com leitura visual.'),
+        }
+      );
+    }
+    cards.forEach((card) => {
       const item = document.createElement('article');
       item.className = 'intranet-stat-card';
       item.innerHTML = `
@@ -2131,7 +3147,7 @@ function renderDashboard(intranet) {
     breakdownWrap.innerHTML = '';
     const rows = dashboard.department_breakdown || [];
     if (!rows.length) {
-      breakdownWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardEmptyAreas', {}, 'Nenhuma area disponivel para compor o dashboard deste perfil.'))}</div>`;
+      breakdownWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardEmptyAreas', {}, 'Nenhuma área disponível para compor o dashboard deste perfil.'))}</div>`;
     } else {
       const maxDocuments = Math.max(...rows.map((item) => Number(item.documents_total || 0)), 1);
       rows.forEach((item) => {
@@ -2142,11 +3158,11 @@ function renderDashboard(intranet) {
             <div class="intranet-dashboard-row-title">
               <span class="intranet-dashboard-row-icon">${renderIcon(item.icon || 'layers')}</span>
               <div>
-                <strong>${escapeHtml(item.name || 'Area')}</strong>
+                <strong>${escapeHtml(item.name || 'Área')}</strong>
                 <div class="small muted">${escapeHtml(item.access_level || 'colaborador')}</div>
               </div>
             </div>
-            <div class="small muted">${escapeHtml(t('intranet.dashboardAreaMetrics', { documents: String(item.documents_total || 0), modules: String(item.modules_total || 0) }, `${String(item.documents_total || 0)} doc(s) • ${String(item.modules_total || 0)} modulo(s)`))}</div>
+            <div class="small muted">${escapeHtml(t('intranet.dashboardAreaMetrics', { documents: String(item.documents_total || 0), modules: String(item.modules_total || 0) }, `${String(item.documents_total || 0)} doc(s) • ${String(item.modules_total || 0)} módulo(s)`))}</div>
           </div>
           <div class="intranet-dashboard-bar-track">
             <span class="intranet-dashboard-bar-fill" style="width:${Math.max(12, Math.round((Number(item.documents_total || 0) / maxDocuments) * 100))}%"></span>
@@ -2160,7 +3176,14 @@ function renderDashboard(intranet) {
 
   if (highlightsWrap) {
     highlightsWrap.innerHTML = '';
-    (dashboard.highlights || []).forEach((item) => {
+    const highlights = [...(dashboard.highlights || [])];
+    if (marketingIndicator?.enabled) {
+      highlights.unshift({
+        title: t('intranet.marketingIndicator.sourceTitle', {}, 'Base dos indicadores'),
+        description: marketingIndicator.workbook_source?.source_file || 'indicador geral.xlsx',
+      });
+    }
+    highlights.forEach((item) => {
       const row = document.createElement('div');
       row.className = 'intranet-dashboard-note';
       row.innerHTML = `<strong>${escapeHtml(item.title || '')}</strong><span>${escapeHtml(item.description || '')}</span>`;
@@ -2171,7 +3194,10 @@ function renderDashboard(intranet) {
   if (widgetsWrap) {
     widgetsWrap.innerHTML = '';
     const docs = dashboard.recent_documents || [];
-    if (!docs.length) {
+    const indicatorMarkup = marketingIndicator?.enabled ? renderDashboardIndicatorWidgets(marketingIndicator) : '';
+    if (indicatorMarkup) {
+      widgetsWrap.innerHTML = indicatorMarkup;
+    } else if (!docs.length) {
       widgetsWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(t('intranet.dashboardEmptyDocuments', {}, 'Nenhum documento recente para destacar no dashboard.'))}</div>`;
     } else {
       docs.forEach((document) => {
@@ -2540,7 +3566,7 @@ function renderCalendarHistory(history = []) {
   }
   wrap.innerHTML = history.map((item) => `
     <div class="intranet-sales-history-item">
-      <strong>${escapeHtml(item.action || t('intranet.generic.update', {}, 'Atualizacao'))}</strong>
+      <strong>${escapeHtml(item.action || t('intranet.generic.update', {}, 'Atualização'))}</strong>
       <div class="small muted">${escapeHtml(formatDate(item.created_at))} - ${escapeHtml(item.actor_name || t('intranet.generic.system', {}, 'Sistema'))}</div>
       <div>${escapeHtml(item.field_name || '')}${item.old_value || item.new_value ? `: ${escapeHtml(item.old_value || '-')} -> ${escapeHtml(item.new_value || '-')}` : ''}</div>
     </div>
@@ -2597,8 +3623,22 @@ function fillCalendarEditor(event = null, history = []) {
 }
 
 function renderCalendarViewButtons() {
+  const labelMap = {
+    month: t('calendar.views.month', {}, 'Mês'),
+    week: t('calendar.views.week', {}, 'Semana'),
+    day: t('calendar.views.day', {}, 'Dia'),
+    list: t('calendar.views.list', {}, 'Lista'),
+  };
+  const prevButton = el('btnCalendarPrev');
+  const todayButton = el('btnCalendarToday');
+  const nextButton = el('btnCalendarNext');
+  if (prevButton) prevButton.textContent = t('calendar.previous', {}, 'Anterior');
+  if (todayButton) todayButton.textContent = t('common.today', {}, 'Hoje');
+  if (nextButton) nextButton.textContent = t('calendar.next', {}, 'Próximo');
   Array.from(document.querySelectorAll('#calendarViewSwitch [data-view]')).forEach((button) => {
-    const active = button.getAttribute('data-view') === calendarState.view;
+    const view = button.getAttribute('data-view') || 'month';
+    const active = view === calendarState.view;
+    button.textContent = labelMap[view] || view;
     button.classList.toggle('primary', active);
   });
 }
@@ -2834,9 +3874,12 @@ async function selectCalendarEvent(eventId) {
   calendarState.selectedEventId = Number(eventId || 0);
   try {
     const { event, history } = await api(`/api/intranet/calendar/events/${eventId}`);
+    if (event?.start_date) {
+      calendarState.baseDate = event.start_date;
+    }
     fillCalendarEditor(event, history || []);
   } catch (err) {
-    alert(t('calendar.loadError', { error: err.message }, `Nao foi possivel carregar o compromisso: ${err.message}`));
+    alert(t('calendar.loadError', { error: err.message }, `Não foi possível carregar o compromisso: ${err.message}`));
   }
 }
 
@@ -2919,13 +3962,13 @@ function renderSalesSummary(sales) {
   closerWrap.innerHTML = '';
 
   if (!sales?.enabled) {
-    summaryWrap.innerHTML = '<div class="intranet-empty-card">Nenhuma operacao comercial liberada para este perfil.</div>';
+    summaryWrap.innerHTML = '<div class="intranet-empty-card">Nenhuma operação comercial liberada para este perfil.</div>';
     return;
   }
 
   const statusEntries = Object.entries(sales.summary?.statuses || {});
   const cards = [
-    { label: 'Matriculas', value: Number(sales.summary?.total || 0) },
+    { label: 'Matrículas', value: Number(sales.summary?.total || 0) },
     { label: 'Closers ativas', value: Array.isArray(sales.closers) ? sales.closers.length : 0 },
     { label: 'Escopo atual', value: sales.can_view_all ? 'Geral' : 'Minha carteira' },
   ];
@@ -2995,8 +4038,8 @@ function renderSalesDetail(record, history = []) {
   const form = el('salesDetailForm');
 
   if (!record) {
-    title.textContent = 'Selecione uma matricula';
-    meta.innerHTML = '<div class="intranet-empty-card">Clique em um registro para ver detalhes, historico e editar os campos permitidos.</div>';
+    title.textContent = 'Selecione uma matrícula';
+    meta.innerHTML = '<div class="intranet-empty-card">Clique em um registro para ver detalhes, histórico e editar os campos permitidos.</div>';
     historyWrap.innerHTML = '';
     form.reset();
     Array.from(form.elements).forEach((field) => {
@@ -3006,7 +4049,7 @@ function renderSalesDetail(record, history = []) {
     return;
   }
 
-  title.textContent = record.student_name || 'Matricula';
+  title.textContent = record.student_name || 'Matrícula';
   meta.innerHTML = [
     ['Curso', record.course_name || '-'],
     ['Closer', record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer'],
@@ -3030,13 +4073,13 @@ function renderSalesDetail(record, history = []) {
   el('btnSaveSalesRecord').disabled = !canEdit;
 
   if (!history.length) {
-    historyWrap.innerHTML = '<div class="intranet-empty-card">Nenhum historico registrado ainda.</div>';
+    historyWrap.innerHTML = '<div class="intranet-empty-card">Nenhum histórico registrado ainda.</div>';
     return;
   }
 
   historyWrap.innerHTML = history.map((item) => `
     <div class="intranet-sales-history-item">
-      <strong>${escapeHtml(item.action || 'Atualizacao')}</strong>
+      <strong>${escapeHtml(item.action || 'Atualização')}</strong>
       <div class="small muted">${escapeHtml(formatDate(item.created_at))} - ${escapeHtml(item.actor_name || 'Sistema')}</div>
       <div>${escapeHtml(item.field_name || '')}${item.old_value || item.new_value ? `: ${escapeHtml(item.old_value || '-')} -> ${escapeHtml(item.new_value || '-')}` : ''}</div>
     </div>
@@ -3215,7 +4258,7 @@ function populateCommunicationForm(announcement) {
   renderCommunicationDepartmentOptions(announcement.department_ids || []);
   syncCommunicationAudienceControls();
   el('btnCancelCommunicationEdit').style.display = '';
-  el('btnSaveCommunication').textContent = t('intranet.communication.saveChanges', {}, 'Salvar alteracoes');
+  el('btnSaveCommunication').textContent = t('intranet.communication.saveChanges', {}, 'Salvar alterações');
 }
 
 function renderCommunicationCatalogList() {
@@ -3274,7 +4317,7 @@ function renderCommunicationCatalogList() {
         resetCommunicationForm();
         await refreshIntranetBootstrap();
       } catch (err) {
-        alert(t('intranet.communication.deleteError', { error: err.message }, `Nao foi possivel excluir o comunicado: ${err.message}`));
+        alert(t('intranet.communication.deleteError', { error: err.message }, `Não foi possível excluir o comunicado: ${err.message}`));
       }
     };
     actions.appendChild(deleteBtn);
@@ -3370,7 +4413,7 @@ async function init() {
       window.location.href = '/index.html';
       return;
     }
-    alert(t('intranet.loadError', { error: err.message }, `Nao foi possivel carregar a intranet: ${err.message}`));
+    alert(t('intranet.loadError', { error: err.message }, `Não foi possível carregar a intranet: ${err.message}`));
     return;
   }
 
@@ -3438,10 +4481,9 @@ async function init() {
       resetCommunicationForm();
       await refreshIntranetBootstrap();
     } catch (err) {
-      alert(t('intranet.communication.saveError', { error: err.message }, `Nao foi possivel salvar o comunicado: ${err.message}`));
+      alert(t('intranet.communication.saveError', { error: err.message }, `Não foi possível salvar o comunicado: ${err.message}`));
     }
   });
-  el('btnNewCalendarEvent')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
   el('btnCalendarReset')?.addEventListener('click', () => resetCalendarEditor(calendarState.baseDate || getTodayDateKey()));
   el('btnCalendarPrev')?.addEventListener('click', async () => {
     shiftCalendarBaseDate(-1);
@@ -3488,13 +4530,13 @@ async function init() {
             body: JSON.stringify(payload),
           });
       calendarState.selectedEventId = response?.event?.id || eventId || null;
-      await refreshIntranetBootstrap({ route: { key: 'calendar', departmentSlug: '', submenuSlug: '' } });
+      calendarState.baseDate = response?.event?.start_date || payload.start_date || calendarState.baseDate;
       await fetchCalendarEvents();
       if (calendarState.selectedEventId) {
         await selectCalendarEvent(calendarState.selectedEventId);
       }
     } catch (err) {
-      alert(t('calendar.saveError', { error: err.message }, `Nao foi possivel salvar o compromisso: ${err.message}`));
+      alert(t('calendar.saveError', { error: err.message }, `Não foi possível salvar o compromisso: ${err.message}`));
     }
   });
   el('btnCalendarCancelEvent')?.addEventListener('click', async () => {
@@ -3506,11 +4548,10 @@ async function init() {
         method: 'POST',
         body: JSON.stringify({ cancel_reason: reason || '' }),
       });
-      await refreshIntranetBootstrap({ route: { key: 'calendar', departmentSlug: '', submenuSlug: '' } });
       await fetchCalendarEvents();
       await selectCalendarEvent(eventId);
     } catch (err) {
-      alert(t('calendar.cancelError', { error: err.message }, `Nao foi possivel cancelar o compromisso: ${err.message}`));
+      alert(t('calendar.cancelError', { error: err.message }, `Não foi possível cancelar o compromisso: ${err.message}`));
     }
   });
   el('btnRefreshSales')?.addEventListener('click', fetchSalesRecords);
@@ -3543,7 +4584,7 @@ async function init() {
       renderSalesRecordsGrid();
       renderSalesDetail(record, history || []);
     } catch (err) {
-      alert(t('intranet.generic.saveError', { error: err.message }, `Nao foi possivel salvar a atualizacao: ${err.message}`));
+      alert(t('intranet.generic.saveError', { error: err.message }, `Não foi possível salvar a atualização: ${err.message}`));
     }
   });
   el('btnIntranetMenu')?.addEventListener('click', toggleSidebar);

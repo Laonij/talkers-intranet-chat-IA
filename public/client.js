@@ -850,7 +850,7 @@ function updateEmptyState() {
 
 function addMessage(role, content, meta = null) {
   const chat = el("chat");
-  if (!chat) return;
+  if (!chat) return null;
 
   const wrap = document.createElement("div");
   wrap.className = `msg ${role === "user" ? "user" : "assistant"}`;
@@ -874,6 +874,175 @@ function addMessage(role, content, meta = null) {
 
   chat.appendChild(wrap);
   updateEmptyState();
+  return { wrap, bubble, avatar };
+}
+
+function createAssistantStreamShell() {
+  const chat = el("chat");
+  if (!chat) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant is-streaming";
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+
+  const plain = document.createElement("div");
+  plain.className = "assistant-plain assistant-streaming";
+
+  const label = document.createElement("div");
+  label.className = "structured-card-label";
+  label.textContent = t("chat.assistantName", {}, "Talkers IA");
+
+  const textNode = document.createElement("div");
+  textNode.className = "msg-text assistant-stream-text";
+  textNode.textContent = t("common.loading", {}, "Carregando...");
+
+  plain.appendChild(label);
+  plain.appendChild(textNode);
+  bubble.appendChild(plain);
+
+  wrap.appendChild(createMessageAvatar("assistant"));
+  wrap.appendChild(bubble);
+  chat.appendChild(wrap);
+  updateEmptyState();
+  scrollChat();
+
+  return { wrap, bubble, textNode };
+}
+
+function updateAssistantStreamShell(shell, text) {
+  if (!shell?.textNode) return;
+  shell.textNode.textContent = String(text || "");
+  scrollChat();
+}
+
+function finalizeAssistantStreamShell(shell, text, meta = null) {
+  if (!shell?.bubble) return;
+  shell.wrap?.classList.remove("is-streaming");
+  shell.bubble.innerHTML = "";
+  appendAssistantContent(shell.bubble, text, meta);
+  appendFileCard(shell.bubble, meta);
+  appendSources(shell.bubble, meta);
+  scrollChat();
+}
+
+async function streamConversationReply(convId, text) {
+  const shell = createAssistantStreamShell();
+  let replyText = "";
+  let finalPayload = null;
+
+  try {
+    const response = await fetch(`/api/conversations/${convId}/send-stream`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        ...(i18n()?.buildHeaders?.() || {}),
+      },
+      body: JSON.stringify({ message: text }),
+    });
+
+    if (!response.ok && response.status === 404) {
+      const legacy = await api(`/api/conversations/${convId}/send`, {
+        method: "POST",
+        body: JSON.stringify({ message: text }),
+      });
+      finalizeAssistantStreamShell(shell, legacy.reply || "OK", legacy.meta || null);
+      return legacy;
+    }
+
+    if (!response.ok || !response.body) {
+      const raw = await response.text();
+      let parsed = null;
+      try {
+        parsed = raw ? JSON.parse(raw) : null;
+      } catch {}
+      throw new Error(parsed?.error || raw || `HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const flushPacket = (packet) => {
+      const safePacket = String(packet || "").trim();
+      if (!safePacket) return;
+      let eventName = "message";
+      const dataLines = [];
+      safePacket.split(/\r?\n/).forEach((line) => {
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim() || "message";
+          return;
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trim());
+        }
+      });
+
+      let payload = {};
+      try {
+        payload = JSON.parse(dataLines.join("\n") || "{}");
+      } catch {
+        payload = { raw: dataLines.join("\n") };
+      }
+
+      if (eventName === "stage") {
+        if (!replyText) {
+          updateAssistantStreamShell(shell, String(payload.label || t("common.loading", {}, "Carregando...")));
+        }
+        return;
+      }
+
+      if (eventName === "delta") {
+        replyText += String(payload.delta || payload.text || "");
+        updateAssistantStreamShell(shell, replyText || t("common.loading", {}, "Carregando..."));
+        return;
+      }
+
+      if (eventName === "done") {
+        finalPayload = payload || {};
+        if (payload?.reply) {
+          replyText = String(payload.reply || "");
+        }
+        return;
+      }
+
+      if (eventName === "error") {
+        throw new Error(payload?.error || payload?.message || t("chat.errorPrefix", {}, "Erro: "));
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+      let boundaryIndex = buffer.indexOf("\n\n");
+      while (boundaryIndex >= 0) {
+        const packet = buffer.slice(0, boundaryIndex);
+        buffer = buffer.slice(boundaryIndex + 2);
+        flushPacket(packet);
+        boundaryIndex = buffer.indexOf("\n\n");
+      }
+
+      if (done) break;
+    }
+
+    if (buffer.trim()) {
+      flushPacket(buffer);
+    }
+
+    const safeReply = String(finalPayload?.reply || replyText || "");
+    finalizeAssistantStreamShell(shell, safeReply || "OK", finalPayload?.meta || null);
+    return {
+      ...(finalPayload || {}),
+      reply: safeReply || "OK",
+    };
+  } catch (err) {
+    shell?.wrap?.remove();
+    throw err;
+  }
 }
 
 function renderConversations() {
@@ -1022,20 +1191,10 @@ async function sendTextOnlyMessage(text) {
   addMessage("user", text);
   scrollChat();
 
-  const typing = createTypingIndicator();
-
   try {
-    const data = await api(`/api/conversations/${convId}/send`, {
-      method: "POST",
-      body: JSON.stringify({ message: text }),
-    });
-
-    typing?.remove();
-    addMessage("assistant", data.reply || "OK", data.meta || null);
+    await streamConversationReply(convId, text);
     await loadConversations();
-    scrollChat();
   } catch (err) {
-    typing?.remove();
     addMessage("assistant", t("chat.errorPrefix") + err.message);
     scrollChat();
   } finally {
@@ -1112,15 +1271,9 @@ async function sendMessageWithAttachments(text) {
     }
 
     if (text) {
-      const typing = createTypingIndicator();
-      try {
-        await api(`/api/conversations/${convId}/send`, {
-          method: "POST",
-          body: JSON.stringify({ message: text }),
-        });
-      } finally {
-        typing?.remove();
-      }
+      await openConversation(convId);
+      addMessage("user", text);
+      await streamConversationReply(convId, text);
     }
 
     msgEl.value = "";

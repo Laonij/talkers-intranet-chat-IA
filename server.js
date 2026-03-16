@@ -3,6 +3,7 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const { URLSearchParams } = require("url");
 const cookieParser = require("cookie-parser");
@@ -20,6 +21,7 @@ const {
   normalizeLanguageCode,
   normalizeLocaleCode,
   normalizeText: normalizeLanguageText,
+  repairMojibakeText,
 } = require("./lib/language");
 const { evaluateEducationalModeration } = require("./lib/moderation");
 const { chunkTextSemantically, cosineSimilarity, extractKeywords, hashText, normalizeSemanticText, parseEmbedding } = require("./lib/semantic");
@@ -65,6 +67,10 @@ const {
   parseMatriculasWorkbook,
   readWorkbookFromFile,
 } = require("./lib/sales");
+const {
+  WORKBOOK_SOURCE: MARKETING_INDICATOR_WORKBOOK_SOURCE,
+  MARKETING_INDICATOR_SEEDS,
+} = require("./lib/marketingIndicatorSeed");
 
 const PORT = Number(process.env.PORT || 10000);
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -110,6 +116,22 @@ const SALES_SOURCE_KEY = 'matriculas-novas';
 const MARKETING_INFLUENCER_STATUSES = new Set(['ativo', 'em teste', 'pausado', 'encerrado']);
 const MARKETING_INFLUENCE_TYPE_SUGGESTIONS = ['Stories', 'Reels', 'Postagens', 'UGC', 'Presenca em evento', 'Campanha local'];
 const MARKETING_CONTRACT_TYPE_SUGGESTIONS = ['Permuta', 'Contrato mensal', 'Campanha pontual', 'Comissao', 'Teste'];
+const MARKETING_INDICATOR_ALLOWED_PERSON_NAMES = new Set(['bruna rafaela', 'bruna goncalves', 'viviane siepeman', 'cristiana freitas']);
+const PEDAGOGICAL_WHATSAPP_GROUP_STATUSES = new Set(["active", "inactive"]);
+const PEDAGOGICAL_WHATSAPP_CAMPAIGN_STATUSES = new Set(["draft", "prepared", "running", "completed", "error", "cancelled"]);
+const PEDAGOGICAL_WHATSAPP_ITEM_STATUSES = new Set(["queued", "sending", "sent", "error", "pending_provider", "cancelled"]);
+const PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS = 30;
+const CHAT_PERFORMANCE_SAMPLE_LIMIT = 60;
+const CHAT_HISTORY_CONTEXT_LIMIT = 8;
+const CHAT_HISTORY_CONTEXT_MAX_CHARS = 2200;
+const CHAT_CONTEXT_BLOCK_MAX_CHARS = 3200;
+const CHAT_MEMORY_BLOCK_MAX_CHARS = 900;
+const CHAT_SUPPORT_CACHE_TTL_MS = 60 * 1000;
+const CHAT_SUPPORT_CACHE_MAX = 160;
+const WHATSAPP_PROVIDER_ENABLED = String(process.env.WHATSAPP_PROVIDER_ENABLED || "").trim() === "1";
+const WHATSAPP_PROVIDER_NAME = String(process.env.WHATSAPP_PROVIDER_NAME || "").trim();
+const WHATSAPP_PROVIDER_API_URL = String(process.env.WHATSAPP_PROVIDER_API_URL || "").trim();
+const WHATSAPP_PROVIDER_TOKEN = String(process.env.WHATSAPP_PROVIDER_TOKEN || "").trim();
 
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
@@ -218,6 +240,24 @@ const knowledgeBackgroundState = {
   last_error: "",
   last_sweep_at: null,
 };
+
+const chatPerformanceState = {
+  samples: [],
+  concurrent_requests: 0,
+  peak_concurrent: 0,
+  last_response_ms: 0,
+  last_api_latency_ms: 0,
+  last_internal_ms: 0,
+   last_context_ms: 0,
+   last_persistence_ms: 0,
+  last_prompt_chars: 0,
+  last_response_chars: 0,
+   last_payload_bytes: 0,
+   last_response_bytes: 0,
+  last_status: "idle",
+  last_updated_at: null,
+};
+const chatSupportContextCache = new Map();
 
 validateConfig();
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -449,6 +489,206 @@ function safeJsonStringify(value, fallback = "{}") {
   } catch {
     return fallback;
   }
+}
+
+function trimContextText(value = "", maxChars = CHAT_CONTEXT_BLOCK_MAX_CHARS) {
+  const safeValue = String(value || "").trim();
+  if (!safeValue || safeValue.length <= maxChars) return safeValue;
+  return `${safeValue.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
+}
+
+function buildCompactHistoryText(history = [], {
+  maxItems = CHAT_HISTORY_CONTEXT_LIMIT,
+  maxChars = CHAT_HISTORY_CONTEXT_MAX_CHARS,
+} = {}) {
+  const safeHistory = Array.isArray(history) ? history.filter((item) => String(item?.content || "").trim()) : [];
+  if (!safeHistory.length) return "";
+  const recent = safeHistory.slice(-Math.max(1, maxItems));
+  const lines = [];
+  let totalChars = 0;
+
+  for (let index = recent.length - 1; index >= 0; index -= 1) {
+    const item = recent[index];
+    const roleLabel = item.role === "assistant" ? "IA" : "Usuario";
+    const safeLine = `${roleLabel}: ${trimContextText(item.content || "", 420)}`;
+    if (totalChars + safeLine.length > maxChars && lines.length) break;
+    lines.unshift(safeLine);
+    totalChars += safeLine.length;
+  }
+
+  const omitted = Math.max(0, safeHistory.length - lines.length);
+  if (omitted > 0) {
+    lines.unshift(`Historico anterior resumido: ${omitted} mensagem(ns) mais antiga(s) foram ocultadas para reduzir latencia.`);
+  }
+  return lines.join("\n");
+}
+
+function getChatSupportCacheEntry(cacheKey = "") {
+  const cached = chatSupportContextCache.get(cacheKey);
+  if (!cached) return null;
+  if ((Date.now() - Number(cached.cachedAt || 0)) > CHAT_SUPPORT_CACHE_TTL_MS) {
+    chatSupportContextCache.delete(cacheKey);
+    return null;
+  }
+  return cached.value || null;
+}
+
+function setChatSupportCacheEntry(cacheKey = "", value = null) {
+  if (!cacheKey || !value) return;
+  if (chatSupportContextCache.size >= CHAT_SUPPORT_CACHE_MAX) {
+    const firstKey = chatSupportContextCache.keys().next().value;
+    if (firstKey) chatSupportContextCache.delete(firstKey);
+  }
+  chatSupportContextCache.set(cacheKey, {
+    cachedAt: Date.now(),
+    value,
+  });
+}
+
+function repairDeepText(value) {
+  if (Array.isArray(value)) return value.map(repairDeepText);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [key, repairDeepText(nested)])
+    );
+  }
+  return typeof value === "string" ? repairMojibakeText(value) : value;
+}
+
+function normalizeIndicatorHeaderValue(value = "") {
+  const repaired = repairMojibakeText(String(value || "").trim());
+  if (!repaired) return "";
+  if (repaired === "System.Xml.XmlElement") return "Nome do aluno";
+  return repaired;
+}
+
+function beginChatPerformanceSample(promptChars = 0) {
+  chatPerformanceState.concurrent_requests += 1;
+  chatPerformanceState.peak_concurrent = Math.max(
+    Number(chatPerformanceState.peak_concurrent || 0),
+    Number(chatPerformanceState.concurrent_requests || 0)
+  );
+  return {
+    started_at: Date.now(),
+    prompt_chars: Number(promptChars || 0),
+  };
+}
+
+function finalizeChatPerformanceSample(sample = {}, metrics = {}) {
+  const finishedAt = Date.now();
+  const totalResponseMs = Math.max(0, Number(metrics.total_response_ms || (finishedAt - Number(sample.started_at || finishedAt))));
+  const apiLatencyMs = Math.max(0, Number(metrics.api_latency_ms || 0));
+  const internalMs = Math.max(0, Number(metrics.internal_processing_ms || (totalResponseMs - apiLatencyMs)));
+  const contextMs = Math.max(0, Number(metrics.context_assembly_ms || 0));
+  const persistenceMs = Math.max(0, Number(metrics.persistence_ms || 0));
+  const promptChars = Math.max(0, Number(metrics.prompt_chars || sample.prompt_chars || 0));
+  const responseChars = Math.max(0, Number(metrics.response_chars || 0));
+  const payloadBytes = Math.max(0, Number(metrics.payload_bytes || 0));
+  const responseBytes = Math.max(0, Number(metrics.response_bytes || 0));
+
+  chatPerformanceState.concurrent_requests = Math.max(0, Number(chatPerformanceState.concurrent_requests || 0) - 1);
+  chatPerformanceState.last_response_ms = totalResponseMs;
+  chatPerformanceState.last_api_latency_ms = apiLatencyMs;
+  chatPerformanceState.last_internal_ms = internalMs;
+  chatPerformanceState.last_context_ms = contextMs;
+  chatPerformanceState.last_persistence_ms = persistenceMs;
+  chatPerformanceState.last_prompt_chars = promptChars;
+  chatPerformanceState.last_response_chars = responseChars;
+  chatPerformanceState.last_payload_bytes = payloadBytes;
+  chatPerformanceState.last_response_bytes = responseBytes;
+  chatPerformanceState.last_status = String(metrics.status || "success");
+  chatPerformanceState.last_updated_at = new Date().toISOString();
+
+  chatPerformanceState.samples.push({
+    finished_at: finishedAt,
+    total_response_ms: totalResponseMs,
+    api_latency_ms: apiLatencyMs,
+    internal_processing_ms: internalMs,
+    context_assembly_ms: contextMs,
+    persistence_ms: persistenceMs,
+    prompt_chars: promptChars,
+    response_chars: responseChars,
+    payload_bytes: payloadBytes,
+    response_bytes: responseBytes,
+    status: chatPerformanceState.last_status,
+  });
+  if (chatPerformanceState.samples.length > CHAT_PERFORMANCE_SAMPLE_LIMIT) {
+    chatPerformanceState.samples = chatPerformanceState.samples.slice(-CHAT_PERFORMANCE_SAMPLE_LIMIT);
+  }
+}
+
+function getAverageFromSamples(field) {
+  const samples = Array.isArray(chatPerformanceState.samples) ? chatPerformanceState.samples : [];
+  if (!samples.length) return 0;
+  const total = samples.reduce((sum, item) => sum + Number(item?.[field] || 0), 0);
+  return total / samples.length;
+}
+
+function getChatPerformanceSnapshot() {
+  const averageResponseMs = getAverageFromSamples("total_response_ms");
+  const averageApiLatencyMs = getAverageFromSamples("api_latency_ms");
+  const averageInternalMs = getAverageFromSamples("internal_processing_ms");
+  const averageContextMs = getAverageFromSamples("context_assembly_ms");
+  const averagePersistenceMs = getAverageFromSamples("persistence_ms");
+  const averagePromptChars = getAverageFromSamples("prompt_chars");
+  const averageResponseChars = getAverageFromSamples("response_chars");
+  const averagePayloadBytes = getAverageFromSamples("payload_bytes");
+  const averageResponseBytes = getAverageFromSamples("response_bytes");
+  const rssBytes = Number(process.memoryUsage?.().rss || 0);
+  const heapUsedBytes = Number(process.memoryUsage?.().heapUsed || 0);
+  const totalMemoryBytes = Number(os.totalmem?.() || 0);
+  const memoryPercent = totalMemoryBytes ? (rssBytes / totalMemoryBytes) * 100 : 0;
+  const loadAverage = Array.isArray(os.loadavg?.()) ? os.loadavg() : [0, 0, 0];
+  const averageResponseSeconds = averageResponseMs / 1000;
+  let severity = "fast";
+  if (averageResponseSeconds > 6) severity = "critical";
+  else if (averageResponseSeconds > 3) severity = "slow";
+  else if (averageResponseSeconds > 1) severity = "normal";
+
+  return {
+    severity,
+    status: chatPerformanceState.last_status || "idle",
+    average_response_ms: Math.round(averageResponseMs),
+    last_response_ms: Math.round(Number(chatPerformanceState.last_response_ms || 0)),
+    average_api_latency_ms: Math.round(averageApiLatencyMs),
+    last_api_latency_ms: Math.round(Number(chatPerformanceState.last_api_latency_ms || 0)),
+    average_internal_ms: Math.round(averageInternalMs),
+    last_internal_ms: Math.round(Number(chatPerformanceState.last_internal_ms || 0)),
+    average_context_ms: Math.round(averageContextMs),
+    last_context_ms: Math.round(Number(chatPerformanceState.last_context_ms || 0)),
+    average_persistence_ms: Math.round(averagePersistenceMs),
+    last_persistence_ms: Math.round(Number(chatPerformanceState.last_persistence_ms || 0)),
+    average_prompt_chars: Math.round(averagePromptChars),
+    average_response_chars: Math.round(averageResponseChars),
+    last_prompt_chars: Math.round(Number(chatPerformanceState.last_prompt_chars || 0)),
+    last_response_chars: Math.round(Number(chatPerformanceState.last_response_chars || 0)),
+    average_payload_bytes: Math.round(averagePayloadBytes),
+    last_payload_bytes: Math.round(Number(chatPerformanceState.last_payload_bytes || 0)),
+    average_response_bytes: Math.round(averageResponseBytes),
+    last_response_bytes: Math.round(Number(chatPerformanceState.last_response_bytes || 0)),
+    concurrent_requests: Number(chatPerformanceState.concurrent_requests || 0),
+    peak_concurrent: Number(chatPerformanceState.peak_concurrent || 0),
+    sample_size: Array.isArray(chatPerformanceState.samples) ? chatPerformanceState.samples.length : 0,
+    memory_rss_bytes: rssBytes,
+    memory_heap_used_bytes: heapUsedBytes,
+    memory_percent: Number(memoryPercent.toFixed(1)),
+    cpu_load_1m: Number((loadAverage[0] || 0).toFixed(2)),
+    cpu_load_5m: Number((loadAverage[1] || 0).toFixed(2)),
+    last_updated_at: chatPerformanceState.last_updated_at,
+  };
+}
+
+function buildChatPerformanceAlerts(snapshot = {}) {
+  const alerts = [];
+  if (Number(snapshot.average_api_latency_ms || 0) > 1800) alerts.push("Latência elevada da API");
+  if (Number(snapshot.average_internal_ms || 0) > 2000) alerts.push("Processamento interno lento");
+  if (Number(snapshot.average_context_ms || 0) > 900) alerts.push("Montagem de contexto acima do ideal");
+  if (Number(snapshot.average_persistence_ms || 0) > 600) alerts.push("Persistência do chat mais lenta que o esperado");
+  if (Number(snapshot.memory_percent || 0) > 75) alerts.push("Possível gargalo de memória");
+  if (Number(snapshot.concurrent_requests || 0) >= 4) alerts.push("Volume alto de requisições");
+  if (Number(snapshot.average_prompt_chars || 0) > 8000) alerts.push("Mensagens enviadas para a IA estão grandes");
+  if (Number(snapshot.average_payload_bytes || 0) > 24000) alerts.push("Payload da IA está acima do ideal");
+  return alerts;
 }
 
 function createKnowledgeProcessingState(overrides = {}) {
@@ -4462,6 +4702,39 @@ function parsePromptVariablesConfig() {
   }
 }
 
+async function getConversationSupportCacheKey(conversationId) {
+  const row = await get(
+    `SELECT COUNT(*) AS total_files, COALESCE(MAX(id), 0) AS last_file_id
+       FROM files
+      WHERE conversation_id=?`,
+    [conversationId]
+  );
+  return `${Number(conversationId || 0)}:${Number(row?.total_files || 0)}:${Number(row?.last_file_id || 0)}`;
+}
+
+async function getConversationSupportAssets(conversationId) {
+  const cacheKey = await getConversationSupportCacheKey(conversationId);
+  const cached = getChatSupportCacheEntry(cacheKey);
+  if (cached) return cached;
+
+  const [fileContext, visionInputs, documentInputs, imageReferences] = await Promise.all([
+    getConversationFilesContext(conversationId),
+    getRecentVisionInputs(conversationId, 3),
+    getRecentDocumentInputs(conversationId, 2),
+    getRecentImageReferences(conversationId, 4),
+  ]);
+
+  const payload = {
+    cache_key: cacheKey,
+    fileContext,
+    visionInputs,
+    documentInputs,
+    imageReferences,
+  };
+  setChatSupportCacheEntry(cacheKey, payload);
+  return payload;
+}
+
 function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
   if (!OPENAI_PROMPT_ID) return null;
 
@@ -4496,8 +4769,10 @@ async function buildOpenAIInput({
   contextText,
   topicSnapshot = null,
   responseProfile = null,
+  visionInputs = null,
+  documentInputs = null,
 }) {
-  const snapshot = topicSnapshot || await getConversationTopicSnapshot(conversationId, userText, 12);
+  const snapshot = topicSnapshot || await getConversationTopicSnapshot(conversationId, userText, CHAT_HISTORY_CONTEXT_LIMIT);
   const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
   const topicShift = snapshot?.topicShift || { isShift: false, reason: 'unknown' };
   const currentUser = await getUserById(userId);
@@ -4511,8 +4786,8 @@ async function buildOpenAIInput({
     ? []
     : await getRelevantMemoryEntries(userId, conversationId, userText, 4);
   const memoryBundle = buildMemoryContextBundle(memoryEntries);
-  const visionInputs = await getRecentVisionInputs(conversationId, 3);
-  const documentInputs = await getRecentDocumentInputs(conversationId, 2);
+  const supportVisionInputs = Array.isArray(visionInputs) ? visionInputs : await getRecentVisionInputs(conversationId, 3);
+  const supportDocumentInputs = Array.isArray(documentInputs) ? documentInputs : await getRecentDocumentInputs(conversationId, 2);
   const normalizedUserText = String(userText || '').trim();
   const businessContextText = buildBusinessContextBlock({
     user: currentUser || {},
@@ -4523,21 +4798,21 @@ async function buildOpenAIInput({
 
   const historyText = topicShift.isShift
     ? 'Historico recente ocultado nesta resposta porque o usuario mudou claramente de assunto.'
-    : history
-        .map((item) => `${item.role === 'assistant' ? 'IA' : 'Usuario'}: ${item.content}`)
-        .filter(Boolean)
-        .join('\n');
+    : buildCompactHistoryText(history, {
+        maxItems: CHAT_HISTORY_CONTEXT_LIMIT,
+        maxChars: CHAT_HISTORY_CONTEXT_MAX_CHARS,
+      });
 
   const memoryText = topicShift.isShift
     ? 'Memoria de conversa anterior ignorada nesta resposta por mudanca de assunto.'
-    : (memory || 'Sem memoria persistente desta conversa ainda.');
+    : trimContextText(memory || 'Sem memoria persistente desta conversa ainda.', CHAT_MEMORY_BLOCK_MAX_CHARS);
 
   const userMemoryText = topicShift.isShift
     ? 'Memoria entre conversas nao usada nesta resposta por mudanca de assunto.'
-    : (userMemory || 'Sem memoria relevante de outras conversas.');
+    : trimContextText(userMemory || 'Sem memoria relevante de outras conversas.', CHAT_MEMORY_BLOCK_MAX_CHARS);
   const semanticMemoryText = topicShift.isShift
     ? 'Memorias semanticas ignoradas nesta resposta por mudanca de assunto.'
-    : (memoryBundle.text || 'Sem memorias semanticas relevantes para esta pergunta.');
+    : trimContextText(memoryBundle.text || 'Sem memorias semanticas relevantes para esta pergunta.', CHAT_MEMORY_BLOCK_MAX_CHARS);
 
   const systemText = `
 Voce e a TALKERS IA, assistente corporativa, educacional e operacional da empresa Talkers.
@@ -4570,7 +4845,7 @@ Contexto operacional atual:
 - Memoria util de outras conversas deste usuario: ${userMemoryText}
 - Memorias semanticas relevantes por usuario/conversa: ${semanticMemoryText}
 - Historico recente: ${historyText || 'Sem historico anterior.'}
-- Contexto adicional: ${contextText || 'Sem contexto adicional.'}
+ - Contexto adicional: ${trimContextText(contextText || 'Sem contexto adicional.', CHAT_CONTEXT_BLOCK_MAX_CHARS)}
 
 Perfil desta resposta:
 - Idioma da conversa: ${getLanguageLabel(userLanguage)}
@@ -4591,8 +4866,8 @@ Perfil desta resposta:
       role: 'user',
       content: [
         { type: 'input_text', text: normalizedUserText },
-        ...visionInputs,
-        ...documentInputs,
+        ...supportVisionInputs,
+        ...supportDocumentInputs,
       ],
     },
   ];
@@ -4665,17 +4940,42 @@ function extractResponsePayload(data, baseSources = []) {
   };
 }
 
-async function openaiReply({ conversationId, userId, userText, contextText, baseSources = [], topicSnapshot = null, responseProfile = null }) {
+async function openaiReply({
+  conversationId,
+  userId,
+  userText,
+  contextText,
+  baseSources = [],
+  topicSnapshot = null,
+  responseProfile = null,
+  visionInputs = null,
+  documentInputs = null,
+}) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const apiStartedAt = Date.now();
   if (!apiKey) {
     return {
       text: "Configure OPENAI_API_KEY no servidor para usar a OpenAI.",
       sources: [...(baseSources || [])],
+      metrics: {
+        api_latency_ms: 0,
+        status: "missing_api_key",
+        model,
+      },
     };
   }
 
-  const input = await buildOpenAIInput({ conversationId, userId, userText, contextText, topicSnapshot, responseProfile });
+  const input = await buildOpenAIInput({
+    conversationId,
+    userId,
+    userText,
+    contextText,
+    topicSnapshot,
+    responseProfile,
+    visionInputs,
+    documentInputs,
+  });
   const currentUser = await getUserById(userId).catch(() => null);
   const prompt = buildOpenAIPromptConfig(currentUser, responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)), responseProfile?.language);
 
@@ -4686,6 +4986,7 @@ async function openaiReply({ conversationId, userId, userText, contextText, base
     include: ["file_search_call.results", "web_search_call.action.sources"],
   };
   if (prompt) requestBody.prompt = prompt;
+  const payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
 
   let resp = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -4717,11 +5018,183 @@ async function openaiReply({ conversationId, userId, userText, contextText, base
     return {
       text: "Erro ao consultar a OpenAI.",
       sources: [...(baseSources || [])],
+      metrics: {
+        api_latency_ms: Date.now() - apiStartedAt,
+        status: `http_${resp.status}`,
+        model,
+        payload_bytes: payloadBytes,
+        response_bytes: Buffer.byteLength(String(body || ""), "utf8"),
+      },
     };
   }
 
-  const data = await resp.json();
-  return extractResponsePayload(data, baseSources);
+  const rawBody = await resp.text();
+  const data = rawBody ? JSON.parse(rawBody) : {};
+  const payload = extractResponsePayload(data, baseSources);
+  payload.metrics = {
+    api_latency_ms: Date.now() - apiStartedAt,
+    status: "success",
+    model,
+    payload_bytes: payloadBytes,
+    response_bytes: Buffer.byteLength(String(rawBody || ""), "utf8"),
+  };
+  return payload;
+}
+
+async function openaiReplyStream({
+  conversationId,
+  userId,
+  userText,
+  contextText,
+  baseSources = [],
+  topicSnapshot = null,
+  responseProfile = null,
+  visionInputs = null,
+  documentInputs = null,
+  onDelta = null,
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const apiStartedAt = Date.now();
+  if (!apiKey) {
+    return {
+      text: "Configure OPENAI_API_KEY no servidor para usar a OpenAI.",
+      sources: [...(baseSources || [])],
+      metrics: {
+        api_latency_ms: 0,
+        status: "missing_api_key",
+        model,
+      },
+    };
+  }
+
+  const input = await buildOpenAIInput({
+    conversationId,
+    userId,
+    userText,
+    contextText,
+    topicSnapshot,
+    responseProfile,
+    visionInputs,
+    documentInputs,
+  });
+  const currentUser = await getUserById(userId).catch(() => null);
+  const prompt = buildOpenAIPromptConfig(
+    currentUser,
+    responseProfile || analyzeConversationIntent(userText, detectConversationLanguage(userText)),
+    responseProfile?.language
+  );
+  const requestBody = {
+    model,
+    input,
+    tools: buildOpenAITools(),
+    include: ["file_search_call.results", "web_search_call.action.sources"],
+    stream: true,
+  };
+  if (prompt) requestBody.prompt = prompt;
+  const payloadBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
+
+  let resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!resp.ok && prompt) {
+    const body = await resp.text();
+    console.log("OpenAI prompt fallback (stream):", resp.status, body);
+    const fallbackBody = { ...requestBody };
+    delete fallbackBody.prompt;
+    resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(fallbackBody),
+    });
+  }
+
+  if (!resp.ok || !resp.body) {
+    const body = await resp.text();
+    console.log("OpenAI stream error:", resp.status, body);
+    return {
+      text: "Erro ao consultar a OpenAI.",
+      sources: [...(baseSources || [])],
+      metrics: {
+        api_latency_ms: Date.now() - apiStartedAt,
+        status: `http_${resp.status}`,
+        model,
+        payload_bytes: payloadBytes,
+        response_bytes: Buffer.byteLength(String(body || ""), "utf8"),
+      },
+    };
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let responseBytes = 0;
+  let fullText = "";
+  let finalPayload = null;
+
+  const flushBlock = async (blockText = "") => {
+    const lines = String(blockText || "").split("\n").map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) return;
+    const dataLines = lines.filter((line) => line.startsWith("data:")).map((line) => line.replace(/^data:\s?/, ""));
+    if (!dataLines.length) return;
+    const dataText = dataLines.join("\n");
+    if (dataText === "[DONE]") return;
+    let event = null;
+    try {
+      event = JSON.parse(dataText);
+    } catch {
+      return;
+    }
+    if (!event || typeof event !== "object") return;
+    if (event.type === "response.output_text.delta" && event.delta) {
+      fullText += event.delta;
+      if (typeof onDelta === "function") await onDelta(String(event.delta || ""), { fullText });
+    }
+    if (event.type === "response.output_text.done" && event.text && !fullText) {
+      fullText = String(event.text || "");
+      if (typeof onDelta === "function") await onDelta(fullText, { fullText, replace: true });
+    }
+    if (event.type === "response.completed") {
+      finalPayload = extractResponsePayload(event.response || {}, baseSources);
+    }
+  };
+
+  for await (const chunk of resp.body) {
+    const chunkBuffer = Buffer.from(chunk);
+    responseBytes += chunkBuffer.length;
+    buffer += decoder.decode(chunkBuffer, { stream: true });
+    while (buffer.includes("\n\n")) {
+      const boundaryIndex = buffer.indexOf("\n\n");
+      const block = buffer.slice(0, boundaryIndex);
+      buffer = buffer.slice(boundaryIndex + 2);
+      await flushBlock(block);
+    }
+  }
+  if (buffer.trim()) {
+    await flushBlock(buffer);
+  }
+
+  const payload = finalPayload || {
+    text: (fullText || "").trim() || "Sem resposta da OpenAI.",
+    sources: [...(baseSources || [])].slice(0, 8),
+  };
+  payload.text = String(payload.text || fullText || "").trim() || "Sem resposta da OpenAI.";
+  payload.metrics = {
+    api_latency_ms: Date.now() - apiStartedAt,
+    status: "success",
+    model,
+    payload_bytes: payloadBytes,
+    response_bytes: responseBytes,
+  };
+  return payload;
 }
 
 async function getUserById(userId) {
@@ -4798,7 +5271,7 @@ async function buildIntranetPayload(userId) {
 
   const documentWhereSql = documentWhere.length ? `WHERE ${documentWhere.join(' AND ')}` : '';
 
-  const [departmentSubmenus, recentDocuments, totalDocumentsRow, salesPayload, documentCountRows, announcementsRaw, upcomingEvents] = await Promise.all([
+  const [departmentSubmenus, recentDocuments, totalDocumentsRow, salesPayload, documentCountRows, announcementsRaw, upcomingEvents, marketingIndicatorDashboard] = await Promise.all([
     (!isAdmin && !visibleDepartmentIds.length)
       ? Promise.resolve([])
       : listDepartmentSubmenus({ includeInactive: isAdmin, departmentIds: visibleDepartmentIds }),
@@ -4828,6 +5301,9 @@ async function buildIntranetPayload(userId) {
         status: 'scheduled',
         limit: 8,
       }),
+      (isAdmin || userHasDepartmentAccess(user, "marketing"))
+        ? buildMarketingIndicatorDashboardSnapshot(user).catch(() => null)
+        : Promise.resolve(null),
   ]);
 
   const submenusByDepartmentId = new Map();
@@ -4867,22 +5343,24 @@ async function buildIntranetPayload(userId) {
       name: row.department_name || 'Geral',
       total: Number(row.total || 0),
     })),
+    marketingIndicatorDashboard: marketingIndicatorDashboard || null,
     announcements: visibleAnnouncements,
     upcomingEvents,
     notifications: buildIntranetNotifications(visibleAnnouncements, upcomingEvents),
   });
 
   workspace.sales = salesPayload;
+  workspace.dashboard.marketing_indicator = marketingIndicatorDashboard || null;
   workspace.calendar_preview = {
     total_upcoming: upcomingEvents.length,
     upcoming_events: upcomingEvents,
   };
 
-  return {
+  return repairDeepText({
     user,
     department_catalog: departmentCatalog,
     intranet: workspace,
-  };
+  });
 }
 
 const MARKETING_PERIOD_TYPES = new Set(["day", "week", "month"]);
@@ -5095,6 +5573,610 @@ async function resolveMarketingScope(user) {
   }
 
   return { department, canManage: true };
+}
+
+async function resolvePedagogicalScope(user) {
+  const department = await getDepartmentBySlug("pedagogico");
+  if (!department?.id) {
+    throw new Error("pedagogical_department_not_found");
+  }
+
+  const allowed = userHasDepartmentAccess(user, "pedagogico");
+  if (!allowed) {
+    throw new Error("pedagogical_access_denied");
+  }
+
+  return { department, canManage: true };
+}
+
+function normalizeOperationalUrl(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return null;
+  if (/^https?:\/\//i.test(safe)) return safe;
+  return `https://${safe}`;
+}
+
+function normalizePedagogicalWhatsAppGroupStatus(value = "active") {
+  const safe = String(value || "active").trim().toLowerCase();
+  return PEDAGOGICAL_WHATSAPP_GROUP_STATUSES.has(safe) ? safe : "active";
+}
+
+function normalizePedagogicalWhatsAppCampaignStatus(value = "draft") {
+  const safe = String(value || "draft").trim().toLowerCase();
+  return PEDAGOGICAL_WHATSAPP_CAMPAIGN_STATUSES.has(safe) ? safe : "draft";
+}
+
+function normalizePedagogicalWhatsAppItemStatus(value = "queued") {
+  const safe = String(value || "queued").trim().toLowerCase();
+  return PEDAGOGICAL_WHATSAPP_ITEM_STATUSES.has(safe) ? safe : "queued";
+}
+
+function normalizePedagogicalWhatsAppInterval(value) {
+  const safe = Number(value || PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS);
+  return Math.max(5, Math.min(600, Number.isFinite(safe) ? safe : PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS));
+}
+
+function getWhatsAppIntegrationStatus() {
+  const hasAnyConfig = Boolean(WHATSAPP_PROVIDER_ENABLED || WHATSAPP_PROVIDER_NAME || WHATSAPP_PROVIDER_API_URL || WHATSAPP_PROVIDER_TOKEN);
+  const hasCredentials = Boolean(WHATSAPP_PROVIDER_NAME && WHATSAPP_PROVIDER_API_URL && WHATSAPP_PROVIDER_TOKEN);
+  const adapterImplemented = false;
+  return {
+    configured: hasAnyConfig,
+    credentials_ready: hasCredentials,
+    execution_enabled: false,
+    provider_name: WHATSAPP_PROVIDER_NAME || "Não configurado",
+    api_url: WHATSAPP_PROVIDER_API_URL || "",
+    token_configured: Boolean(WHATSAPP_PROVIDER_TOKEN),
+    mode: hasCredentials ? "prepared_only" : "pending_provider",
+    status_label: hasCredentials
+      ? "Configuração parcial detectada"
+      : "Integração final pendente",
+    technical_note: hasCredentials
+      ? "Existe configuração parcial de provider, mas o projeto ainda não possui adapter implementado para disparo real em grupos."
+      : "O módulo opera internamente com grupos, campanhas, fila e histórico. O envio real depende da integração final com o provider de WhatsApp.",
+    next_step: adapterImplemented
+      ? "Execução real liberada."
+      : "Conectar um provider compatível e implementar o adapter de envio por grupo antes de ativar o disparo real.",
+  };
+}
+
+function mapPedagogicalWhatsAppGroupRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    department_id: row.department_id,
+    internal_code: row.internal_code || `GRP-${String(row.id || "").padStart(4, "0")}`,
+    name: repairMojibakeText(row.name || ""),
+    group_link: row.group_link || "",
+    category: repairMojibakeText(row.category || ""),
+    status: normalizePedagogicalWhatsAppGroupStatus(row.status || "active"),
+    notes: repairMojibakeText(row.notes || ""),
+    metadata: repairDeepText(safeJsonParse(row.metadata_json || "{}") || {}),
+    created_by: row.created_by || null,
+    updated_by: row.updated_by || null,
+    created_at: row.created_at || "",
+    updated_at: row.updated_at || "",
+  };
+}
+
+function mapPedagogicalWhatsAppCampaignRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    department_id: row.department_id,
+    name: repairMojibakeText(row.name || ""),
+    image_url: row.image_url || "",
+    message_text: repairMojibakeText(row.message_text || ""),
+    campaign_link: row.campaign_link || "",
+    interval_seconds: Number(row.interval_seconds || PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS),
+    status: normalizePedagogicalWhatsAppCampaignStatus(row.status || "draft"),
+    execution_mode: row.execution_mode || "prepared",
+    integration_status: row.integration_status || "pending_provider",
+    scheduled_at: row.scheduled_at || "",
+    started_at: row.started_at || "",
+    finished_at: row.finished_at || "",
+    total_groups: Number(row.total_groups || 0),
+    total_sent: Number(row.total_sent || 0),
+    total_pending: Number(row.total_pending || 0),
+    total_error: Number(row.total_error || 0),
+    last_error: repairMojibakeText(row.last_error || ""),
+    metadata: repairDeepText(safeJsonParse(row.metadata_json || "{}") || {}),
+    created_by: row.created_by || null,
+    updated_by: row.updated_by || null,
+    created_at: row.created_at || "",
+    updated_at: row.updated_at || "",
+  };
+}
+
+function mapPedagogicalWhatsAppCampaignItemRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    campaign_id: row.campaign_id,
+    group_id: row.group_id,
+    queue_order: Number(row.queue_order || 0),
+    send_status: normalizePedagogicalWhatsAppItemStatus(row.send_status || "queued"),
+    provider_message_id: row.provider_message_id || "",
+    error_message: repairMojibakeText(row.error_message || ""),
+    last_attempt_at: row.last_attempt_at || "",
+    sent_at: row.sent_at || "",
+    attempt_count: Number(row.attempt_count || 0),
+    metadata: repairDeepText(safeJsonParse(row.metadata_json || "{}") || {}),
+    group_name: repairMojibakeText(row.group_name || ""),
+    group_status: normalizePedagogicalWhatsAppGroupStatus(row.group_status || "active"),
+    created_at: row.created_at || "",
+    updated_at: row.updated_at || "",
+  };
+}
+
+function mapPedagogicalWhatsAppCampaignLogRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    campaign_id: row.campaign_id || null,
+    campaign_item_id: row.campaign_item_id || null,
+    group_id: row.group_id || null,
+    action: row.action || "",
+    detail: repairDeepText(safeJsonParse(row.detail_json || "{}") || {}),
+    actor_user_id: row.actor_user_id || null,
+    actor_name: repairMojibakeText(row.actor_name || ""),
+    created_at: row.created_at || "",
+  };
+}
+
+async function ensurePedagogicalWhatsAppSettings(actorUserId = null) {
+  const defaults = [
+    { key: "default_interval_seconds", value: String(PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS) },
+    { key: "execution_mode", value: "prepared_only" },
+  ];
+  for (const item of defaults) {
+    const existing = await get(
+      "SELECT id FROM pedagogical_whatsapp_settings WHERE setting_key=? LIMIT 1",
+      [item.key]
+    );
+    if (existing?.id) continue;
+    await run(
+      "INSERT INTO pedagogical_whatsapp_settings (setting_key, setting_value, metadata_json, updated_by, updated_at) VALUES (?, ?, ?, ?, datetime('now'))",
+      [item.key, item.value, safeJsonStringify({ seeded: true }, "{}"), actorUserId || null]
+    );
+  }
+}
+
+async function listPedagogicalWhatsAppGroupsRows(departmentId, options = {}) {
+  const params = [departmentId];
+  const where = ["department_id=?"];
+  const search = String(options.search || "").trim();
+  const status = String(options.status || "").trim();
+  const limit = Math.min(600, Math.max(1, Number(options.limit || 400)));
+  if (search) {
+    where.push("(lower(name) LIKE lower(?) OR lower(category) LIKE lower(?) OR lower(group_link) LIKE lower(?))");
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  if (status) {
+    where.push("lower(status)=lower(?)");
+    params.push(normalizePedagogicalWhatsAppGroupStatus(status));
+  }
+  params.push(limit);
+  const rows = await all(
+    `SELECT id, department_id, internal_code, name, group_link, category, status, notes, metadata_json,
+            created_by, updated_by, created_at, updated_at
+       FROM pedagogical_whatsapp_groups
+      WHERE ${where.join(" AND ")}
+      ORDER BY lower(name) ASC, id DESC
+      LIMIT ?`,
+    params
+  );
+  return rows.map(mapPedagogicalWhatsAppGroupRow).filter(Boolean);
+}
+
+async function listPedagogicalWhatsAppCampaignRows(departmentId, options = {}) {
+  const limit = Math.min(120, Math.max(1, Number(options.limit || 40)));
+  const rows = await all(
+    `SELECT id, department_id, name, image_url, message_text, campaign_link, interval_seconds, status, execution_mode,
+            integration_status, scheduled_at, started_at, finished_at, total_groups, total_sent, total_pending,
+            total_error, last_error, metadata_json, created_by, updated_by, created_at, updated_at
+       FROM pedagogical_whatsapp_campaigns
+      WHERE department_id=?
+      ORDER BY datetime(created_at) DESC, id DESC
+      LIMIT ?`,
+    [departmentId, limit]
+  );
+  return rows.map(mapPedagogicalWhatsAppCampaignRow).filter(Boolean);
+}
+
+async function listPedagogicalWhatsAppCampaignItems(campaignIds = [], options = {}) {
+  const ids = (campaignIds || []).map((item) => Number(item || 0)).filter(Boolean);
+  if (!ids.length) return [];
+  const limit = Math.min(800, Math.max(1, Number(options.limit || 400)));
+  const rows = await all(
+    `SELECT pci.id, pci.campaign_id, pci.group_id, pci.queue_order, pci.send_status, pci.provider_message_id,
+            pci.error_message, pci.last_attempt_at, pci.sent_at, pci.attempt_count, pci.metadata_json,
+            pci.created_at, pci.updated_at, pg.name AS group_name, pg.status AS group_status
+       FROM pedagogical_whatsapp_campaign_items pci
+  LEFT JOIN pedagogical_whatsapp_groups pg ON pg.id = pci.group_id
+      WHERE pci.campaign_id IN (${ids.map(() => "?").join(", ")})
+      ORDER BY pci.campaign_id DESC, pci.queue_order ASC, pci.id ASC
+      LIMIT ?`,
+    [...ids, limit]
+  );
+  return rows.map(mapPedagogicalWhatsAppCampaignItemRow).filter(Boolean);
+}
+
+async function listPedagogicalWhatsAppCampaignLogs(campaignIds = [], options = {}) {
+  const ids = (campaignIds || []).map((item) => Number(item || 0)).filter(Boolean);
+  if (!ids.length) return [];
+  const limit = Math.min(240, Math.max(1, Number(options.limit || 80)));
+  const rows = await all(
+    `SELECT pcl.id, pcl.campaign_id, pcl.campaign_item_id, pcl.group_id, pcl.action, pcl.detail_json,
+            pcl.actor_user_id, pcl.created_at, u.name AS actor_name
+       FROM pedagogical_whatsapp_campaign_logs pcl
+  LEFT JOIN users u ON u.id = pcl.actor_user_id
+      WHERE pcl.campaign_id IN (${ids.map(() => "?").join(", ")})
+      ORDER BY datetime(pcl.created_at) DESC, pcl.id DESC
+      LIMIT ?`,
+    [...ids, limit]
+  );
+  return rows.map(mapPedagogicalWhatsAppCampaignLogRow).filter(Boolean);
+}
+
+async function logPedagogicalWhatsAppCampaignAction({
+  campaignId = null,
+  campaignItemId = null,
+  groupId = null,
+  action = "",
+  actorUserId = null,
+  detail = {},
+}) {
+  await run(
+    `INSERT INTO pedagogical_whatsapp_campaign_logs
+       (campaign_id, campaign_item_id, group_id, action, detail_json, actor_user_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      campaignId || null,
+      campaignItemId || null,
+      groupId || null,
+      String(action || "").trim() || "updated",
+      detail && Object.keys(detail).length ? safeJsonStringify(detail, "{}") : null,
+      actorUserId || null,
+    ]
+  );
+}
+
+async function savePedagogicalWhatsAppGroup(payload = {}, actorUser) {
+  const scope = await resolvePedagogicalScope(actorUser);
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0) || null;
+  const groupId = Number(payload.id || 0) || null;
+  const name = String(payload.name || "").trim();
+  const groupLink = normalizeOperationalUrl(payload.group_link || "");
+  const category = String(payload.category || "").trim() || null;
+  const status = normalizePedagogicalWhatsAppGroupStatus(payload.status || "active");
+  const notes = String(payload.notes || "").trim() || null;
+  const internalCode = String(payload.internal_code || "").trim() || null;
+
+  if (!name) throw new Error("missing_whatsapp_group_name");
+
+  if (groupId) {
+    await run(
+      `UPDATE pedagogical_whatsapp_groups
+          SET internal_code=?, name=?, group_link=?, category=?, status=?, notes=?, updated_by=?, updated_at=datetime('now')
+        WHERE id=? AND department_id=?`,
+      [internalCode, name, groupLink, category, status, notes, actorId, groupId, scope.department.id]
+    );
+    await logPedagogicalWhatsAppCampaignAction({
+      groupId,
+      action: "group_updated",
+      actorUserId: actorId,
+      detail: { name, status },
+    });
+  } else {
+    const created = await run(
+      `INSERT INTO pedagogical_whatsapp_groups
+         (department_id, internal_code, name, group_link, category, status, notes, created_by, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [scope.department.id, internalCode, name, groupLink, category, status, notes, actorId, actorId]
+    );
+    await logPedagogicalWhatsAppCampaignAction({
+      groupId: created.lastID,
+      action: "group_created",
+      actorUserId: actorId,
+      detail: { name, status },
+    });
+    return get(
+      `SELECT id, department_id, internal_code, name, group_link, category, status, notes, metadata_json,
+              created_by, updated_by, created_at, updated_at
+         FROM pedagogical_whatsapp_groups
+        WHERE id=?`,
+      [created.lastID]
+    ).then(mapPedagogicalWhatsAppGroupRow);
+  }
+
+  return get(
+    `SELECT id, department_id, internal_code, name, group_link, category, status, notes, metadata_json,
+            created_by, updated_by, created_at, updated_at
+       FROM pedagogical_whatsapp_groups
+      WHERE id=?`,
+    [groupId]
+  ).then(mapPedagogicalWhatsAppGroupRow);
+}
+
+async function savePedagogicalWhatsAppCampaign(payload = {}, actorUser) {
+  const scope = await resolvePedagogicalScope(actorUser);
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0) || null;
+  const campaignId = Number(payload.id || 0) || null;
+  const name = String(payload.name || "").trim();
+  const imageUrl = normalizeOperationalUrl(payload.image_url || "");
+  const messageText = String(payload.message_text || payload.text || "").trim();
+  const campaignLink = normalizeOperationalUrl(payload.campaign_link || payload.link || "");
+  const intervalSeconds = normalizePedagogicalWhatsAppInterval(payload.interval_seconds || PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS);
+  const selectedGroupIds = [...new Set((Array.isArray(payload.group_ids) ? payload.group_ids : [])
+    .map((item) => Number(item || 0))
+    .filter(Boolean))];
+  const metadata = {
+    selected_group_ids: selectedGroupIds,
+    image_mode: imageUrl ? "url" : "none",
+    notes: String(payload.notes || "").trim() || "",
+  };
+
+  if (!name) throw new Error("missing_whatsapp_campaign_name");
+  if (!messageText) throw new Error("missing_whatsapp_campaign_text");
+
+  if (campaignId) {
+    await run(
+      `UPDATE pedagogical_whatsapp_campaigns
+          SET name=?, image_url=?, message_text=?, campaign_link=?, interval_seconds=?, metadata_json=?,
+              updated_by=?, updated_at=datetime('now')
+        WHERE id=? AND department_id=?`,
+      [
+        name,
+        imageUrl,
+        messageText,
+        campaignLink,
+        intervalSeconds,
+        safeJsonStringify(metadata, "{}"),
+        actorId,
+        campaignId,
+        scope.department.id,
+      ]
+    );
+    await logPedagogicalWhatsAppCampaignAction({
+      campaignId,
+      action: "campaign_updated",
+      actorUserId: actorId,
+      detail: { groups_total: selectedGroupIds.length },
+    });
+  } else {
+    const created = await run(
+      `INSERT INTO pedagogical_whatsapp_campaigns
+         (department_id, name, image_url, message_text, campaign_link, interval_seconds, status, execution_mode,
+          integration_status, total_groups, total_pending, metadata_json, created_by, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'draft', 'prepared', 'pending_provider', ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        scope.department.id,
+        name,
+        imageUrl,
+        messageText,
+        campaignLink,
+        intervalSeconds,
+        selectedGroupIds.length,
+        selectedGroupIds.length,
+        safeJsonStringify(metadata, "{}"),
+        actorId,
+        actorId,
+      ]
+    );
+    await logPedagogicalWhatsAppCampaignAction({
+      campaignId: created.lastID,
+      action: "campaign_created",
+      actorUserId: actorId,
+      detail: { groups_total: selectedGroupIds.length },
+    });
+    return get(
+      `SELECT id, department_id, name, image_url, message_text, campaign_link, interval_seconds, status, execution_mode,
+              integration_status, scheduled_at, started_at, finished_at, total_groups, total_sent, total_pending,
+              total_error, last_error, metadata_json, created_by, updated_by, created_at, updated_at
+         FROM pedagogical_whatsapp_campaigns
+        WHERE id=?`,
+      [created.lastID]
+    ).then(mapPedagogicalWhatsAppCampaignRow);
+  }
+
+  return get(
+    `SELECT id, department_id, name, image_url, message_text, campaign_link, interval_seconds, status, execution_mode,
+            integration_status, scheduled_at, started_at, finished_at, total_groups, total_sent, total_pending,
+            total_error, last_error, metadata_json, created_by, updated_by, created_at, updated_at
+       FROM pedagogical_whatsapp_campaigns
+      WHERE id=?`,
+    [campaignId]
+  ).then(mapPedagogicalWhatsAppCampaignRow);
+}
+
+async function startPedagogicalWhatsAppCampaign(campaignId, actorUser) {
+  const scope = await resolvePedagogicalScope(actorUser);
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0) || null;
+  const campaign = await get(
+    `SELECT id, department_id, name, image_url, message_text, campaign_link, interval_seconds, status, execution_mode,
+            integration_status, scheduled_at, started_at, finished_at, total_groups, total_sent, total_pending,
+            total_error, last_error, metadata_json, created_by, updated_by, created_at, updated_at
+       FROM pedagogical_whatsapp_campaigns
+      WHERE id=? AND department_id=?`,
+    [Number(campaignId || 0), scope.department.id]
+  ).then(mapPedagogicalWhatsAppCampaignRow);
+  if (!campaign) throw new Error("whatsapp_campaign_not_found");
+
+  const selectedGroupIds = [...new Set((campaign.metadata?.selected_group_ids || [])
+    .map((item) => Number(item || 0))
+    .filter(Boolean))];
+  if (!selectedGroupIds.length) throw new Error("whatsapp_campaign_without_groups");
+
+  const groups = await listPedagogicalWhatsAppGroupsRows(scope.department.id, { limit: 600 });
+  const validGroups = groups.filter((group) => selectedGroupIds.includes(Number(group.id || 0)));
+  if (!validGroups.length) throw new Error("whatsapp_campaign_without_valid_groups");
+
+  await run("DELETE FROM pedagogical_whatsapp_campaign_items WHERE campaign_id=?", [campaign.id]);
+  const integration = getWhatsAppIntegrationStatus();
+  const itemStatus = integration.execution_enabled ? "queued" : "pending_provider";
+
+  for (let index = 0; index < validGroups.length; index += 1) {
+    const group = validGroups[index];
+    const created = await run(
+      `INSERT INTO pedagogical_whatsapp_campaign_items
+         (campaign_id, group_id, queue_order, send_status, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        campaign.id,
+        group.id,
+        index + 1,
+        itemStatus,
+        safeJsonStringify({
+          group_name: group.name,
+          interval_seconds: campaign.interval_seconds || PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS,
+          provider_mode: integration.mode,
+        }, "{}"),
+      ]
+    );
+    await logPedagogicalWhatsAppCampaignAction({
+      campaignId: campaign.id,
+      campaignItemId: created.lastID,
+      groupId: group.id,
+      action: integration.execution_enabled ? "queue_item_created" : "queue_item_pending_provider",
+      actorUserId: actorId,
+      detail: {
+        group_name: group.name,
+        send_status: itemStatus,
+      },
+    });
+  }
+
+  const totalGroups = validGroups.length;
+  const totalPending = itemStatus === "queued" || itemStatus === "pending_provider" ? totalGroups : 0;
+  await run(
+    `UPDATE pedagogical_whatsapp_campaigns
+        SET status=?, execution_mode=?, integration_status=?, total_groups=?, total_sent=0, total_pending=?,
+            total_error=0, last_error=?, started_at=datetime('now'), updated_by=?, updated_at=datetime('now')
+      WHERE id=?`,
+    [
+      integration.execution_enabled ? "running" : "prepared",
+      integration.execution_enabled ? "provider" : "prepared",
+      integration.mode,
+      totalGroups,
+      totalPending,
+      integration.execution_enabled ? null : integration.technical_note,
+      actorId,
+      campaign.id,
+    ]
+  );
+  await logPedagogicalWhatsAppCampaignAction({
+    campaignId: campaign.id,
+    action: integration.execution_enabled ? "campaign_started" : "campaign_prepared",
+    actorUserId: actorId,
+    detail: {
+      groups_total: totalGroups,
+      integration_mode: integration.mode,
+      execution_enabled: integration.execution_enabled,
+    },
+  });
+
+  return get(
+    `SELECT id, department_id, name, image_url, message_text, campaign_link, interval_seconds, status, execution_mode,
+            integration_status, scheduled_at, started_at, finished_at, total_groups, total_sent, total_pending,
+            total_error, last_error, metadata_json, created_by, updated_by, created_at, updated_at
+       FROM pedagogical_whatsapp_campaigns
+      WHERE id=?`,
+    [campaign.id]
+  ).then(mapPedagogicalWhatsAppCampaignRow);
+}
+
+async function buildPedagogicalWhatsAppBootstrap(user) {
+  const scope = await resolvePedagogicalScope(user);
+  await ensurePedagogicalWhatsAppSettings(user?.id || user?.sub || null);
+  const integration = getWhatsAppIntegrationStatus();
+  const [groups, campaigns, settingsRows] = await Promise.all([
+    listPedagogicalWhatsAppGroupsRows(scope.department.id, { limit: 500 }),
+    listPedagogicalWhatsAppCampaignRows(scope.department.id, { limit: 36 }),
+    all(
+      `SELECT id, setting_key, setting_value, metadata_json, updated_by, created_at, updated_at
+         FROM pedagogical_whatsapp_settings
+        ORDER BY setting_key ASC`
+    ),
+  ]);
+
+  const campaignItems = await listPedagogicalWhatsAppCampaignItems(campaigns.map((item) => item.id), { limit: 600 });
+  const campaignLogs = await listPedagogicalWhatsAppCampaignLogs(campaigns.map((item) => item.id), { limit: 120 });
+  const itemsByCampaignId = new Map();
+  campaignItems.forEach((item) => {
+    const key = Number(item.campaign_id || 0);
+    if (!itemsByCampaignId.has(key)) itemsByCampaignId.set(key, []);
+    itemsByCampaignId.get(key).push(item);
+  });
+
+  const campaignsWithItems = campaigns.map((campaign) => ({
+    ...campaign,
+    items: itemsByCampaignId.get(Number(campaign.id || 0)) || [],
+    selected_group_ids: campaign.metadata?.selected_group_ids || [],
+  }));
+  const queueItems = campaignItems.filter((item) => ["queued", "sending", "pending_provider", "error"].includes(item.send_status));
+  const sentTotal = campaignItems.filter((item) => item.send_status === "sent").length;
+  const successRate = campaignItems.length ? Number(((sentTotal / campaignItems.length) * 100).toFixed(1)) : 0;
+  const lastCampaign = campaignsWithItems[0] || null;
+
+  return {
+    enabled: true,
+    department: {
+      id: scope.department.id,
+      slug: scope.department.slug,
+      name: scope.department.name,
+    },
+    integration,
+    settings: (settingsRows || []).map((row) => ({
+      id: row.id,
+      key: row.setting_key,
+      value: row.setting_value,
+      metadata: repairDeepText(safeJsonParse(row.metadata_json || "{}") || {}),
+      updated_by: row.updated_by || null,
+      created_at: row.created_at || "",
+      updated_at: row.updated_at || "",
+    })),
+    summary: {
+      groups_total: groups.length,
+      groups_active: groups.filter((group) => group.status === "active").length,
+      campaigns_total: campaignsWithItems.length,
+      campaigns_completed: campaignsWithItems.filter((campaign) => campaign.status === "completed").length,
+      campaigns_error: campaignsWithItems.filter((campaign) => campaign.status === "error").length,
+      queue_total: queueItems.length,
+      success_rate: successRate,
+      last_campaign_name: lastCampaign?.name || "",
+      last_campaign_at: lastCampaign?.started_at || lastCampaign?.created_at || "",
+    },
+    dashboard: {
+      cards: [
+        { label: "Grupos cadastrados", value: String(groups.length) },
+        { label: "Grupos ativos", value: String(groups.filter((group) => group.status === "active").length) },
+        { label: "Campanhas criadas", value: String(campaignsWithItems.length) },
+        { label: "Fila atual", value: String(queueItems.length) },
+      ],
+    },
+    groups,
+    campaigns: campaignsWithItems,
+    queue: {
+      items: queueItems.slice(0, 120),
+      pending_total: queueItems.filter((item) => ["queued", "pending_provider"].includes(item.send_status)).length,
+      sending_total: queueItems.filter((item) => item.send_status === "sending").length,
+      sent_total: sentTotal,
+      error_total: campaignItems.filter((item) => item.send_status === "error").length,
+    },
+    history: campaignLogs,
+  };
+}
+
+async function getPedagogicalWhatsAppCampaignRowById(campaignId, departmentId) {
+  return get(
+    `SELECT id, department_id, name, image_url, message_text, campaign_link, interval_seconds, status, execution_mode,
+            integration_status, scheduled_at, started_at, finished_at, total_groups, total_sent, total_pending,
+            total_error, last_error, metadata_json, created_by, updated_by, created_at, updated_at
+       FROM pedagogical_whatsapp_campaigns
+      WHERE id=? AND department_id=?`,
+    [Number(campaignId || 0), Number(departmentId || 0)]
+  ).then(mapPedagogicalWhatsAppCampaignRow);
 }
 
 async function listMarketingInfluencersRows(departmentId, options = {}) {
@@ -5687,6 +6769,426 @@ async function buildMarketingInfluencerAnalysis(user, payload = {}) {
   };
 }
 
+function parseIndicatorNumericValue(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return 0;
+  const normalized = raw.replace(/\./g, "").replace(",", ".");
+  const numeric = Number.parseFloat(/^-?\d+(\.\d+)?$/.test(normalized) ? normalized : raw.replace(",", "."));
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function readIndicatorNumericValue(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return { isNumeric: false, value: 0 };
+
+  const compact = raw.replace(/\s+/g, "");
+  const normalized = compact.replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
+  const candidate = Number(normalized);
+  if (Number.isFinite(candidate)) {
+    return { isNumeric: true, value: candidate };
+  }
+
+  const scientific = Number(compact.replace(",", "."));
+  if (Number.isFinite(scientific)) {
+    return { isNumeric: true, value: scientific };
+  }
+
+  return { isNumeric: false, value: 0 };
+}
+
+function normalizeMarketingIndicatorSeed(seed = {}) {
+  const repairedSeed = repairDeepText(seed);
+  const title = repairMojibakeText(String(repairedSeed.title || repairedSeed.key || "").trim());
+  const ownerName = repairMojibakeText(String(repairedSeed.owner_name || "").trim());
+  const columns = (Array.isArray(repairedSeed.columns) ? repairedSeed.columns : [])
+    .map((item) => normalizeIndicatorHeaderValue(item))
+    .filter(Boolean);
+  const seriesKeys = (Array.isArray(repairedSeed.series_keys) ? repairedSeed.series_keys : [])
+    .map((item) => normalizeIndicatorHeaderValue(item))
+    .filter(Boolean);
+
+  return {
+    ...repairedSeed,
+    key: slugifyDepartmentName(repairedSeed.key || title || ownerName),
+    title,
+    owner_name: ownerName,
+    columns,
+    series_keys: seriesKeys.length ? seriesKeys : columns.slice(1),
+    rows: Array.isArray(repairedSeed.rows) ? repairedSeed.rows : [],
+  };
+}
+
+function buildMarketingIndicatorRowValues(columns = [], values = {}) {
+  const out = {};
+  (columns || []).forEach((column) => {
+    out[column] = repairMojibakeText(String(values?.[column] ?? "").trim());
+  });
+  return out;
+}
+
+function buildMarketingIndicatorRowLabel(columns = [], values = {}) {
+  const year = String(values?.Ano || values?.ano || "").trim();
+  const month = String(values?.Mês || values?.Mes || values?.mês || values?.mes || "").trim();
+  if (year && month) return `${month}/${year}`;
+  const first = (columns || []).map((column) => String(values?.[column] ?? "").trim()).find(Boolean);
+  return first || "Linha";
+}
+
+function mapMarketingIndicatorTabRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    title: repairMojibakeText(row.title || ""),
+    slug: row.slug || slugifyDepartmentName(row.title || row.sheet_key || "indicador"),
+    indicator_kind: row.indicator_kind || "generic",
+    owner_name: repairMojibakeText(row.owner_name || ""),
+    owner_photo_url: row.owner_photo_url || "",
+    columns: (safeJsonParse(row.columns_json || "[]") || []).map(normalizeIndicatorHeaderValue).filter(Boolean),
+    series_keys: (safeJsonParse(row.series_keys_json || "[]") || []).map(normalizeIndicatorHeaderValue).filter(Boolean),
+    metadata: repairDeepText(safeJsonParse(row.metadata_json || "{}") || {}),
+    is_active: row.is_active === undefined ? true : coerceDbBoolean(row.is_active),
+  };
+}
+
+function mapMarketingIndicatorRowRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    row_label: repairMojibakeText(row.row_label || ""),
+    values: repairDeepText(safeJsonParse(row.values_json || "{}") || {}),
+  };
+}
+
+async function listMarketingIndicatorTabsRows(departmentId) {
+  const rows = await all(
+    `SELECT id, department_id, sheet_key, title, slug, indicator_kind, owner_name, owner_photo_url,
+            columns_json, series_keys_json, metadata_json, chart_type, sort_order, is_active,
+            created_by, updated_by, created_at, updated_at
+       FROM marketing_indicator_tabs
+      WHERE department_id=? AND is_active<>0
+      ORDER BY sort_order ASC, title ASC, id ASC`,
+    [departmentId]
+  );
+  return rows.map(mapMarketingIndicatorTabRow).filter(Boolean);
+}
+
+async function listMarketingIndicatorRowsByTabIds(tabIds = []) {
+  const ids = (tabIds || []).map((item) => Number(item || 0)).filter(Boolean);
+  if (!ids.length) return [];
+  return all(
+    `SELECT id, tab_id, row_order, row_label, values_json, source_type, created_by, updated_by, created_at, updated_at
+       FROM marketing_indicator_rows
+      WHERE tab_id IN (${ids.map(() => "?").join(", ")})
+      ORDER BY tab_id ASC, row_order ASC, id ASC`,
+    ids
+  ).then((rows) => rows.map(mapMarketingIndicatorRowRow).filter(Boolean));
+}
+
+function buildMarketingIndicatorChart(tab = {}, rows = []) {
+  const columns = Array.isArray(tab.columns) ? tab.columns : [];
+  const seriesKeys = Array.isArray(tab.series_keys) && tab.series_keys.length ? tab.series_keys : columns.slice(1);
+  const labels = rows.map((row) => row.row_label || buildMarketingIndicatorRowLabel(columns, row.values || {}));
+  const series = seriesKeys
+    .map((key) => {
+      const points = rows.map((row) => readIndicatorNumericValue(row.values?.[key]));
+      const hasNumericValue = points.some((item) => item.isNumeric);
+      return {
+        key,
+        label: key,
+        points: points.map((item) => item.value),
+        total: Number(points.reduce((sum, item) => sum + Number(item.value || 0), 0).toFixed(2)),
+        last_value: Number(points.length ? points[points.length - 1].value : 0),
+        has_numeric_value: hasNumericValue,
+      };
+    })
+    .filter((item) => item.has_numeric_value);
+
+  if (!series.length) {
+    const preferredCategoryKey = columns.find((column) => /closer/i.test(String(column || "")))
+      || columns.find((column) => /origem|origin/i.test(String(column || "")))
+      || columns.find((column) => /modalidade|mode/i.test(String(column || "")))
+      || columns.find((column) => !/ano|m[eê]s|mes/i.test(String(column || "")))
+      || columns[0]
+      || "Categoria";
+    const grouped = new Map();
+
+    rows.forEach((row) => {
+      const label = repairMojibakeText(String(row.values?.[preferredCategoryKey] || "").trim()) || "Sem categoria";
+      grouped.set(label, Number(grouped.get(label) || 0) + 1);
+    });
+
+    const groupedLabels = Array.from(grouped.keys());
+    const groupedPoints = groupedLabels.map((label) => Number(grouped.get(label) || 0));
+    return {
+      type: tab.chart_type || "line",
+      labels: groupedLabels,
+      series: groupedLabels.length
+        ? [{
+            key: "registros",
+            label: preferredCategoryKey,
+            points: groupedPoints,
+            total: Number(groupedPoints.reduce((sum, value) => sum + Number(value || 0), 0).toFixed(2)),
+            last_value: Number(groupedPoints.length ? groupedPoints[groupedPoints.length - 1] : 0),
+          }]
+        : [],
+    };
+  }
+
+  return {
+    type: tab.chart_type || "line",
+    labels,
+    series,
+  };
+}
+
+function buildMarketingIndicatorTabModel(tab = {}, rows = []) {
+  const safeRows = (rows || []).map((row, index) => {
+    const values = buildMarketingIndicatorRowValues(tab.columns || [], row.values || {});
+    return {
+      id: row.id,
+      row_order: Number(row.row_order || index + 1),
+      row_label: row.row_label || buildMarketingIndicatorRowLabel(tab.columns || [], values),
+      values,
+      source_type: row.source_type || "manual",
+      created_at: row.created_at || "",
+      updated_at: row.updated_at || "",
+    };
+  });
+  const normalizedOwner = normalizeBusinessText(tab.owner_name || tab.title || "");
+  const isPersonPanel = Boolean(tab.owner_name) || MARKETING_INDICATOR_ALLOWED_PERSON_NAMES.has(normalizedOwner);
+  return {
+    ...tab,
+    rows: safeRows,
+    row_count: safeRows.length,
+    chart: buildMarketingIndicatorChart(tab, safeRows),
+    is_person_panel: isPersonPanel,
+    person: isPersonPanel
+      ? {
+          name: tab.owner_name || tab.title,
+          photo_url: tab.owner_photo_url || "",
+          initials: String(tab.owner_name || tab.title || "MK")
+            .split(/\s+/g)
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((item) => item.charAt(0).toUpperCase())
+            .join(""),
+        }
+      : null,
+  };
+}
+
+function buildMarketingIndicatorSummary(tabModels = []) {
+  const totalRows = tabModels.reduce((sum, tab) => sum + Number(tab.row_count || 0), 0);
+  const totalSeries = tabModels.reduce((sum, tab) => sum + Number(tab.chart?.series?.length || 0), 0);
+  const personPanels = tabModels.filter((tab) => tab.is_person_panel).length;
+  return {
+    tabs_total: tabModels.length,
+    rows_total: totalRows,
+    series_total: totalSeries,
+    person_panels_total: personPanels,
+  };
+}
+
+function buildMarketingIndicatorDashboardModel(tabModels = []) {
+  const summary = buildMarketingIndicatorSummary(tabModels);
+  const compactTabs = tabModels.map((tab) => ({
+    id: tab.id,
+    title: tab.title,
+    slug: tab.slug,
+    indicator_kind: tab.indicator_kind,
+    row_count: tab.row_count,
+    is_person_panel: tab.is_person_panel,
+    person: tab.person,
+    chart: tab.chart,
+    latest_label: tab.chart?.labels?.length ? tab.chart.labels[tab.chart.labels.length - 1] : "",
+  }));
+  return {
+    enabled: compactTabs.length > 0,
+    workbook_source: MARKETING_INDICATOR_WORKBOOK_SOURCE,
+    summary,
+    tabs: compactTabs,
+    people: compactTabs.filter((tab) => tab.is_person_panel),
+  };
+}
+
+async function buildMarketingIndicatorBootstrap(user, query = {}) {
+  const scope = await resolveMarketingScope(user);
+  const tabs = await listMarketingIndicatorTabsRows(scope.department.id);
+  const rows = await listMarketingIndicatorRowsByTabIds(tabs.map((tab) => tab.id));
+  const rowsByTabId = new Map();
+  for (const row of rows) {
+    const tabId = Number(row.tab_id || 0);
+    if (!rowsByTabId.has(tabId)) rowsByTabId.set(tabId, []);
+    rowsByTabId.get(tabId).push(row);
+  }
+
+  const tabModels = tabs.map((tab) => buildMarketingIndicatorTabModel(tab, rowsByTabId.get(Number(tab.id || 0)) || []));
+  const selectedTabId = Number(query.tab_id || query.tabId || 0);
+  const selectedTabSlug = String(query.tab_slug || query.tabSlug || "").trim();
+  const selectedTab = tabModels.find((tab) => Number(tab.id) === selectedTabId)
+    || tabModels.find((tab) => tab.slug === selectedTabSlug)
+    || tabModels[0]
+    || null;
+
+  return {
+    enabled: true,
+    department: scope.department,
+    workbook_source: MARKETING_INDICATOR_WORKBOOK_SOURCE,
+    summary: buildMarketingIndicatorSummary(tabModels),
+    tabs: tabModels,
+    selected_tab_id: selectedTab?.id || null,
+    selected_tab_slug: selectedTab?.slug || "",
+    dashboard: buildMarketingIndicatorDashboardModel(tabModels),
+  };
+}
+
+async function buildMarketingIndicatorDashboardSnapshot(user) {
+  try {
+    const bootstrap = await buildMarketingIndicatorBootstrap(user, {});
+    return bootstrap.dashboard || buildMarketingIndicatorDashboardModel([]);
+  } catch (err) {
+    if (err?.message === "marketing_access_denied" || err?.message === "marketing_department_not_found") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function saveMarketingIndicatorRow(tabId, payload = {}, actorUser) {
+  const scope = await resolveMarketingScope(actorUser);
+  const actorId = Number(actorUser?.id || actorUser?.sub || 0) || null;
+  const tab = await get(
+    `SELECT id, department_id, sheet_key, title, slug, indicator_kind, owner_name, owner_photo_url,
+            columns_json, series_keys_json, metadata_json, chart_type, sort_order, is_active,
+            created_by, updated_by, created_at, updated_at
+       FROM marketing_indicator_tabs
+      WHERE id=? AND department_id=?`,
+    [Number(tabId || 0), Number(scope.department.id || 0)]
+  ).then(mapMarketingIndicatorTabRow);
+
+  if (!tab || tab.is_active === false) throw new Error("marketing_indicator_tab_not_found");
+
+  const values = buildMarketingIndicatorRowValues(tab.columns || [], payload.values || {});
+  if (!(tab.columns || []).some((column) => String(values?.[column] || "").trim())) {
+    throw new Error("marketing_indicator_row_empty");
+  }
+
+  const rowLabel = repairMojibakeText(String(payload.row_label || buildMarketingIndicatorRowLabel(tab.columns || [], values)).trim()) || "Linha";
+  const currentMax = await get(`SELECT COALESCE(MAX(row_order), 0) AS total FROM marketing_indicator_rows WHERE tab_id=?`, [tab.id]);
+  const created = await run(
+    `INSERT INTO marketing_indicator_rows
+       (tab_id, row_order, row_label, values_json, source_type, created_by, updated_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      tab.id,
+      Number(currentMax?.total || 0) + 1,
+      rowLabel,
+      safeJsonStringify(values, "{}"),
+      String(payload.source_type || "manual").trim() || "manual",
+      actorId,
+      actorId,
+    ]
+  );
+
+  await logEntityChange({
+    entityType: "marketing_indicator_row",
+    entityId: created.lastID,
+    action: "created",
+    actorUserId: actorId,
+    origin: "manual_entry",
+    detail: {
+      tab_id: tab.id,
+      tab_title: tab.title,
+      row_label: rowLabel,
+    },
+  });
+
+  const row = await get(
+    `SELECT id, tab_id, row_order, row_label, values_json, source_type, created_by, updated_by, created_at, updated_at
+       FROM marketing_indicator_rows
+      WHERE id=?`,
+    [created.lastID]
+  ).then(mapMarketingIndicatorRowRow);
+
+  return buildMarketingIndicatorTabModel(tab, [row]).rows[0] || row;
+}
+
+async function ensureMarketingIndicatorSeeds() {
+  const marketingDepartment = await getDepartmentBySlug("marketing");
+  if (!marketingDepartment) return;
+
+  for (const seedEntry of MARKETING_INDICATOR_SEEDS || []) {
+    const seed = normalizeMarketingIndicatorSeed(seedEntry);
+    if (!seed.title) continue;
+
+    let tab = await get(
+      `SELECT id, department_id, sheet_key, title, slug, indicator_kind, owner_name, owner_photo_url,
+              columns_json, series_keys_json, metadata_json, chart_type, sort_order, is_active,
+              created_by, updated_by, created_at, updated_at
+         FROM marketing_indicator_tabs
+        WHERE department_id=? AND sheet_key=?`,
+      [marketingDepartment.id, seed.key]
+    ).then(mapMarketingIndicatorTabRow);
+
+    if (!tab) {
+      const created = await run(
+        `INSERT INTO marketing_indicator_tabs
+           (department_id, sheet_key, title, slug, indicator_kind, owner_name, owner_photo_url,
+            columns_json, series_keys_json, metadata_json, chart_type, sort_order, is_active, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'line', ?, 1, datetime('now'))`,
+        [
+          marketingDepartment.id,
+          seed.key,
+          seed.title,
+          slugifyDepartmentName(seed.title || seed.key),
+          seed.kind || "generic",
+          seed.owner_name || null,
+          null,
+          safeJsonStringify(seed.columns || [], "[]"),
+          safeJsonStringify(seed.series_keys || [], "[]"),
+          safeJsonStringify({
+            workbook_source: MARKETING_INDICATOR_WORKBOOK_SOURCE?.source_file || "indicador geral.xlsx",
+            generated_at: MARKETING_INDICATOR_WORKBOOK_SOURCE?.generated_at || "",
+            source_summary: MARKETING_INDICATOR_WORKBOOK_SOURCE?.source_summary || "",
+            seed_kind: seed.kind || "generic",
+          }, "{}"),
+          Number(seed.sort_order || 0),
+        ]
+      );
+      tab = await get(
+        `SELECT id, department_id, sheet_key, title, slug, indicator_kind, owner_name, owner_photo_url,
+                columns_json, series_keys_json, metadata_json, chart_type, sort_order, is_active,
+                created_by, updated_by, created_at, updated_at
+           FROM marketing_indicator_tabs
+          WHERE id=?`,
+        [created.lastID]
+      ).then(mapMarketingIndicatorTabRow);
+    }
+
+    const rowCount = await get(`SELECT COUNT(*) AS total FROM marketing_indicator_rows WHERE tab_id=?`, [tab.id]);
+    if (Number(rowCount?.total || 0) > 0) continue;
+
+    for (let index = 0; index < seed.rows.length; index += 1) {
+      const rawRow = Array.isArray(seed.rows[index]) ? seed.rows[index] : [];
+      const values = {};
+      (seed.columns || []).forEach((column, columnIndex) => {
+        values[column] = repairMojibakeText(String(rawRow[columnIndex] ?? "").trim());
+      });
+      await run(
+        `INSERT INTO marketing_indicator_rows
+           (tab_id, row_order, row_label, values_json, source_type, updated_at)
+         VALUES (?, ?, ?, ?, 'seed', datetime('now'))`,
+        [
+          tab.id,
+          index + 1,
+          buildMarketingIndicatorRowLabel(seed.columns || [], values),
+          safeJsonStringify(values, "{}"),
+        ]
+      );
+    }
+  }
+}
+
 async function requireIntranetAccess(req, res, next) {
   const user = await getUserById(req.user.sub);
   if (!user) return res.status(401).json({ error: 'not_authenticated' });
@@ -5736,12 +7238,299 @@ function salesImportUploadMiddleware(req, res, next) {
   });
 }
 
+function maskConnectionTarget(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return "";
+  try {
+    const parsed = new URL(safe);
+    return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}${parsed.pathname || ""}`;
+  } catch {
+    return safe;
+  }
+}
+
+async function buildAdminCockpitPayload() {
+  const [knowledgeCounts, recentProcessingFailureRow, recentTrainingFailureRow, whatsappGroupsRow, whatsappCampaignsRow, whatsappQueueRow] = await Promise.all([
+    get(`SELECT COUNT(*) AS total,
+                SUM(CASE WHEN availability_status='available' THEN 1 ELSE 0 END) AS available_total,
+                SUM(CASE WHEN availability_status='failed' THEN 1 ELSE 0 END) AS failed_total
+           FROM knowledge_sources`),
+    get(`SELECT COUNT(*) AS total FROM knowledge_processing_logs WHERE stage_status IN ('failed', 'error') AND datetime(created_at) >= datetime('now', '-7 day')`),
+    get(`SELECT COUNT(*) AS total FROM ai_training_events WHERE event_status IN ('failed', 'error', 'warning') AND datetime(created_at) >= datetime('now', '-7 day')`),
+    get(`SELECT COUNT(*) AS total,
+                SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active_total
+           FROM pedagogical_whatsapp_groups`),
+    get(`SELECT COUNT(*) AS total,
+                SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_total,
+                SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error_total
+           FROM pedagogical_whatsapp_campaigns`),
+    get(`SELECT COUNT(*) AS total,
+                SUM(CASE WHEN send_status IN ('queued', 'pending_provider') THEN 1 ELSE 0 END) AS pending_total,
+                SUM(CASE WHEN send_status='sending' THEN 1 ELSE 0 END) AS sending_total,
+                SUM(CASE WHEN send_status='sent' THEN 1 ELSE 0 END) AS sent_total,
+                SUM(CASE WHEN send_status='error' THEN 1 ELSE 0 END) AS error_total
+           FROM pedagogical_whatsapp_campaign_items`),
+  ]);
+
+  const localStorageActive = Boolean(uploadsDir || kbDir);
+  const openAiConfigured = Boolean(String(process.env.OPENAI_API_KEY || "").trim());
+  const vectorConfigured = Boolean(OPENAI_VECTOR_STORE_ID);
+  const promptConfigured = Boolean(OPENAI_PROMPT_ID);
+  const whatsappIntegration = getWhatsAppIntegrationStatus();
+  const chatPerformance = getChatPerformanceSnapshot();
+  const chatAlerts = buildChatPerformanceAlerts(chatPerformance);
+  const recentErrorTotal = Number(recentProcessingFailureRow?.total || 0) + Number(recentTrainingFailureRow?.total || 0);
+
+  return {
+    generated_at: new Date().toISOString(),
+    storage: {
+      current: vectorConfigured ? (IS_PRODUCTION ? "Render + OpenAI" : "Servidor local + OpenAI") : (IS_PRODUCTION ? "Render" : "Servidor local"),
+      upload_path: uploadsDir,
+      knowledge_path: kbDir,
+      type: vectorConfigured ? "Híbrido" : "Local",
+      status: localStorageActive ? "Ativo" : "Inativo",
+      technical_note: vectorConfigured
+        ? "Os arquivos entram no filesystem do servidor e podem ser espelhados para OpenAI Files / Vector Store."
+        : "Os arquivos estão sendo mantidos no filesystem local do servidor.",
+      alert: localStorageActive
+        ? "Os uploads usam armazenamento do servidor. Isso merece revisão futura para escalabilidade, persistência e custo operacional."
+        : "",
+    },
+    database: {
+      client: DB_CLIENT,
+      status: "Ativo",
+      environment: NODE_ENV,
+      target: DB_CLIENT === "sqlite" ? DATA_DIR : maskConnectionTarget(process.env.DATABASE_URL || ""),
+      availability_note: DB_CLIENT === "sqlite"
+        ? "Banco local em arquivo."
+        : "Banco relacional externo configurado por DATABASE_URL.",
+    },
+    openai: {
+      status: openAiConfigured ? "Ativo" : "Inativo",
+      api_configured: openAiConfigured,
+      vector_store_configured: vectorConfigured,
+      vector_store_id: OPENAI_VECTOR_STORE_ID || "",
+      prompt_configured: promptConfigured,
+      prompt_id: OPENAI_PROMPT_ID || "",
+      knowledge_files_total: Number(knowledgeCounts?.total || 0),
+      knowledge_available_total: Number(knowledgeCounts?.available_total || 0),
+    },
+    services: {
+      integrations: [
+        { name: "OpenAI API", status: openAiConfigured ? "Ativo" : "Inativo" },
+        { name: "Vector Store", status: vectorConfigured ? "Ativo" : "Inativo" },
+        { name: "Prompt reutilizável", status: promptConfigured ? "Ativo" : "Inativo" },
+        {
+          name: "WhatsApp provider",
+          status: whatsappIntegration.execution_enabled
+            ? "Ativo"
+            : (whatsappIntegration.credentials_ready ? "Preparado" : "Pendente"),
+        },
+      ],
+    },
+    application: {
+      status: "Ativo",
+      environment: NODE_ENV,
+      base_url: BASE_URL,
+      uptime_seconds: Math.round(process.uptime()),
+      healthcheck: {
+        ok: true,
+        db_client: DB_CLIENT,
+        vector_store_configured: vectorConfigured,
+        openai_prompt_configured: promptConfigured,
+      },
+    },
+    queues: {
+      knowledge_background: {
+        running: Boolean(knowledgeBackgroundState.running),
+        queued: Number(knowledgeBackgroundState.queue.length || 0),
+        processed: Number(knowledgeBackgroundState.queue_processed || 0),
+        failed: Number(knowledgeBackgroundState.queue_failed || 0),
+        current_source_id: knowledgeBackgroundState.current_source_id || null,
+        last_error: knowledgeBackgroundState.last_error || "",
+      },
+      whatsapp_campaigns: {
+        running: Boolean(whatsappIntegration.execution_enabled),
+        pending: Number(whatsappQueueRow?.pending_total || 0),
+        sending: Number(whatsappQueueRow?.sending_total || 0),
+        sent: Number(whatsappQueueRow?.sent_total || 0),
+        failed: Number(whatsappQueueRow?.error_total || 0),
+        mode: whatsappIntegration.mode,
+      },
+    },
+    alerts: {
+      recent_errors_total: recentErrorTotal,
+      processing_failures_7d: Number(recentProcessingFailureRow?.total || 0),
+      training_failures_7d: Number(recentTrainingFailureRow?.total || 0),
+      chat: chatAlerts,
+    },
+    operational_summary: {
+      files_total: Number(knowledgeCounts?.total || 0),
+      files_available: Number(knowledgeCounts?.available_total || 0),
+      files_failed: Number(knowledgeCounts?.failed_total || 0),
+      chat_status: chatPerformance.severity,
+    },
+    whatsapp: {
+      integration: whatsappIntegration,
+      summary: {
+        groups_total: Number(whatsappGroupsRow?.total || 0),
+        groups_active: Number(whatsappGroupsRow?.active_total || 0),
+        campaigns_total: Number(whatsappCampaignsRow?.total || 0),
+        campaigns_completed: Number(whatsappCampaignsRow?.completed_total || 0),
+        campaigns_error: Number(whatsappCampaignsRow?.error_total || 0),
+        queue_total: Number(whatsappQueueRow?.total || 0),
+      },
+    },
+    chat_performance: chatPerformance,
+  };
+}
+
+function writeEventStreamPacket(res, eventName, payload = {}) {
+  if (!res || res.writableEnded) return;
+  const safeEvent = String(eventName || "message").trim() || "message";
+  const safePayload = repairDeepText(payload || {});
+  res.write(`event: ${safeEvent}\n`);
+  res.write(`data: ${safeJsonStringify(safePayload, "{}")}\n\n`);
+}
+
+function makeHttpError(message, statusCode = 400) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
+}
+
+async function prepareConversationMessageState({ conversationId, userId, text, requestLocale = DEFAULT_LOCALE }) {
+  const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [conversationId, userId]);
+  if (!conv) throw makeHttpError("not_found", 404);
+
+  const currentUser = await getUserById(userId);
+  if (!currentUser) throw makeHttpError("not_authenticated", 401);
+
+  const safeLocale = normalizeLocaleCode(requestLocale || currentUser?.preferred_locale || DEFAULT_LOCALE);
+  const requestLanguage = normalizeLanguageCode(localeToLanguage(safeLocale));
+  await maybeInsertDailyGreeting(conversationId, currentUser, safeLocale);
+
+  if (isDefaultConversationTitle(conv.title)) {
+    await run("UPDATE conversations SET title=? WHERE id=?", [titleFromMessage(text), conversationId]);
+  }
+
+  await run(
+    "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)",
+    [conversationId, text]
+  );
+
+  const topicSnapshot = await getConversationTopicSnapshot(conversationId, text, CHAT_HISTORY_CONTEXT_LIMIT);
+  const userLanguage = detectConversationLanguage(text, topicSnapshot.history, requestLanguage);
+  const responseProfile = analyzeConversationIntent(text, userLanguage, {
+    departments: currentUser?.departments || [],
+  });
+  const moderation = evaluateEducationalModeration(text, {
+    locale: safeLocale,
+    userLanguage,
+  });
+
+  return {
+    conversationId,
+    conv,
+    currentUser,
+    requestLocale: safeLocale,
+    requestLanguage,
+    topicSnapshot,
+    userLanguage,
+    responseProfile,
+    moderation,
+  };
+}
+
+async function persistAssistantTextReply({
+  conversationId,
+  userId,
+  userText,
+  assistantText,
+  responseProfile,
+  responseLanguage,
+  metaObject,
+  sources = [],
+  queryEmbedding = null,
+  knowledgeSignature = "",
+  relevantMemoryEntries = [],
+  knowledgeMemoryEntries = [],
+  resetMemory = false,
+  cacheSemantic = false,
+  recordUsage = false,
+  allowWeakResponseLog = true,
+}) {
+  const persistStartedAt = Date.now();
+  await run(
+    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
+    [conversationId, assistantText, safeJsonStringify(metaObject, "{}")]
+  );
+  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [conversationId]);
+  await persistReplyMemories({
+    conversationId,
+    userId,
+    userText,
+    assistantText,
+    language: responseLanguage,
+    resetMemory: Boolean(resetMemory),
+  });
+
+  if (cacheSemantic && queryEmbedding && knowledgeSignature) {
+    await saveSemanticCache(
+      userId,
+      userText,
+      responseLanguage,
+      assistantText,
+      responseLanguage,
+      sources || [],
+      queryEmbedding,
+      knowledgeSignature
+    );
+  }
+  if (recordUsage && Array.isArray(sources) && sources.length) {
+    await recordKnowledgeUsageEvents(userId, conversationId, sources);
+  }
+  if (Array.isArray(relevantMemoryEntries) && relevantMemoryEntries.length) {
+    await logAiTrainingEvent({
+      userId,
+      conversationId,
+      eventType: "memory_hit",
+      eventStatus: "success",
+      title: "Memória contextual aplicada",
+      detailText: `A resposta considerou ${relevantMemoryEntries.length} memória(s) relacionada(s) ao usuário.`,
+      meta: {
+        memory_entry_ids: relevantMemoryEntries.map((entry) => entry.id),
+      },
+    });
+  }
+  if (allowWeakResponseLog && responseLooksWeak(assistantText)) {
+    await logAiTrainingEvent({
+      userId,
+      conversationId,
+      eventType: "weak_response",
+      eventStatus: "warning",
+      title: String(userText || "").slice(0, 120),
+      detailText: assistantText,
+      meta: {
+        knowledge_sources: Array.isArray(sources) ? sources.length : 0,
+        memory_hits: Array.isArray(relevantMemoryEntries) ? relevantMemoryEntries.length : 0,
+        document_memory_hits: Array.isArray(knowledgeMemoryEntries) ? knowledgeMemoryEntries.length : 0,
+      },
+    });
+  }
+
+  return {
+    persistence_ms: Date.now() - persistStartedAt,
+  };
+}
+
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
     openai_prompt_configured: Boolean(OPENAI_PROMPT_ID),
     db_client: DB_CLIENT,
+    uptime_seconds: Math.round(process.uptime()),
   });
 });
 
@@ -5943,72 +7732,109 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   const id = Number(req.params.id);
   const text = String(req.body?.message || "").trim();
   if (!text) return res.status(400).json({ error: "empty_message" });
-
-  const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
-  if (!conv) return res.status(404).json({ error: "not_found" });
-
-  const currentUser = await getUserById(req.user.sub);
-  const requestLocale = getRequestLocale(req, currentUser?.preferred_locale || DEFAULT_LOCALE);
-  const requestLanguage = normalizeLanguageCode(localeToLanguage(requestLocale));
-  await maybeInsertDailyGreeting(id, currentUser || req.user, requestLocale);
-  if (isDefaultConversationTitle(conv.title)) {
-    await run("UPDATE conversations SET title=? WHERE id=?", [titleFromMessage(text), id]);
-  }
-
-  await run(
-    "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)",
-    [id, text]
-  );
-
-  const topicSnapshot = await getConversationTopicSnapshot(id, text, 12);
-  const userLanguage = detectConversationLanguage(text, topicSnapshot.history, requestLanguage);
-  const responseProfile = analyzeConversationIntent(text, userLanguage, {
-    departments: currentUser?.departments || [],
-  });
-  const moderation = evaluateEducationalModeration(text, {
-    locale: requestLocale,
-    userLanguage,
-  });
-  if (moderation.blocked) {
-    const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
-      response_language: userLanguage,
-      response_locale: requestLocale,
-      moderated: true,
-      moderation_category: moderation.category,
+  const perfSample = beginChatPerformanceSample(text.length);
+  try {
+    const prepared = await prepareConversationMessageState({
+      conversationId: id,
+      userId: req.user.sub,
+      text,
+      requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
     });
-    await run(
-      "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
-      [id, moderation.message, JSON.stringify(moderationMetaObject)]
-    );
-    await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-    return res.json({ reply: moderation.message, meta: moderationMetaObject });
-  }
-  const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift
-    ? []
-    : await getRelevantMemoryEntries(req.user.sub, id, text, 4);
-  const knowledgeSignature = await getKnowledgeSignatureValue();
-  const queryEmbedding = await getEmbeddingForText(text);
-  const recentImageReferences = await getRecentImageReferences(id, 4);
-  const artifact = await generateArtifact({
-    apiKey: process.env.OPENAI_API_KEY || "",
-    prompt: text,
-    outDir: uploadsDir,
-    referenceImages: recentImageReferences,
-  }).catch((err) => {
-    console.log("Erro na geracao de artefato:", err?.message || err);
-    return null;
-  });
+    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation } = prepared;
 
-  if (artifact) {
-    if (!artifact.fullPath) {
-      const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
+    if (moderation.blocked) {
+      const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
         response_language: userLanguage,
+        response_locale: requestLocale,
+        moderated: true,
+        moderation_category: moderation.category,
       });
-      await run(
-        "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
-        [id, artifact.reply, JSON.stringify(artifactMetaObject)]
-      );
-      await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: moderation.message,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: moderationMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: 0,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: moderation.message.length,
+        response_bytes: Buffer.byteLength(String(moderation.message || ""), "utf8"),
+        status: "moderated",
+      });
+      return res.json({ reply: moderation.message, meta: moderationMetaObject });
+    }
+
+    const contextStartedAt = Date.now();
+    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift
+      ? []
+      : await getRelevantMemoryEntries(req.user.sub, id, text, 4);
+    const knowledgeSignature = await getKnowledgeSignatureValue();
+    const queryEmbedding = await getEmbeddingForText(text);
+    const supportAssets = await getConversationSupportAssets(id);
+
+    const artifact = await generateArtifact({
+      apiKey: process.env.OPENAI_API_KEY || "",
+      prompt: text,
+      outDir: uploadsDir,
+      referenceImages: supportAssets.imageReferences || [],
+    }).catch((err) => {
+      console.log("Erro na geracao de artefato:", err?.message || err);
+      return null;
+    });
+
+    if (artifact) {
+      if (!artifact.fullPath) {
+        const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
+          response_language: userLanguage,
+        });
+        const persistMetrics = await persistAssistantTextReply({
+          conversationId: id,
+          userId: req.user.sub,
+          userText: text,
+          assistantText: artifact.reply,
+          responseProfile,
+          responseLanguage: userLanguage,
+          metaObject: artifactMetaObject,
+          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+          allowWeakResponseLog: false,
+        });
+        const contextAssemblyMs = Date.now() - contextStartedAt;
+        finalizeChatPerformanceSample(perfSample, {
+          total_response_ms: Date.now() - perfSample.started_at,
+          api_latency_ms: 0,
+          internal_processing_ms: Date.now() - perfSample.started_at,
+          context_assembly_ms: contextAssemblyMs,
+          persistence_ms: persistMetrics.persistence_ms,
+          prompt_chars: text.length,
+          response_chars: artifact.reply.length,
+          response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
+          status: "artifact_inline",
+        });
+        return res.json({ reply: artifact.reply, meta: artifactMetaObject });
+      }
+
+      const persistStartedAt = Date.now();
+      const stat = fs.statSync(artifact.fullPath);
+      const saved = await createFileMessage({
+        conversationId: id,
+        uploadedBy: req.user.sub,
+        originalName: artifact.filename,
+        storedName: path.basename(artifact.fullPath),
+        mimeType: artifact.mimeType,
+        sizeBytes: stat.size,
+        role: "assistant",
+        content: artifact.reply,
+      });
       await persistReplyMemories({
         conversationId: id,
         userId: req.user.sub,
@@ -6017,185 +7843,498 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         language: userLanguage,
         resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
       });
-      return res.json({ reply: artifact.reply, meta: artifactMetaObject });
-    }
-
-    const stat = fs.statSync(artifact.fullPath);
-    const saved = await createFileMessage({
-      conversationId: id,
-      uploadedBy: req.user.sub,
-      originalName: artifact.filename,
-      storedName: path.basename(artifact.fullPath),
-      mimeType: artifact.mimeType,
-      sizeBytes: stat.size,
-      role: "assistant",
-      content: artifact.reply,
-    });
-
-    await persistReplyMemories({
-      conversationId: id,
-      userId: req.user.sub,
-      userText: text,
-      assistantText: artifact.reply,
-      language: userLanguage,
-      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-    });
-    return res.json({ reply: artifact.reply, meta: { ...saved.meta, response_language: userLanguage } });
-  }
-
-  const cachedReply = !queryLooksExternalOrCurrent(text)
-    ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
-    : null;
-
-  if (cachedReply?.text) {
-    const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
-      response_language: cachedReply.responseLanguage || userLanguage,
-      sources: cachedReply.sources || [],
-      show_sources: shouldShowSourcesForReply(text),
-    });
-    await run(
-      "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
-      [id, cachedReply.text, JSON.stringify(cachedMetaObject)]
-    );
-    await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-    await persistReplyMemories({
-      conversationId: id,
-      userId: req.user.sub,
-      userText: text,
-      assistantText: cachedReply.text,
-      language: userLanguage,
-      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-    });
-    if (relevantMemoryEntries.length) {
-      await logAiTrainingEvent({
-        userId: req.user.sub,
-        conversationId: id,
-        eventType: "memory_hit",
-        eventStatus: "success",
-        title: "Memoria reutilizada em resposta em cache",
-        detailText: `A pergunta reutilizou ${relevantMemoryEntries.length} memoria(s) relevante(s).`,
+      const contextAssemblyMs = Date.now() - contextStartedAt;
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: contextAssemblyMs,
+        persistence_ms: Date.now() - persistStartedAt,
+        prompt_chars: text.length,
+        response_chars: artifact.reply.length,
+        response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
+        status: "artifact_file",
       });
+      return res.json({ reply: artifact.reply, meta: { ...saved.meta, response_language: userLanguage } });
     }
-    return res.json({ reply: cachedReply.text, meta: cachedMetaObject });
-  }
 
-  const fileContext = await getConversationFilesContext(id);
-  const knowledgeBundle = await buildKnowledgeBundle(text, {
-    limit: 4,
-    userLanguage,
-    departments: currentUser?.departments || [],
-  });
-  const knowledgeMemoryEntries = await getRelevantKnowledgeDocumentMemories(text, {
-    limit: 4,
-    queryEmbedding,
-    departments: currentUser?.departments || [],
-  });
-  const knowledgeMemoryBundle = buildKnowledgeMemoryBundle(knowledgeMemoryEntries, userLanguage);
-  const shouldUseWebComplement = shouldFetchWebContext(text, {
-    text: [knowledgeBundle.text, knowledgeMemoryBundle.text].filter(Boolean).join("\n\n"),
-  });
-  const mergedKnowledgeSources = [];
-  (knowledgeBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
-  (knowledgeMemoryBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+    const cachedReply = !queryLooksExternalOrCurrent(text)
+      ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
+      : null;
 
-  let webContext = "";
-  if (shouldUseWebComplement) {
-    try {
-      webContext = await searchWeb(text);
-    } catch (err) {
-      console.log("Erro busca web:", err?.message || err);
+    if (cachedReply?.text) {
+      const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: cachedReply.responseLanguage || userLanguage,
+        sources: cachedReply.sources || [],
+        show_sources: shouldShowSourcesForReply(text),
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: cachedReply.text,
+        responseProfile,
+        responseLanguage: cachedReply.responseLanguage || userLanguage,
+        metaObject: cachedMetaObject,
+        sources: cachedReply.sources || [],
+        relevantMemoryEntries,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        recordUsage: Boolean((cachedReply.sources || []).length),
+        allowWeakResponseLog: false,
+      });
+      const contextAssemblyMs = Date.now() - contextStartedAt;
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: contextAssemblyMs,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: cachedReply.text.length,
+        response_bytes: Buffer.byteLength(String(cachedReply.text || ""), "utf8"),
+        status: "cache_hit",
+      });
+      return res.json({ reply: cachedReply.text, meta: cachedMetaObject });
     }
-  }
 
-  const contextText = `
+    const knowledgeBundle = await buildKnowledgeBundle(text, {
+      limit: 4,
+      userLanguage,
+      departments: currentUser?.departments || [],
+    });
+    const knowledgeMemoryEntries = await getRelevantKnowledgeDocumentMemories(text, {
+      limit: 4,
+      queryEmbedding,
+      departments: currentUser?.departments || [],
+    });
+    const knowledgeMemoryBundle = buildKnowledgeMemoryBundle(knowledgeMemoryEntries, userLanguage);
+    const shouldUseWebComplement = shouldFetchWebContext(text, {
+      text: [knowledgeBundle.text, knowledgeMemoryBundle.text].filter(Boolean).join("\n\n"),
+    });
+    const mergedKnowledgeSources = [];
+    (knowledgeBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+    (knowledgeMemoryBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+
+    let webContext = "";
+    if (shouldUseWebComplement) {
+      try {
+        webContext = await searchWeb(text);
+      } catch (err) {
+        console.log("Erro busca web:", err?.message || err);
+      }
+    }
+
+    const contextText = `
 Data atual no Brasil:
 ${nowBrazil()}
 
 Prioridade de fontes:
 1. Base interna da empresa.
 2. Arquivos e anexos da conversa.
-3. Internet apenas como complemento quando necessario.
+3. Internet apenas como complemento quando necessário.
 
-Idioma detectado do usuario:
+Idioma detectado do usuário:
 ${getLanguageLabel(userLanguage)}
 
-Memoria interna da empresa:
-${knowledgeBundle.text || "Sem resultados relevantes da base interna."}
+Memória interna da empresa:
+${trimContextText(knowledgeBundle.text || "Sem resultados relevantes da base interna.")}
 
-Memoria semantica derivada dos documentos:
-${knowledgeMemoryBundle.text || "Sem memoria documental relevante para esta pergunta."}
+Memória semântica derivada dos documentos:
+${trimContextText(knowledgeMemoryBundle.text || "Sem memória documental relevante para esta pergunta.")}
 
 Documentos e imagens da conversa:
-${fileContext || "Nenhum anexo recente."}
+${trimContextText(supportAssets.fileContext || "Nenhum anexo recente.")}
 
 Contexto externo complementar:
 ${shouldUseWebComplement
-  ? (webContext || "Nenhum resultado externo complementar encontrado.")
-  : "Nao foi necessario incluir contexto externo fixo nesta pergunta. Use busca web apenas se faltar contexto interno ou se o usuario pedir atualizacao externa."}
+  ? trimContextText(webContext || "Nenhum resultado externo complementar encontrado.")
+  : "Não foi necessário incluir contexto externo fixo nesta pergunta. Use busca web apenas se faltar contexto interno ou se o usuário pedir atualização externa."}
 `.trim();
-  const assistant = await openaiReply({
-    conversationId: id,
-    userId: req.user.sub,
-    userText: text,
-    contextText,
-    baseSources: mergedKnowledgeSources,
-    topicSnapshot,
-    responseProfile,
-  });
+    const contextAssemblyMs = Date.now() - contextStartedAt;
 
-  const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
-    response_language: userLanguage,
-    sources: assistant.sources || [],
-    show_sources: shouldShowSourcesForReply(text),
-  });
-
-  await run(
-    "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
-    [id, assistant.text, JSON.stringify(assistantMetaObject)]
-  );
-  await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [id]);
-  await persistReplyMemories({
-    conversationId: id,
-    userId: req.user.sub,
-    userText: text,
-    assistantText: assistant.text,
-    language: userLanguage,
-    resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-  });
-  await saveSemanticCache(req.user.sub, text, userLanguage, assistant.text, userLanguage, assistant.sources || [], queryEmbedding, knowledgeSignature);
-  await recordKnowledgeUsageEvents(req.user.sub, id, assistant.sources || []);
-
-  if (relevantMemoryEntries.length) {
-    await logAiTrainingEvent({
-      userId: req.user.sub,
+    const assistant = await openaiReply({
       conversationId: id,
-      eventType: "memory_hit",
-      eventStatus: "success",
-      title: "Memoria contextual aplicada",
-      detailText: `A resposta considerou ${relevantMemoryEntries.length} memoria(s) relacionada(s) ao usuario.`,
-      meta: {
-        memory_entry_ids: relevantMemoryEntries.map((entry) => entry.id),
+      userId: req.user.sub,
+      userText: text,
+      contextText,
+      baseSources: mergedKnowledgeSources,
+      topicSnapshot,
+      responseProfile,
+      visionInputs: supportAssets.visionInputs || [],
+      documentInputs: supportAssets.documentInputs || [],
+    });
+
+    const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
+      response_language: userLanguage,
+      sources: assistant.sources || [],
+      show_sources: shouldShowSourcesForReply(text),
+    });
+    const persistMetrics = await persistAssistantTextReply({
+      conversationId: id,
+      userId: req.user.sub,
+      userText: text,
+      assistantText: assistant.text,
+      responseProfile,
+      responseLanguage: userLanguage,
+      metaObject: assistantMetaObject,
+      sources: assistant.sources || [],
+      queryEmbedding,
+      knowledgeSignature,
+      relevantMemoryEntries,
+      knowledgeMemoryEntries,
+      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+      cacheSemantic: true,
+      recordUsage: true,
+      allowWeakResponseLog: true,
+    });
+
+    finalizeChatPerformanceSample(perfSample, {
+      total_response_ms: Date.now() - perfSample.started_at,
+      api_latency_ms: Number(assistant?.metrics?.api_latency_ms || 0),
+      internal_processing_ms: Math.max(0, (Date.now() - perfSample.started_at) - Number(assistant?.metrics?.api_latency_ms || 0)),
+      context_assembly_ms: contextAssemblyMs,
+      persistence_ms: persistMetrics.persistence_ms,
+      prompt_chars: text.length,
+      response_chars: String(assistant?.text || "").length,
+      payload_bytes: Number(assistant?.metrics?.payload_bytes || 0),
+      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(assistant?.text || ""), "utf8")),
+      status: assistant?.metrics?.status || "success",
+    });
+
+    res.json({ reply: assistant.text, meta: assistantMetaObject });
+  } catch (err) {
+    finalizeChatPerformanceSample(perfSample, {
+      total_response_ms: Date.now() - perfSample.started_at,
+      api_latency_ms: 0,
+      internal_processing_ms: Date.now() - perfSample.started_at,
+      prompt_chars: text.length,
+      response_chars: 0,
+      status: err?.message || "send_failed",
+    });
+    res.status(err?.statusCode || 500).json({ error: err?.message || "conversation_send_failed" });
+  }
+});
+
+app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (req, res) => {
+  const id = Number(req.params.id);
+  const text = String(req.body?.message || "").trim();
+  if (!text) return res.status(400).json({ error: "empty_message" });
+  const perfSample = beginChatPerformanceSample(text.length);
+
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  try {
+    const prepared = await prepareConversationMessageState({
+      conversationId: id,
+      userId: req.user.sub,
+      text,
+      requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
+    });
+    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation } = prepared;
+
+    if (moderation.blocked) {
+      const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+        response_locale: requestLocale,
+        moderated: true,
+        moderation_category: moderation.category,
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: moderation.message,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: moderationMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: 0,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: moderation.message.length,
+        response_bytes: Buffer.byteLength(String(moderation.message || ""), "utf8"),
+        status: "moderated",
+      });
+      writeEventStreamPacket(res, "done", { reply: moderation.message, meta: moderationMetaObject });
+      return res.end();
+    }
+
+    writeEventStreamPacket(res, "stage", {
+      stage: "context",
+      label: "Montando contexto inteligente",
+    });
+
+    const contextStartedAt = Date.now();
+    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift
+      ? []
+      : await getRelevantMemoryEntries(req.user.sub, id, text, 4);
+    const knowledgeSignature = await getKnowledgeSignatureValue();
+    const queryEmbedding = await getEmbeddingForText(text);
+    const supportAssets = await getConversationSupportAssets(id);
+
+    const artifact = await generateArtifact({
+      apiKey: process.env.OPENAI_API_KEY || "",
+      prompt: text,
+      outDir: uploadsDir,
+      referenceImages: supportAssets.imageReferences || [],
+    }).catch((err) => {
+      console.log("Erro na geracao de artefato:", err?.message || err);
+      return null;
+    });
+
+    if (artifact) {
+      if (!artifact.fullPath) {
+        const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
+          response_language: userLanguage,
+        });
+        const persistMetrics = await persistAssistantTextReply({
+          conversationId: id,
+          userId: req.user.sub,
+          userText: text,
+          assistantText: artifact.reply,
+          responseProfile,
+          responseLanguage: userLanguage,
+          metaObject: artifactMetaObject,
+          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+          allowWeakResponseLog: false,
+        });
+        finalizeChatPerformanceSample(perfSample, {
+          total_response_ms: Date.now() - perfSample.started_at,
+          api_latency_ms: 0,
+          internal_processing_ms: Date.now() - perfSample.started_at,
+          context_assembly_ms: Date.now() - contextStartedAt,
+          persistence_ms: persistMetrics.persistence_ms,
+          prompt_chars: text.length,
+          response_chars: artifact.reply.length,
+          response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
+          status: "artifact_inline",
+        });
+        writeEventStreamPacket(res, "done", { reply: artifact.reply, meta: artifactMetaObject });
+        return res.end();
+      }
+
+      const persistStartedAt = Date.now();
+      const stat = fs.statSync(artifact.fullPath);
+      const saved = await createFileMessage({
+        conversationId: id,
+        uploadedBy: req.user.sub,
+        originalName: artifact.filename,
+        storedName: path.basename(artifact.fullPath),
+        mimeType: artifact.mimeType,
+        sizeBytes: stat.size,
+        role: "assistant",
+        content: artifact.reply,
+      });
+      await persistReplyMemories({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: artifact.reply,
+        language: userLanguage,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: Date.now() - persistStartedAt,
+        prompt_chars: text.length,
+        response_chars: artifact.reply.length,
+        response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
+        status: "artifact_file",
+      });
+      writeEventStreamPacket(res, "done", {
+        reply: artifact.reply,
+        meta: { ...saved.meta, response_language: userLanguage },
+      });
+      return res.end();
+    }
+
+    const cachedReply = !queryLooksExternalOrCurrent(text)
+      ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
+      : null;
+
+    if (cachedReply?.text) {
+      const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: cachedReply.responseLanguage || userLanguage,
+        sources: cachedReply.sources || [],
+        show_sources: shouldShowSourcesForReply(text),
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: cachedReply.text,
+        responseProfile,
+        responseLanguage: cachedReply.responseLanguage || userLanguage,
+        metaObject: cachedMetaObject,
+        sources: cachedReply.sources || [],
+        relevantMemoryEntries,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        recordUsage: Boolean((cachedReply.sources || []).length),
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: cachedReply.text.length,
+        response_bytes: Buffer.byteLength(String(cachedReply.text || ""), "utf8"),
+        status: "cache_hit",
+      });
+      writeEventStreamPacket(res, "done", { reply: cachedReply.text, meta: cachedMetaObject });
+      return res.end();
+    }
+
+    const knowledgeBundle = await buildKnowledgeBundle(text, {
+      limit: 4,
+      userLanguage,
+      departments: currentUser?.departments || [],
+    });
+    const knowledgeMemoryEntries = await getRelevantKnowledgeDocumentMemories(text, {
+      limit: 4,
+      queryEmbedding,
+      departments: currentUser?.departments || [],
+    });
+    const knowledgeMemoryBundle = buildKnowledgeMemoryBundle(knowledgeMemoryEntries, userLanguage);
+    const shouldUseWebComplement = shouldFetchWebContext(text, {
+      text: [knowledgeBundle.text, knowledgeMemoryBundle.text].filter(Boolean).join("\n\n"),
+    });
+    const mergedKnowledgeSources = [];
+    (knowledgeBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+    (knowledgeMemoryBundle.sources || []).forEach((source) => pushUniqueSource(mergedKnowledgeSources, source));
+
+    let webContext = "";
+    if (shouldUseWebComplement) {
+      try {
+        webContext = await searchWeb(text);
+      } catch (err) {
+        console.log("Erro busca web:", err?.message || err);
+      }
+    }
+
+    const contextText = `
+Data atual no Brasil:
+${nowBrazil()}
+
+Prioridade de fontes:
+1. Base interna da empresa.
+2. Arquivos e anexos da conversa.
+3. Internet apenas como complemento quando necessário.
+
+Idioma detectado do usuário:
+${getLanguageLabel(userLanguage)}
+
+Memória interna da empresa:
+${trimContextText(knowledgeBundle.text || "Sem resultados relevantes da base interna.")}
+
+Memória semântica derivada dos documentos:
+${trimContextText(knowledgeMemoryBundle.text || "Sem memória documental relevante para esta pergunta.")}
+
+Documentos e imagens da conversa:
+${trimContextText(supportAssets.fileContext || "Nenhum anexo recente.")}
+
+Contexto externo complementar:
+${shouldUseWebComplement
+  ? trimContextText(webContext || "Nenhum resultado externo complementar encontrado.")
+  : "Não foi necessário incluir contexto externo fixo nesta pergunta. Use busca web apenas se faltar contexto interno ou se o usuário pedir atualização externa."}
+`.trim();
+    const contextAssemblyMs = Date.now() - contextStartedAt;
+
+    writeEventStreamPacket(res, "stage", {
+      stage: "ai",
+      label: "Recebendo resposta da IA",
+    });
+
+    const assistant = await openaiReplyStream({
+      conversationId: id,
+      userId: req.user.sub,
+      userText: text,
+      contextText,
+      baseSources: mergedKnowledgeSources,
+      topicSnapshot,
+      responseProfile,
+      visionInputs: supportAssets.visionInputs || [],
+      documentInputs: supportAssets.documentInputs || [],
+      onDelta: async (delta) => {
+        writeEventStreamPacket(res, "delta", { delta, text: delta });
       },
     });
-  }
 
-  if (responseLooksWeak(assistant.text)) {
-    await logAiTrainingEvent({
-      userId: req.user.sub,
-      conversationId: id,
-      eventType: "weak_response",
-      eventStatus: "warning",
-      title: text.slice(0, 120),
-      detailText: assistant.text,
-      meta: {
-        knowledge_sources: (assistant.sources || []).length,
-        memory_hits: relevantMemoryEntries.length,
-        document_memory_hits: knowledgeMemoryEntries.length,
-      },
+    const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
+      response_language: userLanguage,
+      sources: assistant.sources || [],
+      show_sources: shouldShowSourcesForReply(text),
     });
-  }
+    writeEventStreamPacket(res, "stage", {
+      stage: "persist",
+      label: "Salvando conversa e telemetria",
+    });
+    const persistMetrics = await persistAssistantTextReply({
+      conversationId: id,
+      userId: req.user.sub,
+      userText: text,
+      assistantText: assistant.text,
+      responseProfile,
+      responseLanguage: userLanguage,
+      metaObject: assistantMetaObject,
+      sources: assistant.sources || [],
+      queryEmbedding,
+      knowledgeSignature,
+      relevantMemoryEntries,
+      knowledgeMemoryEntries,
+      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+      cacheSemantic: true,
+      recordUsage: true,
+      allowWeakResponseLog: true,
+    });
 
-  res.json({ reply: assistant.text, meta: assistantMetaObject });
+    finalizeChatPerformanceSample(perfSample, {
+      total_response_ms: Date.now() - perfSample.started_at,
+      api_latency_ms: Number(assistant?.metrics?.api_latency_ms || 0),
+      internal_processing_ms: Math.max(0, (Date.now() - perfSample.started_at) - Number(assistant?.metrics?.api_latency_ms || 0)),
+      context_assembly_ms: contextAssemblyMs,
+      persistence_ms: persistMetrics.persistence_ms,
+      prompt_chars: text.length,
+      response_chars: String(assistant?.text || "").length,
+      payload_bytes: Number(assistant?.metrics?.payload_bytes || 0),
+      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(assistant?.text || ""), "utf8")),
+      status: assistant?.metrics?.status || "success",
+    });
+
+    writeEventStreamPacket(res, "done", {
+      reply: assistant.text,
+      meta: assistantMetaObject,
+      metrics: assistant.metrics || {},
+    });
+    res.end();
+  } catch (err) {
+    finalizeChatPerformanceSample(perfSample, {
+      total_response_ms: Date.now() - perfSample.started_at,
+      api_latency_ms: 0,
+      internal_processing_ms: Date.now() - perfSample.started_at,
+      prompt_chars: text.length,
+      response_chars: 0,
+      status: err?.message || "send_stream_failed",
+    });
+    writeEventStreamPacket(res, "error", {
+      error: err?.message || "conversation_send_stream_failed",
+    });
+    res.end();
+  }
 });
 
 app.get("/api/admin/departments", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -6558,6 +8697,15 @@ app.get("/api/admin/system-logs", requireAuth(JWT_SECRET), requireRole("admin"),
     training_logs: trainingRows || [],
     calendar_logs: calendarRows || [],
   });
+});
+
+app.get("/api/admin/cockpit", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  try {
+    const cockpit = await buildAdminCockpitPayload();
+    res.json({ cockpit });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || "admin_cockpit_failed" });
+  }
 });
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -8189,6 +10337,109 @@ app.post("/api/intranet/marketing/influencers/analyze", requireAuth(JWT_SECRET),
   }
 });
 
+app.get("/api/intranet/marketing/indicators/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const indicators = await buildMarketingIndicatorBootstrap(user, req.query || {});
+    res.json({ indicators });
+  } catch (err) {
+    if (err?.message === "marketing_access_denied") {
+      return res.status(403).json({ error: "marketing_access_denied" });
+    }
+    if (err?.message === "marketing_department_not_found") {
+      return res.status(404).json({ error: "marketing_department_not_found" });
+    }
+    res.status(400).json({ error: err?.message || "marketing_indicator_bootstrap_failed" });
+  }
+});
+
+app.post("/api/intranet/marketing/indicators/tabs/:id/rows", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const row = await saveMarketingIndicatorRow(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, row });
+  } catch (err) {
+    if (err?.message === "marketing_access_denied") {
+      return res.status(403).json({ error: "marketing_access_denied" });
+    }
+    if (err?.message === "marketing_indicator_tab_not_found") {
+      return res.status(404).json({ error: "marketing_indicator_tab_not_found" });
+    }
+    res.status(400).json({ error: err?.message || "marketing_indicator_row_create_failed" });
+  }
+});
+
+app.get("/api/intranet/pedagogico/whatsapp/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const whatsapp = await buildPedagogicalWhatsAppBootstrap(user);
+    res.json({ whatsapp });
+  } catch (err) {
+    if (err?.message === "pedagogical_access_denied") {
+      return res.status(403).json({ error: "pedagogical_access_denied" });
+    }
+    if (err?.message === "pedagogical_department_not_found") {
+      return res.status(404).json({ error: "pedagogical_department_not_found" });
+    }
+    res.status(400).json({ error: err?.message || "pedagogical_whatsapp_bootstrap_failed" });
+  }
+});
+
+app.post("/api/intranet/pedagogico/whatsapp/groups", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const group = await savePedagogicalWhatsAppGroup(req.body || {}, user);
+    res.json({ ok: true, group });
+  } catch (err) {
+    if (err?.message === "pedagogical_access_denied") {
+      return res.status(403).json({ error: "pedagogical_access_denied" });
+    }
+    res.status(400).json({ error: err?.message || "pedagogical_whatsapp_group_save_failed" });
+  }
+});
+
+app.post("/api/intranet/pedagogico/whatsapp/campaigns", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const campaign = await savePedagogicalWhatsAppCampaign(req.body || {}, user);
+    res.json({ ok: true, campaign });
+  } catch (err) {
+    if (err?.message === "pedagogical_access_denied") {
+      return res.status(403).json({ error: "pedagogical_access_denied" });
+    }
+    res.status(400).json({ error: err?.message || "pedagogical_whatsapp_campaign_save_failed" });
+  }
+});
+
+app.post("/api/intranet/pedagogico/whatsapp/campaigns/:id/start", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const campaign = await startPedagogicalWhatsAppCampaign(Number(req.params.id), user);
+    const scope = await resolvePedagogicalScope(user);
+    const refreshed = await getPedagogicalWhatsAppCampaignRowById(campaign.id, scope.department.id);
+    const items = await listPedagogicalWhatsAppCampaignItems([campaign.id], { limit: 600 });
+    const history = await listPedagogicalWhatsAppCampaignLogs([campaign.id], { limit: 80 });
+    res.json({
+      ok: true,
+      campaign: {
+        ...(refreshed || campaign),
+        items,
+        selected_group_ids: refreshed?.metadata?.selected_group_ids || campaign?.metadata?.selected_group_ids || [],
+      },
+      history,
+      integration: getWhatsAppIntegrationStatus(),
+    });
+  } catch (err) {
+    if (err?.message === "pedagogical_access_denied") {
+      return res.status(403).json({ error: "pedagogical_access_denied" });
+    }
+    if (err?.message === "whatsapp_campaign_not_found") {
+      return res.status(404).json({ error: "whatsapp_campaign_not_found" });
+    }
+    res.status(400).json({ error: err?.message || "pedagogical_whatsapp_campaign_start_failed" });
+  }
+});
+
 app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
   const payload = await buildIntranetPayload(req.user.sub);
   res.json(payload || { user: null, intranet: null, department_catalog: [] });
@@ -8232,6 +10483,7 @@ async function startServer() {
   await ensureAdmin();
   await ensureDepartmentCatalog();
   await ensureDepartmentSubmenus();
+  await ensureMarketingIndicatorSeeds();
   await ensureCalendarEventTypes();
   await syncLegacyUserDepartmentData();
   await ensureFixedDepartments();

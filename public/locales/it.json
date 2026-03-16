@@ -1,4 +1,4 @@
-﻿{
+{
     "language":  {
                      "label":  "Lingua"
                  },
@@ -20,8 +20,8 @@
                    "loading":  "Caricamento...",
                    "select":  "Seleziona",
                    "all":  "Tutti",
-                   "search":  "Cerca",
-                   "viewMore":  "Vedi altro",
+                   "search":  "Ricerca",
+                   "viewMore":  "Vedi di più",
                    "close":  "Chiudi",
                    "analyze":  "Analizza",
                    "today":  "Oggi",
@@ -30,12 +30,15 @@
                    "collapseMenu":  "Comprimi menu laterale",
                    "expandMenu":  "Espandi menu laterale",
                    "connectedAccount":  "Account connesso",
-                   "now":  "Ora",
-                   "noEnd":  "Senza fine"
+                   "now":  "Adesso",
+                   "noEnd":  "Senza fine",
+                   "yes":  "Sì",
+                   "no":  "No"
                },
     "chat":  {
                  "brandSubUser":  "Assistente della scuola",
                  "brandSubAdmin":  "Pannello amministrativo",
+                 "assistantName":  "Talkers IA",
                  "intranet":  "Intranet Talkers",
                  "newConversation":  "Nuova conversazione",
                  "conversations":  "Conversazioni",
@@ -43,9 +46,9 @@
                  "logout":  "Esci",
                  "assistantKicker":  "Assistente della scuola",
                  "emptyTitle":  "Come posso aiutarti oggi?",
-                 "emptySubtitle":  "Crea documenti, fogli di calcolo, immagini e audio, consulta la base aziendale e gestisci richieste con unâ€™esperienza piÃ¹ vicina a ChatGPT.",
+                 "emptySubtitle":  "Crea documenti, fogli di calcolo, immagini e audio, consulta la base aziendale e gestisci richieste con un\u0027esperienza più vicina a ChatGPT.",
                  "placeholder":  "Invia un messaggio a Talkers IA",
-                 "hint":  "Invio invia, Shift+Invio va a capo",
+                 "hint":  "Invio manda, Shift+Invio va a capo",
                  "attach":  "Aggiungi foto e file",
                  "recordStart":  "Registra audio",
                  "recordStop":  "Ferma registrazione",
@@ -53,10 +56,10 @@
                  "copy":  "Copia",
                  "copied":  "Copiato",
                  "copyFailed":  "Impossibile copiare il testo.",
-                 "deleteConversation":  "Eliminare questa conversazione? Lâ€™azione non puÃ² essere annullata.",
-                 "deleteConversationError":  "Errore durante lâ€™eliminazione della conversazione: {{error}}",
+                 "deleteConversation":  "Eliminare questa conversazione? L\u0027azione non può essere annullata.",
+                 "deleteConversationError":  "Errore durante l\u0027eliminazione della conversazione: {{error}}",
                  "sendAttachmentsFailed":  "Impossibile inviare il messaggio con allegati.",
-                 "uploadFailed":  "Errore durante lâ€™invio di \"{{name}}\": {{error}}",
+                 "uploadFailed":  "Errore durante l\u0027invio di \"{{name}}\": {{error}}",
                  "microphoneError":  "Impossibile accedere al microfono: {{error}}",
                  "oversizeIgnored":  "{{count}} file oltre 25 MB sono stati ignorati{{names}}.",
                  "listen":  "Ascolta",
@@ -75,44 +78,12 @@
                                    "document":  "Documento",
                                    "presentation":  "Presentazione",
                                    "file":  "File"
-                               },
-                 "quickPrompts":  {
-                                      "document":  {
-                                                       "label":  "Genera documento",
-                                                       "hint":  "Crea comunicati, contratti e testi organizzati.",
-                                                       "prompt":  "Genera un documento professionale su questo tema:"
-                                                   },
-                                      "spreadsheet":  {
-                                                          "label":  "Crea foglio di calcolo",
-                                                          "hint":  "Prepara tabelle con colonne pronte allâ€™uso.",
-                                                          "prompt":  "Crea un foglio di calcolo organizzato con i campi principali per:"
-                                                      },
-                                      "audio":  {
-                                                    "label":  "Trascrivi audio",
-                                                    "hint":  "Analizza audio caricato o registrato nel browser.",
-                                                    "prompt":  "Analizza e trascrivi lâ€™audio inviato, poi crea un riassunto obiettivo."
-                                                },
-                                      "image":  {
-                                                    "label":  "Genera immagine",
-                                                    "hint":  "Produci immagini per scuola, marketing e materiali.",
-                                                    "prompt":  "Genera unâ€™immagine realistica e professionale di:"
-                                                },
-                                      "school":  {
-                                                     "label":  "Comunicazione scolastica",
-                                                     "hint":  "Crea avvisi chiari e accoglienti per studenti e famiglie.",
-                                                     "prompt":  "Crea una comunicazione scolastica chiara e accogliente su:"
-                                                 },
-                                      "knowledge":  {
-                                                        "label":  "Consulta base interna",
-                                                        "hint":  "Cerca documenti e conoscenza aziendale.",
-                                                        "prompt":  "Consulta la base interna e rispondimi su:"
-                                                    }
-                                  }
+                               }
              },
     "login":  {
                   "title":  "Accedi",
-                  "subtitle":  "Usa email e password.",
-                  "email":  "Email",
+                  "subtitle":  "Usa la tua e-mail e password.",
+                  "email":  "E-mail",
                   "password":  "Password",
                   "button":  "Accedi",
                   "emailPlaceholder":  "tuamail@azienda.com",
@@ -125,198 +96,42 @@
                      "eyebrow":  "Workspace aziendale",
                      "heroBadge":  "IA + contenuto aziendale",
                      "heroTitle":  "Intranet Talkers",
-                     "heroDescription":  "Un hub interno per documenti, comunicazioni, scorciatoie e supporto IA per reparto.",
+                     "heroDescription":  "Un hub interno per documenti, comunicazioni, scorciatoie e supporto IA per dipartimento.",
                      "overviewEyebrow":  "Panoramica",
-                     "overviewTitle":  "Vista rapida della routine interna",
+                     "overviewTitle":  "Visione rapida della routine interna",
                      "quickEyebrow":  "Accesso rapido",
-                     "quickTitle":  "Punti principali",
+                     "quickTitle":  "Ingressi principali",
                      "communicationEyebrow":  "Comunicazione aziendale",
-                     "communicationTitle":  "Avvisi istituzionali e comunicazioni interne",
-                     "sidebarDepartments":  "Reparti",
+                     "communicationTitle":  "Avvisi istituzionali e comunicati interni",
+                     "sidebarDepartments":  "Dipartimenti",
                      "sidebarReminders":  "Promemoria e agenda",
                      "sidebarUtilityEmpty":  "Nessun promemoria imminente al momento.",
                      "brandSubAdminAccess":  "Accesso amministrativo completo",
-                     "brandSubUserAccess":  "{{count}} area(e) abilitate - {{email}}",
-                     "sidebarNoDepartment":  "Nessuna area di reparto Ã¨ abilitata per questo utente.",
-                     "departmentDefaultName":  "Reparto",
-                     "departmentMainArea":  "Area principale",
-                     "departmentSubmenusCount":  "{{count}} sottomenu",
-                     "departmentDefaultFlow":  "Flusso interno del reparto",
-                     "departmentWorkspaceTitle":  "Area dipartimentale",
-                     "departmentWorkspaceDescription":  "Area dipartimentale dell\u0027intranet.",
-                     "generic":  {
-                                     "update":  "Aggiornamento",
-                                     "summary":  "Riepilogo",
-                                     "announcement":  "Comunicazione",
-                                     "general":  "Generale",
-                                     "workspace":  "workspace",
-                                     "periodUndefined":  "Periodo non definito",
-                                     "notInformed":  "Non informato",
-                                     "system":  "Sistema",
-                                     "now":  "Ora",
-                                     "noEnd":  "Senza fine",
-                                     "module":  "Modulo",
-                                     "saveError":  "Impossibile salvare l\u0027aggiornamento: {{error}}"
-                                 },
+                     "brandSubUserAccess":  "{{count}} area/e abilitate - {{email}}",
+                     "sidebarNoDepartment":  "Nessun dipartimento disponibile per questo utente.",
+                     "departmentDefaultName":  "Dipartimento",
                      "nav":  {
                                  "home":  "Home",
+                                 "dashboard":  "Dashboard",
                                  "calendar":  "Agenda",
                                  "sales":  "Pannello commerciale"
                              },
-                     "home":  {
-                                  "greetingCardDescription":  "Questa Ã¨ la schermata principale dellâ€™intranet, con contesto istituzionale, agenda e comunicazione interna.",
-                                  "greetingBadgeAdmin":  "Admin",
-                                  "greetingBadgeUser":  "Profilo attivo",
-                                  "nextMeetings":  "Prossime riunioni",
-                                  "noMeetings":  "Nessuna riunione programmata per i prossimi giorni.",
-                                  "meetingsBadge":  "{{count}} evento(i)"
-                              },
-                     "direction":  {
-                                       "origin":  "Direzione",
-                                       "emptyTitle":  "Nessun comunicato della Direzione",
-                                       "emptyBody":  "Quando ci saranno avvisi istituzionali in evidenza, appariranno qui.",
-                                       "fallbackTitle":  "Comunicazione istituzionale"
-                                   },
-                     "communication":  {
-                                           "emptyTitle":  "Non ci sono comunicazioni attive nella bacheca in questo momento.",
-                                           "nonePublished":  "Nessuna comunicazione pubblicata.",
-                                           "allUsers":  "Tutti gli utenti",
-                                           "defaultOrigin":  "Comunicazione interna",
-                                           "publishTitle":  "Pubblica comunicato",
-                                           "editTitle":  "Modifica comunicato #{{id}}",
-                                           "save":  "Salva comunicato",
-                                           "saveChanges":  "Salva modifiche",
-                                           "onePublished":  "1 comunicato pubblicato",
-                                           "manyPublished":  "{{count}} comunicati pubblicati",
-                                           "departmentsAudience":  "Reparti: {{departments}}",
-                                           "segmentedDepartmentHint":  "Comunicazione segmentata per quest\u0027area.",
-                                           "segmentedDepartmentsHint":  "Usa questa opzione quando il pubblico Ã¨ segmentato per reparto.",
-                                           "publishedTitle":  "Comunicati pubblicati",
-                                           "activeTitle":  "Comunicato attivo",
-                                           "activeHint":  "I comunicati attivi compaiono nella Home, nell\u0027area comunicazione e nelle notifiche interne.",
-                                           "titleRequired":  "Inserisci il titolo del comunicato.",
-                                           "departmentsRequired":  "Seleziona almeno un reparto per un comunicato segmentato.",
-                                           "saveError":  "Impossibile salvare il comunicato: {{error}}",
-                                           "deleteError":  "Impossibile eliminare il comunicato: {{error}}",
-                                           "deleteConfirm":  "Vuoi eliminare il comunicato \"{{title}}\"?",
-                                           "fields":  {
-                                                          "title":  "Titolo",
-                                                          "summary":  "Riepilogo",
-                                                          "content":  "Contenuto completo",
-                                                          "type":  "Tipo",
-                                                          "priority":  "PrioritÃ ",
-                                                          "audience":  "Pubblico",
-                                                          "startsAt":  "Inizio (opzionale)",
-                                                          "endsAt":  "Fine (opzionale)",
-                                                          "departments":  "Reparti del comunicato"
-                                                      },
-                                           "placeholders":  {
-                                                                "title":  "Es.: Formazione interna di questa settimana",
-                                                                "summary":  "Testo breve per Home e notifiche",
-                                                                "content":  "Testo principale del comunicato"
-                                                            }
-                                       },
-                     "departments":  {
-                                         "empty":  "Nessun reparto specifico Ã¨ stato abilitato per questo profilo.",
-                                         "reminderEmpty":  "Nessun promemoria operativo per questo profilo al momento.",
-                                         "currentLevel":  "Livello attuale: {{level}}",
-                                         "collaborator":  "collaboratore",
-                                         "noSubmenus":  "Nessun sottomenu configurato per questo reparto.",
-                                         "noModules":  "Nessun modulo disponibile per quest\u0027area in questo momento."
-                                     },
-                     "departmentSummary":  {
-                                               "currentLevel":  "Livello attuale",
-                                               "permission":  "Permesso",
-                                               "activeSubmenus":  "Sottomenu attivi",
-                                               "flows":  "Flussi",
-                                               "availableModules":  "Moduli disponibili",
-                                               "resources":  "Risorse",
-                                               "activeSubmenu":  "Sottomenu attivo",
-                                               "selectedArea":  "Area selezionata",
-                                               "detail":  "Dettaglio",
-                                               "main":  "Principale"
-                                           },
                      "routes":  {
                                     "dashboardTitle":  "Dashboard / BI",
                                     "dashboardEyebrow":  "BI",
-                                    "modulesTitle":  "Moduli",
-                                    "modulesEyebrow":  "Workspace",
                                     "calendarEyebrow":  "Calendario aziendale",
-                                    "departmentsTitle":  "Reparti",
+                                    "departmentsTitle":  "Dipartimenti",
                                     "departmentsEyebrow":  "Aree di lavoro",
                                     "documentsTitle":  "Documenti",
                                     "documentsEyebrow":  "Base di conoscenza",
-                                    "trainingTitle":  "Addestramento IA",
+                                    "trainingTitle":  "Training IA",
                                     "trainingEyebrow":  "Apprendimento e ingestione",
                                     "communicationTitle":  "Comunicazione",
                                     "communicationEyebrow":  "Avvisi e comunicati",
-                                    "salesEyebrow":  "Operazioni commerciali"
-                                },
-                     "reminder":  {
-                                      "meeting":  "Riunione",
-                                      "announcement":  "Avviso",
-                                      "empty":  "Nessun promemoria operativo al momento."
-                                  },
-                     "dashboardSectionEyebrow":  "Dashboard territoriale",
-                     "dashboardSectionTitle":  "Lettura consolidata dell\u0027operazione e delle aree abilitate",
-                     "dashboardBreakdownTitle":  "Visione per area",
-                     "dashboardHighlightsTitle":  "Letture e avvisi",
-                     "dashboardEmptyAreas":  "Nessuna area disponibile per comporre la dashboard di questo profilo.",
-                     "dashboardAreaMetrics":  "{{documents}} doc(s) • {{modules}} modulo(i)",
-                     "dashboardEmptyDocuments":  "Nessun documento recente da evidenziare nella dashboard.",
-                     "departmentSubmenusEyebrow":  "Sottomenu",
-                     "departmentSubmenusTitle":  "Flussi e accessi dell\u0027area",
-                     "departmentModulesEyebrow":  "Moduli del dipartimento",
-                     "departmentModulesTitle":  "Risorse disponibili",
-                     "workspaceSectionClosed":  "Scegli un\u0027azione sopra per aprire solo il contenuto necessario di quest\u0027area.",
-                     "dashboardMap":  {
-                                          "eyebrow":  "Mappa territoriale",
-                                          "title":  "Copertura ed espansione della base",
-                                          "description":  "Struttura pronta per mostrare pin automatici per regione, stato e citta senza dipendere da mappe esterne.",
-                                          "sidebarTitle":  "Territorio monitorato",
-                                          "clusterHint":  "La clusterizzazione e i pin automatici saranno attivati quando la base territoriale e l\u0027integrazione con le vendite saranno collegate.",
-                                          "metricLabelLeads":  "{{count}} lead",
-                                          "metricLabelReady":  "{{count}} stato(i) pronti",
-                                          "legendLeadCount":  "{{count}} lead",
-                                          "legendReady":  "{{count}} citta pronte",
-                                          "emptyLegend":  "Seleziona una regione per vedere gli stati monitorati e preparare la futura lettura territoriale.",
-                                          "filters":  {
-                                                          "region":  "Regione",
-                                                          "state":  "Stato"
-                                                      },
-                                          "regions":  {
-                                                          "north":  "Nord",
-                                                          "northeast":  "Nordeste",
-                                                          "midwest":  "Centro-Ovest",
-                                                          "southeast":  "Sudeste",
-                                                          "south":  "Sud"
-                                                      }
-                                      },
-                     "marketingInfluencer":  {
-                                                 "loading":  "Caricamento workspace influencer...",
-                                                 "loadingDetail":  "Caricamento report dettagliato...",
-                                                 "workspaceDescription":  "Registrazione, lanci, report e analisi dell\u0027operazione influencer del Marketing.",
-                                                 "menuEyebrow":  "Marketing",
-                                                 "menuTitle":  "Influencer",
-                                                 "menuDescription":  "Registrazione, prestazioni, comparativi e supporto IA per le partnership del Marketing.",
-                                                 "currentPeriod":  "Periodo attuale",
-                                                 "submenuTitle":  "Azioni del sottomenu",
-                                                 "submenuHint":  "Apri solo la sezione che stai usando adesso.",
-                                                 "selectOne":  "Seleziona un influencer",
-                                                 "sections":  {
-                                                                  "register":  "Registrazione",
-                                                                  "registerDescription":  "Base della partnership",
-                                                                  "overview":  "Panoramica",
-                                                                  "overviewDescription":  "Base e portafoglio attivo",
-                                                                  "reports":  "Report",
-                                                                  "reportsDescription":  "Storico e comparativi",
-                                                                  "analysis":  "Analisi IA",
-                                                                  "analysisDescription":  "Lettura di supporto"
-                                                              }
-                                             }
+                                    "salesEyebrow":  "Operazione commerciale"
+                                }
                  },
     "calendar":  {
-                     "newEvent":  "Nuovo impegno",
                      "previous":  "Precedente",
                      "today":  "Oggi",
                      "next":  "Successivo",
@@ -324,18 +139,22 @@
                      "week":  "Settimana",
                      "day":  "Giorno",
                      "list":  "Lista",
+                     "views":  {
+                                   "month":  "Mese",
+                                   "week":  "Settimana",
+                                   "day":  "Giorno",
+                                   "list":  "Lista"
+                               },
                      "user":  "Utente",
                      "type":  "Tipo",
                      "mode":  "Formato",
                      "status":  "Stato",
                      "search":  "Ricerca",
                      "searchPlaceholder":  "Titolo, descrizione, luogo o tipo",
-                     "all":  "Tutti",
-                     "select":  "Seleziona",
                      "title":  "Titolo",
                      "description":  "Descrizione",
                      "eventType":  "Tipo",
-                     "meetingMode":  "ModalitÃ ",
+                     "meetingMode":  "Modalità",
                      "allDay":  "Tutto il giorno",
                      "allDayHint":  "Usa questa opzione per eventi senza orario fisso.",
                      "startDate":  "Data iniziale",
@@ -343,10 +162,10 @@
                      "endDate":  "Data finale",
                      "endTime":  "Ora finale",
                      "location":  "Luogo",
-                     "meetingLink":  "Link riunione",
+                     "meetingLink":  "Link della riunione",
                      "notes":  "Osservazioni",
                      "participants":  "Partecipanti",
-                     "participantsHint":  "Seleziona una o piÃ¹ persone. L\u0027impegno apparirÃ  nell\u0027agenda di tutti i partecipanti.",
+                     "participantsHint":  "Seleziona una o più persone. L\u0027impegno apparirà nell\u0027agenda di tutti i partecipanti.",
                      "reset":  "Pulisci",
                      "save":  "Salva impegno",
                      "cancelEvent":  "Annulla impegno",
@@ -360,7 +179,7 @@
                      "noEventsDay":  "Nessun impegno trovato per questo giorno.",
                      "noEventsPeriod":  "Nessun impegno trovato per questo periodo.",
                      "emptyWeek":  "Nessun evento",
-                     "moreEvents":  "+ {{count}} impegno(i)",
+                     "moreEvents":  "+ {{count}} impegno/i",
                      "loadError":  "Impossibile caricare l\u0027impegno: {{error}}",
                      "saveError":  "Impossibile salvare l\u0027impegno: {{error}}",
                      "cancelError":  "Impossibile annullare l\u0027impegno: {{error}}",
@@ -382,20 +201,21 @@
                                    },
                      "sectionEyebrow":  "Pianificazione interna",
                      "sectionTitle":  "Impegni e riunioni",
-                     "sectionDescription":  "Organizza gli impegni futuri, accompagna il calendario del team e mantieni aggiornato il calendario della scuola."
+                     "sectionDescription":  "Organizza gli impegni futuri, segui l\u0027agenda del team e mantieni aggiornato il calendario della scuola."
                  },
     "admin":  {
                   "title":  "Admin",
                   "subtitle":  "Utenti, permessi e base di conoscenza",
                   "tabs":  {
                                "users":  "Utenti",
-                               "departments":  "Reparti",
+                               "departments":  "Dipartimenti",
                                "knowledge":  "Base di conoscenza",
-                               "training":  "Addestramento IA",
-                               "logs":  "Log di sistema"
+                               "training":  "Training IA",
+                               "logs":  "Log di sistema",
+                               "cockpit":  "Cockpit"
                            }
               },
     "moderation":  {
-                       "refusal":  "Non posso aiutare con questo tipo di richiesta. Questa piattaforma Ã¨ pensata per lâ€™educazione e lâ€™apprendimento delle lingue."
+                       "refusal":  "Non posso aiutarti con questo tipo di richiesta. Questa piattaforma è pensata per l\u0027educazione e l\u0027apprendimento delle lingue."
                    }
 }

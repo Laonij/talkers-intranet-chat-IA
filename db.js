@@ -732,6 +732,135 @@ async function migrateSqlite() {
   `);
 
   await execSqlite(`
+    CREATE TABLE IF NOT EXISTS marketing_indicator_tabs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department_id INTEGER,
+      sheet_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      indicator_kind TEXT NOT NULL DEFAULT 'generic',
+      owner_name TEXT,
+      owner_photo_url TEXT,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      series_keys_json TEXT NOT NULL DEFAULT '[]',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      chart_type TEXT NOT NULL DEFAULT 'line',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(department_id, sheet_key)
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS marketing_indicator_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tab_id INTEGER NOT NULL,
+      row_order INTEGER NOT NULL DEFAULT 0,
+      row_label TEXT,
+      values_json TEXT NOT NULL DEFAULT '{}',
+      source_type TEXT NOT NULL DEFAULT 'manual',
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department_id INTEGER,
+      internal_code TEXT,
+      name TEXT NOT NULL,
+      group_link TEXT,
+      category TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT,
+      metadata_json TEXT,
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department_id INTEGER,
+      name TEXT NOT NULL,
+      image_url TEXT,
+      message_text TEXT NOT NULL,
+      campaign_link TEXT,
+      interval_seconds INTEGER NOT NULL DEFAULT 30,
+      status TEXT NOT NULL DEFAULT 'draft',
+      execution_mode TEXT NOT NULL DEFAULT 'prepared',
+      integration_status TEXT NOT NULL DEFAULT 'pending_provider',
+      scheduled_at TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      total_groups INTEGER NOT NULL DEFAULT 0,
+      total_sent INTEGER NOT NULL DEFAULT 0,
+      total_pending INTEGER NOT NULL DEFAULT 0,
+      total_error INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      metadata_json TEXT,
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_campaign_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      queue_order INTEGER NOT NULL DEFAULT 0,
+      send_status TEXT NOT NULL DEFAULT 'queued',
+      provider_message_id TEXT,
+      error_message TEXT,
+      last_attempt_at TEXT,
+      sent_at TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(campaign_id, group_id)
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_campaign_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER,
+      campaign_item_id INTEGER,
+      group_id INTEGER,
+      action TEXT NOT NULL,
+      detail_json TEXT,
+      actor_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      setting_key TEXT NOT NULL UNIQUE,
+      setting_value TEXT,
+      metadata_json TEXT,
+      updated_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
     CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
     USING fts5(extracted_text, translated_text, rel_path, keywords, language, content='documents', content_rowid='id');
   `);
@@ -789,6 +918,17 @@ async function migrateSqlite() {
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_marketing_influencers_status ON marketing_influencers(influencer_status, updated_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_marketing_influencer_metrics_influencer ON marketing_influencer_metrics(influencer_id, period_start, period_end);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_marketing_influencer_metrics_period ON marketing_influencer_metrics(period_type, period_start);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_tabs_department ON marketing_indicator_tabs(department_id, sort_order, title);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_tabs_kind ON marketing_indicator_tabs(indicator_kind, is_active, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_rows_tab ON marketing_indicator_rows(tab_id, row_order, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_rows_source ON marketing_indicator_rows(source_type, created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_groups_department ON pedagogical_whatsapp_groups(department_id, status, name);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_groups_status ON pedagogical_whatsapp_groups(status, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_campaigns_department ON pedagogical_whatsapp_campaigns(department_id, status, created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_campaigns_execution ON pedagogical_whatsapp_campaigns(execution_mode, integration_status, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_campaign ON pedagogical_whatsapp_campaign_items(campaign_id, queue_order, send_status);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_group ON pedagogical_whatsapp_campaign_items(group_id, send_status, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_logs_campaign ON pedagogical_whatsapp_campaign_logs(campaign_id, created_at);");
 
   await execSqlite(`
     CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
@@ -1288,6 +1428,135 @@ async function migratePostgres() {
     );
   `);
 
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS marketing_indicator_tabs (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      department_id INTEGER,
+      sheet_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      indicator_kind TEXT NOT NULL DEFAULT 'generic',
+      owner_name TEXT,
+      owner_photo_url TEXT,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      series_keys_json TEXT NOT NULL DEFAULT '[]',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      chart_type TEXT NOT NULL DEFAULT 'line',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(department_id, sheet_key)
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS marketing_indicator_rows (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      tab_id INTEGER NOT NULL,
+      row_order INTEGER NOT NULL DEFAULT 0,
+      row_label TEXT,
+      values_json TEXT NOT NULL DEFAULT '{}',
+      source_type TEXT NOT NULL DEFAULT 'manual',
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_groups (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      department_id INTEGER,
+      internal_code TEXT,
+      name TEXT NOT NULL,
+      group_link TEXT,
+      category TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT,
+      metadata_json TEXT,
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_campaigns (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      department_id INTEGER,
+      name TEXT NOT NULL,
+      image_url TEXT,
+      message_text TEXT NOT NULL,
+      campaign_link TEXT,
+      interval_seconds INTEGER NOT NULL DEFAULT 30,
+      status TEXT NOT NULL DEFAULT 'draft',
+      execution_mode TEXT NOT NULL DEFAULT 'prepared',
+      integration_status TEXT NOT NULL DEFAULT 'pending_provider',
+      scheduled_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      total_groups INTEGER NOT NULL DEFAULT 0,
+      total_sent INTEGER NOT NULL DEFAULT 0,
+      total_pending INTEGER NOT NULL DEFAULT 0,
+      total_error INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      metadata_json TEXT,
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_campaign_items (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      campaign_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      queue_order INTEGER NOT NULL DEFAULT 0,
+      send_status TEXT NOT NULL DEFAULT 'queued',
+      provider_message_id TEXT,
+      error_message TEXT,
+      last_attempt_at TIMESTAMPTZ,
+      sent_at TIMESTAMPTZ,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(campaign_id, group_id)
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_campaign_logs (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      campaign_id INTEGER,
+      campaign_item_id INTEGER,
+      group_id INTEGER,
+      action TEXT NOT NULL,
+      detail_json TEXT,
+      actor_user_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS pedagogical_whatsapp_settings (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      setting_key TEXT NOT NULL UNIQUE,
+      setting_value TEXT,
+      metadata_json TEXT,
+      updated_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS can_access_intranet BOOLEAN NOT NULL DEFAULT FALSE;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_locale TEXT NOT NULL DEFAULT 'pt-BR';");
@@ -1431,6 +1700,17 @@ async function migratePostgres() {
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_marketing_influencers_status ON marketing_influencers(influencer_status, updated_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_marketing_influencer_metrics_influencer ON marketing_influencer_metrics(influencer_id, period_start, period_end);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_marketing_influencer_metrics_period ON marketing_influencer_metrics(period_type, period_start);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_tabs_department ON marketing_indicator_tabs(department_id, sort_order, title);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_tabs_kind ON marketing_indicator_tabs(indicator_kind, is_active, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_rows_tab ON marketing_indicator_rows(tab_id, row_order, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_marketing_indicator_rows_source ON marketing_indicator_rows(source_type, created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_groups_department ON pedagogical_whatsapp_groups(department_id, status, name);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_groups_status ON pedagogical_whatsapp_groups(status, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_campaigns_department ON pedagogical_whatsapp_campaigns(department_id, status, created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_campaigns_execution ON pedagogical_whatsapp_campaigns(execution_mode, integration_status, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_campaign ON pedagogical_whatsapp_campaign_items(campaign_id, queue_order, send_status);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_group ON pedagogical_whatsapp_campaign_items(group_id, send_status, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_logs_campaign ON pedagogical_whatsapp_campaign_logs(campaign_id, created_at);");
 }
 async function postgresHasData() {
   const tables = [
@@ -1448,6 +1728,8 @@ async function postgresHasData() {
     "calendar_events",
     "marketing_influencers",
     "marketing_influencer_metrics",
+    "pedagogical_whatsapp_groups",
+    "pedagogical_whatsapp_campaigns",
   ];
 
   for (const table of tables) {
@@ -1475,7 +1757,7 @@ async function importLegacySqliteIntoPostgres() {
     legacyDb = await openLegacySqlite(sqlitePath);
     const tableRows = await sqliteAllFrom(
       legacyDb,
-      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','department_submenus','intranet_announcements','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','knowledge_processing_logs','memory_entries','ai_training_events','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log','calendar_event_types','calendar_events','calendar_event_participants','calendar_event_logs','marketing_influencers','marketing_influencer_metrics')"
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','department_submenus','intranet_announcements','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','knowledge_processing_logs','memory_entries','ai_training_events','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log','calendar_event_types','calendar_events','calendar_event_participants','calendar_event_logs','marketing_influencers','marketing_influencer_metrics','marketing_indicator_tabs','marketing_indicator_rows','pedagogical_whatsapp_groups','pedagogical_whatsapp_campaigns','pedagogical_whatsapp_campaign_items','pedagogical_whatsapp_campaign_logs','pedagogical_whatsapp_settings')"
     );
 
     if (!Array.isArray(tableRows) || !tableRows.length) {
@@ -1518,6 +1800,13 @@ async function importLegacySqliteIntoPostgres() {
         { name: "calendar_event_logs", pk: "id", orderBy: "id" },
         { name: "marketing_influencers", pk: "id", orderBy: "id" },
         { name: "marketing_influencer_metrics", pk: "id", orderBy: "id" },
+        { name: "marketing_indicator_tabs", pk: "id", orderBy: "id" },
+        { name: "marketing_indicator_rows", pk: "id", orderBy: "id" },
+        { name: "pedagogical_whatsapp_groups", pk: "id", orderBy: "id" },
+        { name: "pedagogical_whatsapp_campaigns", pk: "id", orderBy: "id" },
+        { name: "pedagogical_whatsapp_campaign_items", pk: "id", orderBy: "id" },
+        { name: "pedagogical_whatsapp_campaign_logs", pk: "id", orderBy: "id" },
+        { name: "pedagogical_whatsapp_settings", pk: "id", orderBy: "id" },
       ];
 
       const availableTables = new Set(tableRows.map((row) => row.name));
@@ -1561,9 +1850,16 @@ async function importLegacySqliteIntoPostgres() {
       await setPostgresSequence(client, "sales_import_sources", "id");
       await setPostgresSequence(client, "sales_import_runs", "id");
       await setPostgresSequence(client, "sales_records", "id");
-      await setPostgresSequence(client, "entity_change_log", "id");
-      await setPostgresSequence(client, "marketing_influencers", "id");
-      await setPostgresSequence(client, "marketing_influencer_metrics", "id");
+  await setPostgresSequence(client, "entity_change_log", "id");
+  await setPostgresSequence(client, "marketing_influencers", "id");
+  await setPostgresSequence(client, "marketing_influencer_metrics", "id");
+  await setPostgresSequence(client, "marketing_indicator_tabs", "id");
+  await setPostgresSequence(client, "marketing_indicator_rows", "id");
+  await setPostgresSequence(client, "pedagogical_whatsapp_groups", "id");
+  await setPostgresSequence(client, "pedagogical_whatsapp_campaigns", "id");
+  await setPostgresSequence(client, "pedagogical_whatsapp_campaign_items", "id");
+  await setPostgresSequence(client, "pedagogical_whatsapp_campaign_logs", "id");
+  await setPostgresSequence(client, "pedagogical_whatsapp_settings", "id");
 
       await client.query("COMMIT");
       console.log(`Migracao automatica SQLite -> Postgres concluida a partir de ${sqlitePath}.`);

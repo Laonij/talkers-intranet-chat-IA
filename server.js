@@ -58,7 +58,6 @@ const {
   getTalkersPublicKnowledgeDiagnostics,
   queryLooksAboutTalkers,
   scheduleTalkersKnowledgeSync,
-  syncTalkersPublicKnowledge,
 } = require("./lib/talkersPublicKnowledge");
 const {
   analyzeBusinessIntent,
@@ -11243,6 +11242,11 @@ async function startServer() {
     console.log(`Login: ${BASE_URL}/login.html`);
     console.log(`Banco ativo: ${DB_CLIENT}`);
     scheduleKnowledgeBackfillSweep(3 * 1000);
+    scheduleTalkersKnowledgeSync().catch((err) => {
+      console.error("Erro na sincronização da base pública após iniciar o servidor:", buildExternalErrorDetails(err, {
+        label: "talkers_public_sync_startup",
+      }));
+    });
   });
 }
 

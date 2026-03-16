@@ -57,6 +57,7 @@ const {
   buildTalkersPublicKnowledgeBundle,
   getTalkersPublicKnowledgeDiagnostics,
   queryLooksAboutTalkers,
+  scheduleTalkersKnowledgeSync,
   syncTalkersPublicKnowledge,
 } = require("./lib/talkersPublicKnowledge");
 const {
@@ -90,7 +91,8 @@ const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
 const MAX_CONVERSATION_MEMORY = 6000;
 const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
 const OPENAI_EMBEDDING_MODEL = String(process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small").trim();
-const OPENAI_EMBEDDING_TIMEOUT_MS = Math.max(1500, Number(process.env.OPENAI_EMBEDDING_TIMEOUT_MS || 3500));
+const OPENAI_REQUEST_TIMEOUT_MS = Math.max(5000, Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 30000));
+const OPENAI_EMBEDDING_TIMEOUT_MS = Math.max(5000, Number(process.env.OPENAI_EMBEDDING_TIMEOUT_MS || OPENAI_REQUEST_TIMEOUT_MS));
 const OPENAI_PROMPT_ID = String(process.env.OPENAI_PROMPT_ID || "").trim();
 const OPENAI_PROMPT_VERSION = String(process.env.OPENAI_PROMPT_VERSION || "").trim();
 const OPENAI_PROMPT_VARIABLES_JSON = String(process.env.OPENAI_PROMPT_VARIABLES_JSON || "").trim();
@@ -513,7 +515,16 @@ function buildCompactHistoryText(history = [], {
   maxItems = CHAT_HISTORY_CONTEXT_LIMIT,
   maxChars = CHAT_HISTORY_CONTEXT_MAX_CHARS,
 } = {}) {
-  const safeHistory = Array.isArray(history) ? history.filter((item) => String(item?.content || "").trim()) : [];
+  const safeHistory = Array.isArray(history)
+    ? history.filter((item) => {
+        const content = String(item?.content || "").trim();
+        if (!content) return false;
+        if (item?.role === "assistant" && (responseLooksSelfLimiting(content) || responseLooksWeak(content))) {
+          return false;
+        }
+        return true;
+      })
+    : [];
   if (!safeHistory.length) return "";
   const recent = safeHistory.slice(-Math.max(1, maxItems));
   const lines = [];
@@ -2785,6 +2796,46 @@ function normalizeQuery(value = "") {
   return normalizeSemanticText(String(value || "")).slice(0, 500);
 }
 
+function buildExternalErrorDetails(err, extra = {}) {
+  const safeError = err || {};
+  return {
+    message: safeError?.message || String(safeError || "unknown_error"),
+    name: safeError?.name || "",
+    code: safeError?.code || safeError?.cause?.code || "",
+    status: safeError?.response?.status || safeError?.status || null,
+    url: safeError?.config?.url || safeError?.url || extra.url || "",
+    ...extra,
+  };
+}
+
+async function fetchWithRetry(url, options = {}, diagnostics = {}, retryCount = 1) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    try {
+      const requestOptions = { ...options };
+      if (!requestOptions.signal) {
+        requestOptions.signal = AbortSignal.timeout(OPENAI_REQUEST_TIMEOUT_MS);
+      }
+      return await fetch(url, requestOptions);
+    } catch (err) {
+      lastError = err;
+      const details = buildExternalErrorDetails(err, {
+        attempt: attempt + 1,
+        timeout_ms: OPENAI_REQUEST_TIMEOUT_MS,
+        ...diagnostics,
+      });
+      if (attempt < retryCount) {
+        console.warn("Falha em chamada externa; tentando novamente.", details);
+        continue;
+      }
+      throw Object.assign(err instanceof Error ? err : new Error(String(err || "external_request_failed")), {
+        diagnostics: details,
+      });
+    }
+  }
+  throw lastError || new Error("external_request_failed");
+}
+
 function detectConversationLanguage(userText = "", history = [], fallbackLanguage = "pt") {
   const joined = [
     String(userText || "").trim(),
@@ -3447,6 +3498,10 @@ async function getRelevantMemoryEntries(userId, conversationId, queryText, limit
 
   return rows
     .map((row) => {
+      const safeContent = String(row.content_text || "").trim();
+      if (!safeContent || responseLooksSelfLimiting(safeContent) || responseLooksWeak(safeContent)) {
+        return null;
+      }
       const topics = safeJsonParse(row.topics_json || "[]") || [];
       const overlap = topics.filter((topic) => topicTerms.has(topic)).length;
       const similarity = queryEmbedding ? cosineSimilarity(queryEmbedding, row.embedding_json) : 0;
@@ -3458,6 +3513,7 @@ async function getRelevantMemoryEntries(userId, conversationId, queryText, limit
         memory_score: score,
       };
     })
+    .filter(Boolean)
     .filter((row) => row.memory_score >= MEMORY_ENTRY_MIN_SIMILARITY || row.topics.length >= 2)
     .sort((left, right) => Number(right.memory_score || 0) - Number(left.memory_score || 0))
     .slice(0, limit);
@@ -3482,6 +3538,11 @@ async function persistReplyMemories({
   language = "pt",
   resetMemory = false,
 }) {
+  const safeAssistantText = String(assistantText || "").trim();
+  if (!safeAssistantText || responseLooksSelfLimiting(safeAssistantText) || responseLooksWeak(safeAssistantText)) {
+    return;
+  }
+
   await updateConversationMemory(conversationId, userText, assistantText, { resetMemory });
   await updateUserMemory(userId, userText, assistantText, language);
   await persistConversationMemories({
@@ -3688,40 +3749,57 @@ async function getEmbeddingForText(text) {
   const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey || !text) return null;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OPENAI_EMBEDDING_TIMEOUT_MS);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OPENAI_EMBEDDING_TIMEOUT_MS);
+    try {
+      const resp = await fetch('https://api.openai.com/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: OPENAI_EMBEDDING_MODEL,
+          input: String(text).slice(0, 6000),
+        }),
+      });
 
-  try {
-    const resp = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: OPENAI_EMBEDDING_MODEL,
-        input: String(text).slice(0, 6000),
-      }),
-    });
+      if (!resp.ok) {
+        console.error('Erro embeddings OpenAI:', {
+          status: resp.status,
+          url: 'https://api.openai.com/v1/embeddings',
+          attempt: attempt + 1,
+          timeout_ms: OPENAI_EMBEDDING_TIMEOUT_MS,
+          body: String(await resp.text()).slice(0, 600),
+        });
+        return null;
+      }
 
-    if (!resp.ok) {
-      console.log('Erro embeddings OpenAI:', resp.status, await resp.text());
+      const data = await resp.json();
+      return Array.isArray(data?.data?.[0]?.embedding) ? data.data[0].embedding : null;
+    } catch (err) {
+      const details = buildExternalErrorDetails(err, {
+        attempt: attempt + 1,
+        timeout_ms: OPENAI_EMBEDDING_TIMEOUT_MS,
+        url: 'https://api.openai.com/v1/embeddings',
+      });
+      if (err?.name === "AbortError") {
+        console.error("Embedding cancelado por timeout.", details);
+      } else {
+        console.error('Falha ao gerar embedding:', details);
+      }
+      if (attempt === 0) {
+        console.warn("Repetindo geração de embedding após falha temporária.");
+        continue;
+      }
       return null;
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const data = await resp.json();
-    return Array.isArray(data?.data?.[0]?.embedding) ? data.data[0].embedding : null;
-  } catch (err) {
-    if (err?.name === "AbortError") {
-      console.log("Embedding cancelado por timeout.");
-      return null;
-    }
-    console.log('Falha ao gerar embedding:', err?.message || err);
-    return null;
-  } finally {
-    clearTimeout(timeout);
   }
+  return null;
 }
 
 async function materializeDocumentEmbeddings(documentId) {
@@ -4060,7 +4138,7 @@ async function translateTextSilently(text, sourceLanguage, targetLanguage) {
   if (!apiKey) return cleanText;
 
   try {
-    const resp = await fetch('https://api.openai.com/v1/responses', {
+    const resp = await fetchWithRetry('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -4079,13 +4157,19 @@ async function translateTextSilently(text, sourceLanguage, targetLanguage) {
           },
         ],
       }),
+    }, {
+      label: "openai_translation",
+      url: "https://api.openai.com/v1/responses",
     });
 
     if (!resp.ok) return cleanText;
     const data = await resp.json();
     return String(data?.output_text || cleanText).trim() || cleanText;
   } catch (err) {
-    console.log('Falha ao traduzir texto:', err?.message || err);
+    console.error('Falha ao traduzir texto:', buildExternalErrorDetails(err, {
+      label: "openai_translation",
+      url: "https://api.openai.com/v1/responses",
+    }));
     return cleanText;
   }
 }
@@ -4566,15 +4650,17 @@ function buildChatContextStrategy(query = "", responseProfile = null) {
   const looksTalkers = queryLooksAboutTalkers(query);
   const looksExternal = queryLooksExternalOrCurrent(query);
   const looksInternal = queryLooksInternalWorkspace(query);
+  const fastGeneralOnly = !looksExternal && !looksTalkers && !looksInternal;
   const fastExternalOnly = looksExternal
     && !looksTalkers
     && !looksInternal;
   const fastTalkersOnly = looksTalkers && !looksInternal;
-  const fastPath = fastExternalOnly || fastTalkersOnly;
+  const fastPath = fastExternalOnly || fastTalkersOnly || fastGeneralOnly;
 
   return {
     fastExternalOnly,
     fastTalkersOnly,
+    fastGeneralOnly,
     skipEmbeddings: fastPath,
     skipInternalKnowledge: fastPath,
     skipKnowledgeMemories: fastPath,
@@ -4590,6 +4676,12 @@ function buildChatContextStrategy(query = "", responseProfile = null) {
 function shouldFetchWebContext(query, knowledgeBundle) {
   const hasInternalContext = Boolean(String(knowledgeBundle?.text || "").trim());
   return !hasInternalContext || queryLooksExternalOrCurrent(query);
+}
+
+function talkersQueryNeedsFreshWebContext(query = "") {
+  const normalized = normalizeQuery(query);
+  if (!queryLooksAboutTalkers(normalized)) return false;
+  return /(instagram|facebook|youtube|rede social|redes sociais|post|posts|publicacao|publicação|publicou|publica|blog|site|novidade|novidades|recente|ultim|últim|evento|campanha)/i.test(normalized);
 }
 
 function responseLooksSelfLimiting(text = "") {
@@ -4631,9 +4723,21 @@ function buildExternalContextFallbackAnswer(externalToolContext = null, userLang
 
   if (!lines.length) return "";
   if (String(userLanguage || "pt").startsWith("en")) {
-    return `I found updated public context for this question:\n- ${lines.join("\n- ")}`;
+    return [
+      "Here is the most relevant public context I found for your question:",
+      "",
+      ...lines.map((line) => `- ${line}`),
+      "",
+      "✅ If you want, I can also refine this answer, summarize the key points, or organize it into a clearer comparison.",
+    ].join("\n");
   }
-  return `Encontrei este contexto público atualizado para a sua pergunta:\n- ${lines.join("\n- ")}`;
+  return [
+    "Aqui está o contexto público mais relevante que encontrei para a sua pergunta:",
+    "",
+    ...lines.map((line) => `- ${line}`),
+    "",
+    "✅ Se quiser, eu também posso refinar essa resposta, resumir os pontos principais ou organizar tudo em uma comparação mais clara.",
+  ].join("\n");
 }
 
 function buildTalkersContextFallbackAnswer(talkersPublicBundle = null) {
@@ -4683,7 +4787,7 @@ async function buildConversationKnowledgeContext({
 
   const talkersPublicBundlePromise = contextStrategy.looksTalkers
     ? buildTalkersPublicKnowledgeBundle(text, {
-        limit: 4,
+        limit: 5,
         userLanguage,
       }).catch((err) => {
         console.log("Erro ao montar base publica da Talkers:", err?.message || err);
@@ -4709,9 +4813,10 @@ async function buildConversationKnowledgeContext({
     knowledgeMemoryBundle.text || "",
   ].filter(Boolean).join("\n\n");
 
+  const shouldUseTalkersWebRefresh = contextStrategy.looksTalkers && talkersQueryNeedsFreshWebContext(text);
   const shouldUseExternalTools = contextStrategy.fastExternalOnly
     || shouldFetchWebContext(text, { text: layeredKnowledgeText })
-    || contextStrategy.looksTalkers
+    || shouldUseTalkersWebRefresh
     || contextStrategy.looksExternal;
 
   const externalToolContext = preloadedExternalToolContext
@@ -4719,7 +4824,7 @@ async function buildConversationKnowledgeContext({
     : shouldUseExternalTools
       ? await resolveExternalToolContext(text, {
           userLanguage,
-          forceWebSearch: contextStrategy.looksExternal,
+          forceWebSearch: contextStrategy.looksExternal || shouldUseTalkersWebRefresh,
         }).catch((err) => {
           console.log("Erro ao montar contexto externo:", err?.message || err);
           return null;
@@ -4818,7 +4923,7 @@ async function getConversationFilesContext(conversationId) {
             );
           } else {
             blocks.push(
-              `[${mediaLabel} enviado: ${file.original_name} | ${file.mime_type || "media"}]\nO arquivo foi anexado a conversa, mas nao foi possivel gerar uma transcricao local.`
+        `[${mediaLabel} enviado: ${file.original_name} | ${file.mime_type || "media"}]\nO arquivo foi anexado à conversa, mas não foi possível gerar uma transcrição local.`
             );
           }
         } catch (err) {
@@ -5025,16 +5130,23 @@ function buildOpenAIResponsesRequestBody({
 
 async function postOpenAIResponses(apiKey, requestBody) {
   try {
-    return await fetch("https://api.openai.com/v1/responses", {
+    return await fetchWithRetry("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
+    }, {
+      label: "openai_responses",
+      url: "https://api.openai.com/v1/responses",
+      payload_bytes: Buffer.byteLength(JSON.stringify(requestBody), "utf8"),
     });
   } catch (err) {
-    console.log("Falha de rede ao chamar OpenAI Responses:", err?.message || err);
+    console.error("Falha de rede ao chamar OpenAI Responses:", buildExternalErrorDetails(err, {
+      label: "openai_responses",
+      url: "https://api.openai.com/v1/responses",
+    }));
     return {
       ok: false,
       status: 0,
@@ -5095,7 +5207,8 @@ async function getConversationSupportAssets(conversationId) {
 }
 
 function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
-  if (!OPENAI_PROMPT_ID) return null;
+  const allowReusablePrompt = /^(1|true|yes|on)$/i.test(String(process.env.OPENAI_PROMPT_USE_IN_CHAT || "").trim());
+  if (!OPENAI_PROMPT_ID || !allowReusablePrompt) return null;
 
   const variables = {
     company_name: "Talkers",
@@ -5128,6 +5241,7 @@ async function buildOpenAIInput({
   contextText,
   topicSnapshot = null,
   responseProfile = null,
+  contextStrategy = null,
   currentUser = null,
   relevantMemoryEntries = null,
   visionInputs = null,
@@ -5141,8 +5255,9 @@ async function buildOpenAIInput({
   const intent = responseProfile || analyzeConversationIntent(userText, userLanguage, {
     departments: resolvedUser?.departments || [],
   });
-  const memory = await getConversationMemory(conversationId);
-  const userMemory = await getRelevantUserMemory(userId, userText);
+  const skipPersistentMemory = Boolean(contextStrategy?.fastExternalOnly || contextStrategy?.fastTalkersOnly || contextStrategy?.fastGeneralOnly);
+  const memory = skipPersistentMemory ? "" : await getConversationMemory(conversationId);
+  const userMemory = skipPersistentMemory ? "" : await getRelevantUserMemory(userId, userText);
   const memoryEntries = Array.isArray(relevantMemoryEntries)
     ? relevantMemoryEntries
     : topicShift.isShift
@@ -5186,6 +5301,7 @@ Comportamento:
 - Detecte automaticamente o idioma do usuario e responda nesse idioma.
 - Quando o usuario pedir traducao, traduza para o idioma solicitado mantendo contexto e intencao.
 - Quando documentos estiverem em outro idioma, interprete o conteudo no idioma original, traduza silenciosamente quando necessario e responda no idioma do usuario.
+- Voce e um assistente amplo e inteligente, capaz de responder sobre assuntos gerais, tecnicos, atuais, institucionais e informativos, nao ficando restrito apenas ao contexto da escola.
 - Para perguntas sobre a Talkers, seus cursos, metodologia, contatos, site, presenca publica e comunicacao institucional, priorize a base oficial da Talkers e a base interna quando estiverem disponiveis.
 - Para perguntas sobre processos, materiais, regras, vendas de cursos, atendimento, operacao pedagogica, marketing, financeiro e informacoes da Talkers, priorize sempre a base interna da empresa, a intranet e os arquivos da conversa.
 - Para perguntas gerais, atuais, publicas, de mercado, cotacoes, clima, noticias ou dados recentes, use naturalmente o contexto externo, a busca web e os dados atualizados quando eles aparecerem no contexto.
@@ -5193,11 +5309,14 @@ Comportamento:
 - Analise a intencao antes de responder, identifique a area do negocio e adapte o tom naturalmente.
 - Sempre que fizer sentido, entregue contexto, explicacao, passo a passo, exemplos, melhores praticas, alertas e proximo passo recomendado.
 - Se o pedido envolver explicacao, orientacao, passo a passo, melhoria de texto, organizacao de informacao, sugestoes, traducao, resumo, reescrita, roteiro, mensagem comercial, comunicado ou texto pronto para uso, entregue em markdown bem estruturado, com hierarquia visual clara, blocos curtos e reutilizaveis.
+- Para respostas institucionais, comerciais, explicativas ou comparativas, prefira uma abertura curta, 2 a 5 blocos claros com titulos e bullets objetivos, em vez de um texto corrido confuso.
+- Se a pergunta for sobre uma empresa, marca, curso, produto, servico ou tema publico relevante, responda de forma apresentavel, persuasiva e facil de escanear, como se o usuario pudesse reutilizar a resposta em uma apresentacao ou conversa executiva.
 - Se o usuario mudar de assunto, foque totalmente no tema atual sem arrastar contexto irrelevante.
 - Se faltar informacao suficiente, deixe isso claro e peca complemento.
 - Nunca responda de forma rasa quando a pergunta pedir profundidade ou aplicacao pratica.
 - Nunca se compare negativamente com outros assistentes, nunca diga que tem menos capacidade, e nunca responda com frases como "nao tenho acesso" se houver contexto atual disponivel.
 - Quando houver valor atual, faixa de cotacao, dado publico ou resultado de busca no contexto, responda de forma direta e util, citando a natureza aproximada do dado quando cabivel.
+- Quando fizer sentido, encerre a resposta com um bloco curto no estilo "✅ Se quiser, posso tambem..." e ofereca de 2 a 4 proximos passos uteis, sem exagerar.
 
 Contexto do negocio:
 ${businessContextText}
@@ -5325,6 +5444,7 @@ async function openaiReply({
   baseSources = [],
   topicSnapshot = null,
   responseProfile = null,
+  contextStrategy = null,
   currentUser = null,
   relevantMemoryEntries = null,
   visionInputs = null,
@@ -5335,7 +5455,7 @@ async function openaiReply({
   const apiStartedAt = Date.now();
   if (!apiKey) {
     return {
-      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
+      text: "Não foi possível concluir a resposta agora por indisponibilidade temporária da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: 0,
@@ -5352,6 +5472,7 @@ async function openaiReply({
     contextText,
     topicSnapshot,
     responseProfile,
+    contextStrategy,
     currentUser,
     relevantMemoryEntries,
     visionInputs,
@@ -5405,7 +5526,7 @@ async function openaiReply({
     const body = await resp.text();
     console.log("OpenAI error:", resp.status, body);
     return {
-      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
+      text: "Não foi possível concluir a resposta agora por indisponibilidade temporária da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: Date.now() - apiStartedAt,
@@ -5439,6 +5560,7 @@ async function openaiReplyStream({
   baseSources = [],
   topicSnapshot = null,
   responseProfile = null,
+  contextStrategy = null,
   currentUser = null,
   relevantMemoryEntries = null,
   visionInputs = null,
@@ -5450,7 +5572,7 @@ async function openaiReplyStream({
   const apiStartedAt = Date.now();
   if (!apiKey) {
     return {
-      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
+      text: "Não foi possível concluir a resposta agora por indisponibilidade temporária da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: 0,
@@ -5467,6 +5589,7 @@ async function openaiReplyStream({
     contextText,
     topicSnapshot,
     responseProfile,
+    contextStrategy,
     currentUser,
     relevantMemoryEntries,
     visionInputs,
@@ -5526,7 +5649,7 @@ async function openaiReplyStream({
     const body = await resp.text();
     console.log("OpenAI stream error:", resp.status, body);
     return {
-      text: "Nao foi possivel concluir a resposta agora por indisponibilidade temporaria da IA.",
+      text: "Não foi possível concluir a resposta agora por indisponibilidade temporária da IA.",
       sources: [...(baseSources || [])],
       metrics: {
         api_latency_ms: Date.now() - apiStartedAt,
@@ -7106,7 +7229,7 @@ async function requestOpenAIPlainText(systemText, userText) {
   if (!apiKey) return "";
 
   try {
-    const resp = await fetch("https://api.openai.com/v1/responses", {
+    const resp = await fetchWithRetry("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -7119,17 +7242,27 @@ async function requestOpenAIPlainText(systemText, userText) {
           { role: "user", content: [{ type: "input_text", text: String(userText || "").trim() }] },
         ],
       }),
+    }, {
+      label: "openai_marketing_analysis",
+      url: "https://api.openai.com/v1/responses",
     });
 
     if (!resp.ok) {
-      console.log("Falha analise OpenAI marketing:", resp.status, await resp.text());
+      console.error("Falha analise OpenAI marketing:", {
+        status: resp.status,
+        url: "https://api.openai.com/v1/responses",
+        body: String(await resp.text()).slice(0, 600),
+      });
       return "";
     }
 
     const data = await resp.json();
     return String(data?.output_text || "").trim();
   } catch (err) {
-    console.log("Erro analise OpenAI marketing:", err?.message || err);
+    console.error("Erro analise OpenAI marketing:", buildExternalErrorDetails(err, {
+      label: "openai_marketing_analysis",
+      url: "https://api.openai.com/v1/responses",
+    }));
     return "";
   }
 }
@@ -7655,6 +7788,11 @@ function maskConnectionTarget(value = "") {
 }
 
 async function buildAdminCockpitPayload() {
+  scheduleTalkersKnowledgeSync().catch((err) => {
+    console.error("Erro na sincronização em background da base pública da Talkers:", buildExternalErrorDetails(err, {
+      label: "talkers_public_sync_background",
+    }));
+  });
   const [knowledgeSourceRows, recentProcessingFailureRow, recentTrainingFailureRow, whatsappGroupsRow, whatsappCampaignsRow, whatsappQueueRow, talkersPublicDiagnostics] = await Promise.all([
     all(`SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, sync_status, processing_state_json
            FROM knowledge_sources
@@ -7674,7 +7812,7 @@ async function buildAdminCockpitPayload() {
                 SUM(CASE WHEN send_status='sent' THEN 1 ELSE 0 END) AS sent_total,
                 SUM(CASE WHEN send_status='error' THEN 1 ELSE 0 END) AS error_total
            FROM pedagogical_whatsapp_campaign_items`),
-    syncTalkersPublicKnowledge({ force: false }).catch(() => getTalkersPublicKnowledgeDiagnostics()),
+    Promise.resolve(getTalkersPublicKnowledgeDiagnostics()),
   ]);
 
   const knowledgeCounts = summarizeKnowledgeAdminRows(
@@ -7893,21 +8031,29 @@ async function persistAssistantTextReply({
   allowWeakResponseLog = true,
 }) {
   const persistStartedAt = Date.now();
+  const safeAssistantText = String(assistantText || "").trim();
+  const shouldPersistDerivedMemory = Boolean(
+    safeAssistantText
+      && !responseLooksSelfLimiting(safeAssistantText)
+      && !responseLooksWeak(safeAssistantText)
+  );
   await run(
     "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, 'assistant', ?, ?)",
     [conversationId, assistantText, safeJsonStringify(metaObject, "{}")]
   );
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [conversationId]);
-  await persistReplyMemories({
-    conversationId,
-    userId,
-    userText,
-    assistantText,
-    language: responseLanguage,
-    resetMemory: Boolean(resetMemory),
-  });
+  if (shouldPersistDerivedMemory) {
+    await persistReplyMemories({
+      conversationId,
+      userId,
+      userText,
+      assistantText,
+      language: responseLanguage,
+      resetMemory: Boolean(resetMemory),
+    });
+  }
 
-  if (cacheSemantic && queryEmbedding && knowledgeSignature) {
+  if (shouldPersistDerivedMemory && cacheSemantic && queryEmbedding && knowledgeSignature) {
     await saveSemanticCache(
       userId,
       userText,
@@ -7935,7 +8081,7 @@ async function persistAssistantTextReply({
       },
     });
   }
-  if (allowWeakResponseLog && responseLooksWeak(assistantText)) {
+  if (allowWeakResponseLog && (responseLooksWeak(assistantText) || responseLooksSelfLimiting(assistantText))) {
     await logAiTrainingEvent({
       userId,
       conversationId,
@@ -8354,6 +8500,9 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
 
     if (cachedReply?.text) {
       const safeCachedText = repairMojibakeText(String(cachedReply.text || ""));
+      if (responseLooksSelfLimiting(safeCachedText) || responseLooksWeak(safeCachedText)) {
+        // Ignore low-quality cache hits so they do not contaminate future responses.
+      } else {
       const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
         response_language: cachedReply.responseLanguage || userLanguage,
         sources: cachedReply.sources || [],
@@ -8386,6 +8535,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         status: "cache_hit",
       });
       return res.json({ reply: safeCachedText, meta: cachedMetaObject });
+      }
     }
 
     const contextLayers = await buildConversationKnowledgeContext({
@@ -8448,6 +8598,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       baseSources: contextLayers.mergedKnowledgeSources,
       topicSnapshot,
       responseProfile,
+      contextStrategy,
       currentUser,
       relevantMemoryEntries,
       visionInputs: supportAssets.visionInputs || [],
@@ -8731,6 +8882,9 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
 
     if (cachedReply?.text) {
       const safeCachedText = repairMojibakeText(String(cachedReply.text || ""));
+      if (responseLooksSelfLimiting(safeCachedText) || responseLooksWeak(safeCachedText)) {
+        // Ignore low-quality cache hits so they do not contaminate future streaming responses.
+      } else {
       const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
         response_language: cachedReply.responseLanguage || userLanguage,
         sources: cachedReply.sources || [],
@@ -8763,6 +8917,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       });
       writeEventStreamPacket(res, "done", { reply: safeCachedText, meta: cachedMetaObject });
       return res.end();
+      }
     }
 
     const contextLayers = await buildConversationKnowledgeContext({
@@ -8831,6 +8986,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       baseSources: contextLayers.mergedKnowledgeSources,
       topicSnapshot,
       responseProfile,
+      contextStrategy,
       currentUser,
       relevantMemoryEntries,
       visionInputs: supportAssets.visionInputs || [],
@@ -9901,7 +10057,7 @@ async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
         language: transcriptLanguage || null,
         message: transcriptText
           ? "Transcricao concluida com sucesso."
-          : "Nao foi possivel gerar texto a partir da midia.",
+          : "Não foi possível gerar texto a partir da mídia.",
       });
       await appendKnowledgeProcessingLog(
         knowledgeSourceId,

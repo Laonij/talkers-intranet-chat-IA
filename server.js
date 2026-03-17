@@ -5021,6 +5021,9 @@ ${trimContextText(knowledgeMemoryBundle.text || "Sem memória documental relevan
 Documentos e imagens da conversa:
 ${trimContextText((supportAssets?.used_in_this_turn ? supportAssets.fileContext : "") || "Nenhum anexo usado nesta resposta.")}
 
+Diretriz especial desta resposta:
+${trimContextText(buildAttachmentAnalysisDirective(userText, supportAssets) || "Nenhuma diretriz adicional.")}
+
 Dados externos atualizados e busca web:
 ${trimContextText(externalToolContext?.text || (shouldUseExternalTools ? "Nenhum resultado externo adicional foi encontrado nesta tentativa." : "Nao foi necessario consultar fonte externa nesta pergunta."))}
 `.trim();
@@ -5414,6 +5417,37 @@ function looksLikeArtifactRetry(text = "") {
   const value = normalizeQuery(text);
   if (!value) return false;
   return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse|entao faca|então faça|continue|pode seguir|siga)\b/.test(value);
+}
+
+function hasQuestionIntentForRouting(text = "") {
+  const value = normalizeQuery(text);
+  if (!value) return false;
+  return /(^|\s)(quem|o que|qual|quais|como|porque|por que|me explique|me diz|me diga|voce consegue|você consegue|voces conseguem|vocês conseguem|da para|dá para)(\s|$)|\?/.test(value);
+}
+
+function isMetaArtifactQuestion(text = "") {
+  const value = normalizeQuery(text);
+  if (!value) return false;
+  return /(por que|porque|voce consegue|você consegue|da para|dá para|tem como|como faço|como faco|como eu faco|como eu faço).{0,60}(gerar|criar|fazer|editar).{0,40}(imagem|pdf|docx|word|documento|planilha|excel|audio|áudio|arte|banner)/.test(value);
+}
+
+function shouldAnalyzeRecentAttachments(text = "", supportAssets = null) {
+  const value = normalizeQuery(text);
+  if (!value) return false;
+  const hasAnalysis = /(analise|analisar|explique|explicar|resuma|resumir|interprete|interpretar|compare|comparar|revise|avaliar|diagnostique|comente|melhore|otimize)/.test(value);
+  const mentionsAttachment = /(arquivo|documento|pdf|planilha|excel|imagem|foto|anexo|anexada|anexado|enviei|mandei|subi|nesse|neste|nessa|nesta)/.test(value);
+  const hasSupport = Boolean(supportAssets && (supportAssets.used_in_this_turn || (supportAssets.fileContext || '').trim()));
+  return hasAnalysis && (mentionsAttachment || hasSupport);
+}
+
+function buildAttachmentAnalysisDirective(userText = "", supportAssets = null) {
+  if (!shouldAnalyzeRecentAttachments(userText, supportAssets)) return "";
+  return [
+    "Modo de resposta: analise de anexos.",
+    "Use prioritariamente o conteudo do anexo recente desta conversa para responder.",
+    "Nao gere um novo arquivo, planilha, pdf ou documento, a menos que o usuario peca explicitamente para criar/exportar.",
+    "Responda com diagnostico, observacoes praticas, pontos de melhoria, riscos e recomendacoes objetivas.",
+  ].join("\n");
 }
 
 async function saveArtifactSession(conversationId, artifactType, prompt, referenceImages = []) {
@@ -8753,7 +8787,10 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    const shouldAttemptArtifact = !isMetaArtifactQuestion(text) && !shouldAnalyzeRecentAttachments(text, supportAssets);
+    const artifactRequest = shouldAttemptArtifact
+      ? await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || [])
+      : { prompt: text, kind: null, source: "blocked", referenceImages: supportAssets.imageReferences || [] };
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
@@ -9194,7 +9231,10 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    const shouldAttemptArtifact = !isMetaArtifactQuestion(text) && !shouldAnalyzeRecentAttachments(text, supportAssets);
+    const artifactRequest = shouldAttemptArtifact
+      ? await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || [])
+      : { prompt: text, kind: null, source: "blocked", referenceImages: supportAssets.imageReferences || [] };
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",

@@ -42,6 +42,8 @@ const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
 const { generateArtifact, detectArtifactKind } = require("./lib/generate");
 const { buildDocumentKnowledgeProfile, normalizeDisplayName } = require("./lib/knowledge");
+const { buildTurnExecutionPlan } = require("./lib/chatOrchestrator");
+const { buildStructuredFileContext, parseStructuredConversationFile } = require("./lib/filePipeline");
 const { ocrImage } = require("./lib/ocr");
 const { isAudioFile, isMediaFile, isVideoFile, transcribeAudio, transcribeMedia } = require("./lib/audio");
 const {
@@ -3272,6 +3274,173 @@ async function createFileMessage({
   return { fileId: fileResult.lastID, meta };
 }
 
+async function getRecentConversationFiles(conversationId, limit = 8) {
+  const rows = await all(
+    `SELECT id, original_name, stored_name, mime_type, size_bytes, created_at
+       FROM files
+      WHERE conversation_id=?
+      ORDER BY id DESC
+      LIMIT ?`,
+    [conversationId, limit]
+  );
+
+  return (rows || []).map((row) => ({
+    ...row,
+    fullPath: path.join(uploadsDir, row.stored_name),
+  })).filter((row) => row.stored_name && fs.existsSync(row.fullPath));
+}
+
+function normalizeArtifactSessionStatus(status = "pending") {
+  const safe = String(status || "pending").trim().toLowerCase();
+  return safe || "pending";
+}
+
+function parseArtifactJsonField(value, fallback = []) {
+  const parsed = safeJsonParse(value);
+  return Array.isArray(parsed) ? parsed : fallback;
+}
+
+function hydrateArtifactSessionRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    input_files: parseArtifactJsonField(row.input_files_json, []),
+    image_refs: parseArtifactJsonField(row.image_refs_json, []),
+    status: normalizeArtifactSessionStatus(row.status),
+  };
+}
+
+async function getLatestArtifactSession(conversationId) {
+  const row = await get(
+    `SELECT *
+       FROM artifact_sessions
+      WHERE conversation_id=?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [conversationId]
+  );
+  return hydrateArtifactSessionRow(row);
+}
+
+function buildArtifactSessionFileRefs(files = []) {
+  return (Array.isArray(files) ? files : [])
+    .map((file) => ({
+      file_id: Number(file.id || file.file_id || 0) || null,
+      original_name: file.original_name || file.originalName || "",
+      stored_name: file.stored_name || file.storedName || "",
+      mime_type: file.mime_type || file.mimeType || "",
+      size_bytes: Number(file.size_bytes || file.sizeBytes || 0) || 0,
+    }))
+    .filter((file) => file.original_name || file.stored_name);
+}
+
+function buildArtifactSessionImageRefs(referenceImages = []) {
+  return (Array.isArray(referenceImages) ? referenceImages : [])
+    .map((file) => ({
+      file_id: Number(file.file_id || file.id || 0) || null,
+      original_name: file.originalName || file.original_name || "",
+      stored_name: file.storedName || file.stored_name || path.basename(String(file.fullPath || "")),
+      mime_type: file.mimeType || file.mime_type || "",
+      size_bytes: Number(file.sizeBytes || file.size_bytes || 0) || 0,
+    }))
+    .filter((file) => file.original_name || file.stored_name);
+}
+
+function restoreArtifactSessionImageRefs(session = null) {
+  return (Array.isArray(session?.image_refs) ? session.image_refs : [])
+    .map((file) => {
+      const fullPath = file.stored_name ? path.join(uploadsDir, file.stored_name) : "";
+      if (!fullPath || !fs.existsSync(fullPath)) return null;
+      return {
+        file_id: Number(file.file_id || 0) || null,
+        fullPath,
+        originalName: file.original_name || path.basename(fullPath),
+        mimeType: file.mime_type || "image/png",
+        sizeBytes: Number(file.size_bytes || 0) || 0,
+        storedName: file.stored_name || path.basename(fullPath),
+      };
+    })
+    .filter(Boolean);
+}
+
+async function createArtifactSessionRecord({
+  conversationId,
+  artifactType,
+  intentMode,
+  promptText,
+  resolvedPrompt = null,
+  sourceMessageId = null,
+  source = "current",
+  inputFiles = [],
+  imageRefs = [],
+  status = "pending",
+}) {
+  const created = await run(
+    `INSERT INTO artifact_sessions (
+       conversation_id,
+       artifact_type,
+       intent_mode,
+       prompt_text,
+       resolved_prompt,
+       source_message_id,
+       source,
+       input_files_json,
+       image_refs_json,
+       status,
+       updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      conversationId,
+      artifactType,
+      intentMode || null,
+      promptText,
+      resolvedPrompt || promptText,
+      sourceMessageId || null,
+      source || null,
+      JSON.stringify(buildArtifactSessionFileRefs(inputFiles)),
+      JSON.stringify(buildArtifactSessionImageRefs(imageRefs)),
+      normalizeArtifactSessionStatus(status),
+    ]
+  );
+
+  return getLatestArtifactSession(conversationId);
+}
+
+async function updateArtifactSessionRecord(sessionId, updates = {}) {
+  const sets = [];
+  const params = [];
+  const map = {
+    artifact_type: updates.artifactType,
+    intent_mode: updates.intentMode,
+    prompt_text: updates.promptText,
+    resolved_prompt: updates.resolvedPrompt,
+    source_message_id: updates.sourceMessageId,
+    source: updates.source,
+    status: updates.status ? normalizeArtifactSessionStatus(updates.status) : undefined,
+  };
+
+  Object.entries(map).forEach(([column, value]) => {
+    if (value === undefined) return;
+    sets.push(`${column}=?`);
+    params.push(value);
+  });
+
+  if (updates.inputFiles !== undefined) {
+    sets.push("input_files_json=?");
+    params.push(JSON.stringify(buildArtifactSessionFileRefs(updates.inputFiles)));
+  }
+  if (updates.imageRefs !== undefined) {
+    sets.push("image_refs_json=?");
+    params.push(JSON.stringify(buildArtifactSessionImageRefs(updates.imageRefs)));
+  }
+
+  sets.push("updated_at=datetime('now')");
+  params.push(sessionId);
+
+  await run(`UPDATE artifact_sessions SET ${sets.join(", ")} WHERE id=?`, params);
+  return get("SELECT * FROM artifact_sessions WHERE id=?", [sessionId]).then(hydrateArtifactSessionRow);
+}
+
 async function handleConversationUpload(req, res) {
   const id = Number(req.params.id);
   const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
@@ -4718,12 +4887,13 @@ function buildChatContextStrategy(query = "", responseProfile = null) {
   const talkersNeedsLiveSearch = shouldForceLiveTalkersSearch(query);
   const looksExternal = queryLooksExternalOrCurrent(query) || talkersNeedsLiveSearch;
   const looksInternal = queryLooksInternalWorkspace(query);
+  const attachmentAware = queryExplicitlyReferencesConversationAssets(query) || looksLikeAttachmentAnalysisRequest(query);
   const fastGeneralOnly = !looksExternal && !looksTalkers && !looksInternal;
   const fastExternalOnly = looksExternal
     && !looksTalkers
     && !looksInternal;
   const fastTalkersOnly = looksTalkers && !looksInternal && !talkersNeedsLiveSearch;
-  const fastPath = fastExternalOnly || fastTalkersOnly || fastGeneralOnly;
+  const fastPath = (fastExternalOnly || fastTalkersOnly || fastGeneralOnly) && !attachmentAware;
 
   return {
     fastExternalOnly,
@@ -4736,6 +4906,7 @@ function buildChatContextStrategy(query = "", responseProfile = null) {
     skipConversationMemories: fastPath,
     skipSemanticCache: fastPath,
     skipSupportAssets: fastPath,
+    attachmentAware,
     looksTalkers,
     looksExternal,
     looksInternal,
@@ -5062,7 +5233,7 @@ function shouldShowSourcesForReply(query) {
 async function getConversationFilesContext(conversationId) {
   try {
     const files = await all(
-      `SELECT original_name, stored_name, mime_type
+      `SELECT id, original_name, stored_name, mime_type, size_bytes
          FROM files
         WHERE conversation_id=?
         ORDER BY id DESC
@@ -5075,6 +5246,15 @@ async function getConversationFilesContext(conversationId) {
     for (const file of files) {
       const filePath = path.join(uploadsDir, file.stored_name);
       if (!fs.existsSync(filePath)) continue;
+
+      const structuredProfile = await parseStructuredConversationFile({
+        ...file,
+        fullPath: filePath,
+      }, { uploadsDir }).catch(() => null);
+      if (structuredProfile?.summary_text && structuredProfile.kind !== "media") {
+        blocks.push(buildStructuredFileContext(structuredProfile));
+        continue;
+      }
 
       if (isMediaFile(file.original_name, file.mime_type)) {
         try {
@@ -5168,7 +5348,7 @@ async function getRecentVisionInputs(conversationId, limit = 3) {
 async function getRecentImageReferences(conversationId, limit = 4) {
   try {
     const files = await all(
-      `SELECT original_name, stored_name, mime_type, size_bytes
+      `SELECT id, original_name, stored_name, mime_type, size_bytes
          FROM files
         WHERE conversation_id=?
         ORDER BY id DESC
@@ -5185,10 +5365,12 @@ async function getRecentImageReferences(conversationId, limit = 4) {
       if (!fs.existsSync(fullPath)) continue;
 
       out.push({
+        file_id: Number(file.id || 0) || null,
         fullPath,
         originalName: file.original_name,
         mimeType: file.mime_type || "image/png",
         sizeBytes: Number(file.size_bytes || 0),
+        storedName: file.stored_name,
       });
     }
 
@@ -5352,11 +5534,12 @@ async function getConversationSupportAssets(conversationId) {
   const cached = getChatSupportCacheEntry(cacheKey);
   if (cached) return cached;
 
-  const [fileContext, visionInputs, documentInputs, imageReferences] = await Promise.all([
+  const [fileContext, visionInputs, documentInputs, imageReferences, recentFiles] = await Promise.all([
     getConversationFilesContext(conversationId),
     getRecentVisionInputs(conversationId, 1),
     getRecentDocumentInputs(conversationId, 1),
     getRecentImageReferences(conversationId, 1),
+    getRecentConversationFiles(conversationId, 8),
   ]);
 
   const payload = {
@@ -5365,6 +5548,7 @@ async function getConversationSupportAssets(conversationId) {
     visionInputs,
     documentInputs,
     imageReferences,
+    recentFiles,
   };
   setChatSupportCacheEntry(cacheKey, payload);
   return payload;
@@ -5415,6 +5599,7 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
         visionInputs: [],
         documentInputs: [],
         imageReferences: [],
+        recentFiles: [],
       };
 
   const topicShift = topicSnapshot?.topicShift || { isShift: false, reason: "unknown" };
@@ -5437,6 +5622,7 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
     visionInputs: [],
     documentInputs: [],
     imageReferences: [],
+    recentFiles: Array.isArray(safeAssets.recentFiles) ? safeAssets.recentFiles : [],
     used_in_this_turn: false,
     explicit_reference: explicitAttachmentReference,
   };
@@ -5448,14 +5634,72 @@ function looksLikeArtifactRetry(text = "") {
   return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse)\b/.test(value);
 }
 
-async function resolveArtifactRequestForTurn(conversationId, userText, referenceImages = []) {
-  const currentKind = detectArtifactKind(userText, { referenceImages });
-  if (currentKind) {
-    return { prompt: userText, kind: currentKind, source: "current" };
+function applyExecutionPlanToSupportAssets(supportAssets = null, executionPlan = null) {
+  if (!supportAssets) return supportAssets;
+  if (!executionPlan?.fileContext) return supportAssets;
+  if (!["analyze_attachment", "image_edit"].includes(String(executionPlan?.route?.intent_mode || ""))) {
+    return supportAssets;
+  }
+
+  return {
+    ...supportAssets,
+    fileContext: executionPlan.fileContext,
+    used_in_this_turn: true,
+    explicit_reference: true,
+  };
+}
+
+async function resolveArtifactRequestForTurn(conversationId, userText, referenceImages = [], options = {}) {
+  const latestArtifactSession = options.latestArtifactSession || await getLatestArtifactSession(conversationId);
+  const executionPlan = options.executionPlan || await buildTurnExecutionPlan({
+    userText,
+    recentFiles: Array.isArray(options.recentFiles) ? options.recentFiles : [],
+    latestArtifactSession,
+    referenceImages,
+    uploadsDir,
+  });
+
+  if (["generate_artifact", "image_edit"].includes(executionPlan?.route?.intent_mode)) {
+    return {
+      prompt: userText,
+      resolvedPrompt: userText,
+      kind: executionPlan.route.artifact_kind,
+      source: "current",
+      intentMode: executionPlan.route.intent_mode,
+      inputFiles: executionPlan.selectedFile ? [executionPlan.selectedFile] : [],
+      imageReferences: Array.isArray(referenceImages) ? referenceImages : [],
+      latestArtifactSession,
+      executionPlan,
+    };
+  }
+
+  if (executionPlan?.route?.intent_mode === "continue_artifact" && latestArtifactSession?.artifact_type) {
+    const restoredImageRefs = restoreArtifactSessionImageRefs(latestArtifactSession);
+    return {
+      prompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt_text || userText,
+      resolvedPrompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt_text || userText,
+      kind: latestArtifactSession.artifact_type,
+      source: "artifact_session",
+      intentMode: "continue_artifact",
+      inputFiles: Array.isArray(latestArtifactSession.input_files) ? latestArtifactSession.input_files : [],
+      imageReferences: restoredImageRefs.length ? restoredImageRefs : (Array.isArray(referenceImages) ? referenceImages : []),
+      latestArtifactSession,
+      executionPlan,
+    };
   }
 
   if (!looksLikeArtifactRetry(userText)) {
-    return { prompt: userText, kind: null, source: "none" };
+    return {
+      prompt: userText,
+      resolvedPrompt: userText,
+      kind: null,
+      source: "none",
+      intentMode: executionPlan?.route?.intent_mode || "normal_question",
+      inputFiles: [],
+      imageReferences: [],
+      latestArtifactSession,
+      executionPlan,
+    };
   }
 
   const rows = await all(
@@ -5475,10 +5719,30 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
     if (!candidate) continue;
     const candidateKind = detectArtifactKind(candidate, { referenceImages });
     if (!candidateKind) continue;
-    return { prompt: candidate, kind: candidateKind, source: "history" };
+    return {
+      prompt: candidate,
+      resolvedPrompt: candidate,
+      kind: candidateKind,
+      source: "history",
+      intentMode: "continue_artifact",
+      inputFiles: [],
+      imageReferences: Array.isArray(referenceImages) ? referenceImages : [],
+      latestArtifactSession,
+      executionPlan,
+    };
   }
 
-  return { prompt: userText, kind: null, source: "none" };
+  return {
+    prompt: userText,
+    resolvedPrompt: userText,
+    kind: null,
+    source: "none",
+    intentMode: executionPlan?.route?.intent_mode || "normal_question",
+    inputFiles: [],
+    imageReferences: [],
+    latestArtifactSession,
+    executionPlan,
+  };
 }
 
 function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
@@ -8263,7 +8527,7 @@ async function prepareConversationMessageState({ conversationId, userId, text, r
     await run("UPDATE conversations SET title=? WHERE id=?", [titleFromMessage(text), conversationId]);
   }
 
-  await run(
+  const userMessageResult = await run(
     "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)",
     [conversationId, text]
   );
@@ -8282,6 +8546,7 @@ async function prepareConversationMessageState({ conversationId, userId, text, r
     conversationId,
     conv,
     currentUser,
+    sourceMessageId: Number(userMessageResult?.lastID || 0) || null,
     requestLocale: safeLocale,
     requestLanguage,
     topicSnapshot,
@@ -8657,7 +8922,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
       sessionUser: req.user,
     });
-    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation } = prepared;
+    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation, sourceMessageId } = prepared;
 
     if (moderation.blocked) {
       const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
@@ -8734,23 +8999,85 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
             visionInputs: [],
             documentInputs: [],
             imageReferences: [],
+            recentFiles: [],
           })
         : getConversationSupportAssets(id),
       contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
     ]);
-    const supportAssets = sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot);
+    const latestArtifactSession = await getLatestArtifactSession(id);
+    const executionPlan = await buildTurnExecutionPlan({
+      userText: text,
+      recentFiles: Array.isArray(rawSupportAssets?.recentFiles) ? rawSupportAssets.recentFiles : [],
+      latestArtifactSession,
+      referenceImages: Array.isArray(rawSupportAssets?.imageReferences) ? rawSupportAssets.imageReferences : [],
+      uploadsDir,
+    });
+    const supportAssets = applyExecutionPlanToSupportAssets(
+      sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot),
+      executionPlan
+    );
     const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    if (executionPlan?.route?.intent_mode === "analyze_attachment" && executionPlan.localAnalysisReply) {
+      const localAnalysisMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+        response_locale: requestLocale,
+        structured_file_analysis: true,
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: executionPlan.localAnalysisReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: localAnalysisMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: executionPlan.localAnalysisReply.length,
+        response_bytes: Buffer.byteLength(String(executionPlan.localAnalysisReply || ""), "utf8"),
+        status: "attachment_analysis_local",
+      });
+      return res.json({ reply: executionPlan.localAnalysisReply, meta: localAnalysisMetaObject });
+    }
+
+    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || [], {
+      latestArtifactSession,
+      recentFiles: supportAssets.recentFiles || [],
+      executionPlan,
+    });
+    let activeArtifactSession = null;
+    if (artifactRequest.kind) {
+      activeArtifactSession = await createArtifactSessionRecord({
+        conversationId: id,
+        artifactType: artifactRequest.kind,
+        intentMode: artifactRequest.intentMode,
+        promptText: text,
+        resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
+        sourceMessageId,
+        source: artifactRequest.source,
+        inputFiles: artifactRequest.inputFiles || [],
+        imageRefs: artifactRequest.imageReferences || [],
+        status: "pending",
+      });
+    }
     let artifactError = null;
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
-          prompt: artifactRequest.prompt,
+          prompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: supportAssets.imageReferences || [],
+          referenceImages: artifactRequest.imageReferences || supportAssets.imageReferences || [],
         }).catch((err) => {
           artifactError = err;
           console.log("Erro na geracao de artefato:", err?.message || err);
@@ -8769,14 +9096,9 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       : null;
 
     if (artifactRequest.kind && !artifact && artifactError) {
-      return res.json({
-        reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
-        sources: [],
-        meta: makeStructuredResponseMeta(responseProfile, { response_language: userLanguage, artifact_error: true, artifact_kind: artifactRequest.kind }),
-      });
-    }
-
-    if (artifactRequest.kind && !artifact && artifactError) {
+      if (activeArtifactSession?.id) {
+        await updateArtifactSessionRecord(activeArtifactSession.id, { status: "failed" });
+      }
       return res.json({
         reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
         sources: [],
@@ -8786,6 +9108,12 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
 
     if (artifact) {
       if (!artifact.fullPath) {
+        if (activeArtifactSession?.id) {
+          await updateArtifactSessionRecord(activeArtifactSession.id, {
+            status: "completed",
+            resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
+          });
+        }
         const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
           response_language: userLanguage,
         });
@@ -8827,6 +9155,12 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         role: "assistant",
         content: artifact.reply,
       });
+      if (activeArtifactSession?.id) {
+        await updateArtifactSessionRecord(activeArtifactSession.id, {
+          status: "completed",
+          resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
+        });
+      }
       await persistReplyMemories({
         conversationId: id,
         userId: req.user.sub,
@@ -9109,7 +9443,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
       sessionUser: req.user,
     });
-    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation } = prepared;
+    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation, sourceMessageId } = prepared;
 
     if (moderation.blocked) {
       const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
@@ -9193,23 +9527,86 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
             visionInputs: [],
             documentInputs: [],
             imageReferences: [],
+            recentFiles: [],
           })
         : getConversationSupportAssets(id),
       contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
     ]);
-    const supportAssets = sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot);
+    const latestArtifactSession = await getLatestArtifactSession(id);
+    const executionPlan = await buildTurnExecutionPlan({
+      userText: text,
+      recentFiles: Array.isArray(rawSupportAssets?.recentFiles) ? rawSupportAssets.recentFiles : [],
+      latestArtifactSession,
+      referenceImages: Array.isArray(rawSupportAssets?.imageReferences) ? rawSupportAssets.imageReferences : [],
+      uploadsDir,
+    });
+    const supportAssets = applyExecutionPlanToSupportAssets(
+      sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot),
+      executionPlan
+    );
     const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    if (executionPlan?.route?.intent_mode === "analyze_attachment" && executionPlan.localAnalysisReply) {
+      const localAnalysisMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+        response_locale: requestLocale,
+        structured_file_analysis: true,
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: executionPlan.localAnalysisReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: localAnalysisMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: Date.now() - contextStartedAt,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: executionPlan.localAnalysisReply.length,
+        response_bytes: Buffer.byteLength(String(executionPlan.localAnalysisReply || ""), "utf8"),
+        status: "attachment_analysis_local",
+      });
+      writeEventStreamPacket(res, "done", { reply: executionPlan.localAnalysisReply, meta: localAnalysisMetaObject });
+      return res.end();
+    }
+
+    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || [], {
+      latestArtifactSession,
+      recentFiles: supportAssets.recentFiles || [],
+      executionPlan,
+    });
+    let activeArtifactSession = null;
+    if (artifactRequest.kind) {
+      activeArtifactSession = await createArtifactSessionRecord({
+        conversationId: id,
+        artifactType: artifactRequest.kind,
+        intentMode: artifactRequest.intentMode,
+        promptText: text,
+        resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
+        sourceMessageId,
+        source: artifactRequest.source,
+        inputFiles: artifactRequest.inputFiles || [],
+        imageRefs: artifactRequest.imageReferences || [],
+        status: "pending",
+      });
+    }
     let artifactError = null;
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
-          prompt: artifactRequest.prompt,
+          prompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: supportAssets.imageReferences || [],
+          referenceImages: artifactRequest.imageReferences || supportAssets.imageReferences || [],
         }).catch((err) => {
           artifactError = err;
           console.log("Erro na geracao de artefato:", err?.message || err);
@@ -9227,8 +9624,29 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         })
       : null;
 
+    if (artifactRequest.kind && !artifact && artifactError) {
+      if (activeArtifactSession?.id) {
+        await updateArtifactSessionRecord(activeArtifactSession.id, { status: "failed" });
+      }
+      writeEventStreamPacket(res, "done", {
+        reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
+        meta: makeStructuredResponseMeta(responseProfile, {
+          response_language: userLanguage,
+          artifact_error: true,
+          artifact_kind: artifactRequest.kind,
+        }),
+      });
+      return res.end();
+    }
+
     if (artifact) {
       if (!artifact.fullPath) {
+        if (activeArtifactSession?.id) {
+          await updateArtifactSessionRecord(activeArtifactSession.id, {
+            status: "completed",
+            resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
+          });
+        }
         const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
           response_language: userLanguage,
         });
@@ -9270,6 +9688,12 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         role: "assistant",
         content: artifact.reply,
       });
+      if (activeArtifactSession?.id) {
+        await updateArtifactSessionRecord(activeArtifactSession.id, {
+          status: "completed",
+          resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
+        });
+      }
       await persistReplyMemories({
         conversationId: id,
         userId: req.user.sub,
@@ -11796,25 +12220,6 @@ function startServer() {
 }
 
 startServer();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

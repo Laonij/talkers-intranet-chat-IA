@@ -1071,57 +1071,6 @@ function mapDepartmentRow(row) {
   };
 }
 
-function sqlBoolTrueLiteral() {
-  return DB_CLIENT === "postgres" ? "TRUE" : "1";
-}
-
-function sqlBoolFalseLiteral() {
-  return DB_CLIENT === "postgres" ? "FALSE" : "0";
-}
-
-function sqlBoolCoalesce(columnSql, defaultValue = true) {
-  return `COALESCE(${columnSql}, ${defaultValue ? sqlBoolTrueLiteral() : sqlBoolFalseLiteral()})`;
-}
-
-async function saveArtifactSession(conversationId, artifactType, promptText, options = {}) {
-  try {
-    await run(
-      "INSERT INTO artifact_sessions (conversation_id, artifact_type, prompt_text, source_text, input_files_json, image_refs_json, status, last_error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-      [
-        conversationId,
-        artifactType,
-        promptText,
-        options.sourceText || null,
-        JSON.stringify(options.inputFiles || []),
-        JSON.stringify(options.imageRefs || []),
-        options.status || "pending",
-        options.lastError || null,
-      ]
-    );
-  } catch (err) {
-    console.log("Erro ao salvar artifact_session:", err?.message || err);
-  }
-}
-
-async function getLatestArtifactSession(conversationId) {
-  try {
-    const row = await get(
-      "SELECT * FROM artifact_sessions WHERE conversation_id=? ORDER BY id DESC LIMIT 1",
-      [conversationId]
-    );
-    if (!row) return null;
-    return {
-      ...row,
-      input_files: safeJsonParse(row.input_files_json || "[]") || [],
-      image_refs: safeJsonParse(row.image_refs_json || "[]") || [],
-    };
-  } catch (err) {
-    console.log("Erro ao carregar artifact_session:", err?.message || err);
-    return null;
-  }
-}
-
-
 function mapDepartmentSubmenuRow(row) {
   if (!row) return null;
   return {
@@ -1148,7 +1097,7 @@ async function listDepartmentCatalog(options = {}) {
   const rows = await all(
     `SELECT id, slug, name, description, icon, is_active, sort_order, metadata_json, created_at, updated_at
        FROM departments
-      ${includeInactive ? '' : `WHERE ${sqlBoolCoalesce('is_active')} = ${sqlBoolTrueLiteral()}`}
+      ${includeInactive ? '' : `WHERE ${buildDbTruthySql('is_active')}`}
       ORDER BY sort_order ASC, name ASC`
   );
   return rows.map(mapDepartmentRow).filter(Boolean);
@@ -1162,7 +1111,7 @@ async function listDepartmentSubmenus(options = {}) {
   const where = [];
   const params = [];
   if (!includeInactive) {
-    where.push(`${sqlBoolCoalesce('ds.is_active')} = ${sqlBoolTrueLiteral()}`);
+    where.push(buildDbTruthySql("is_active", "ds"));
   }
   if (safeDepartmentIds.length) {
     where.push(`ds.department_id IN (${safeDepartmentIds.map(() => '?').join(', ')})`);
@@ -1204,8 +1153,8 @@ async function listIntranetAnnouncements(options = {}) {
             users.name AS author_name
        FROM intranet_announcements
   LEFT JOIN users ON users.id = intranet_announcements.author_user_id
-      ${includeInactive ? '' : `WHERE ${sqlBoolCoalesce('intranet_announcements.is_active')} = ${sqlBoolTrueLiteral()}`}
-      ORDER BY ${sqlBoolCoalesce('intranet_announcements.is_pinned', false)} DESC, datetime(intranet_announcements.created_at) DESC, intranet_announcements.id DESC
+      ${includeInactive ? '' : `WHERE ${buildDbTruthySql('is_active', 'intranet_announcements')}`}
+      ORDER BY ${buildDbFalseySql('is_pinned', 'intranet_announcements')} DESC, intranet_announcements.created_at DESC, intranet_announcements.id DESC
       LIMIT ?`,
     [limit]
   );
@@ -1295,7 +1244,7 @@ async function getUserDepartmentDetails(userId, options = {}) {
        FROM user_departments ud
        JOIN departments d ON d.id = ud.department_id
       WHERE ud.user_id=?
-        ${includeInactive ? '' : `AND ${sqlBoolCoalesce('d.is_active')} = ${sqlBoolTrueLiteral()}`}
+        ${includeInactive ? '' : `AND ${buildDbTruthySql('is_active', 'd')}`}
       ORDER BY ud.is_primary DESC, d.sort_order ASC, d.name ASC`,
     [userId]
   );
@@ -5117,7 +5066,7 @@ async function getConversationFilesContext(conversationId) {
          FROM files
         WHERE conversation_id=?
         ORDER BY id DESC
-        LIMIT 4`,
+        LIMIT 1`,
       [conversationId]
     );
 
@@ -5405,9 +5354,9 @@ async function getConversationSupportAssets(conversationId) {
 
   const [fileContext, visionInputs, documentInputs, imageReferences] = await Promise.all([
     getConversationFilesContext(conversationId),
-    getRecentVisionInputs(conversationId, 3),
-    getRecentDocumentInputs(conversationId, 2),
-    getRecentImageReferences(conversationId, 4),
+    getRecentVisionInputs(conversationId, 1),
+    getRecentDocumentInputs(conversationId, 1),
+    getRecentImageReferences(conversationId, 1),
   ]);
 
   const payload = {
@@ -5427,6 +5376,36 @@ function queryExplicitlyReferencesConversationAssets(query = "") {
   return /(arquivo|arquivos|documento|documentos|doc|docs|pdf|planilha|planilhas|imagem|imagens|foto|fotos|anexo|anexos|anexado|anexada|anexei|enviei|enviado|enviada|mandei|subi|upload|analisar o arquivo|com base no arquivo|com base no documento|nesse arquivo|neste arquivo|nesse documento|neste documento|nessa imagem|nesta imagem|nessa planilha|nesta planilha)/i.test(value);
 }
 
+function looksLikeAttachmentAnalysisRequest(query = "") {
+  const value = normalizeQuery(query);
+  if (!value) return false;
+  return /(analise|analisar|resuma|resumir|explique|explicar|interprete|interpretar|compare|comparar|diagnostique|avaliar|avalie)/i.test(value)
+    && /(arquivo|documento|pdf|planilha|excel|xlsx|imagem|foto|anexo|enviado|enviada|nessa|nesta|esse|esta|isso)/i.test(value);
+}
+
+function shouldUseRecentVisualAsset(userText = "", supportAssets = null) {
+  const value = normalizeQuery(userText);
+  if (!value) return false;
+  const hasRecentImage = Array.isArray(supportAssets?.imageReferences) && supportAssets.imageReferences.length > 0;
+  if (!hasRecentImage) return false;
+  if (queryExplicitlyReferencesConversationAssets(value)) return true;
+  return /(transforme|transformar|anime|viking|avatar|retrato|estilo|desenhada|desenho|ilustracao|versao|versão|edite|minha foto|minha imagem|me transforme)/i.test(value);
+}
+
+function buildDbTruthySql(column, alias = null) {
+  const target = alias ? `${alias}.${column}` : column;
+  return DB_CLIENT === "postgres"
+    ? `COALESCE(${target}, TRUE) = TRUE`
+    : `COALESCE(${target}, 1) = 1`;
+}
+
+function buildDbFalseySql(column, alias = null) {
+  const target = alias ? `${alias}.${column}` : column;
+  return DB_CLIENT === "postgres"
+    ? `COALESCE(${target}, FALSE)`
+    : `COALESCE(${target}, 0)`;
+}
+
 function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topicSnapshot = null) {
   const safeAssets = supportAssets && typeof supportAssets === "object"
     ? supportAssets
@@ -5440,15 +5419,15 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
 
   const topicShift = topicSnapshot?.topicShift || { isShift: false, reason: "unknown" };
   const explicitAttachmentReference = queryExplicitlyReferencesConversationAssets(userText);
-  const artifactRetry = looksLikeArtifactRetry(userText);
-  const shouldUseAssets = artifactRetry || (!topicShift.isShift && explicitAttachmentReference);
+  const analysisRequest = looksLikeAttachmentAnalysisRequest(userText);
+  const recentVisualRequest = shouldUseRecentVisualAsset(userText, safeAssets);
+  const shouldUseAssets = !topicShift.isShift && (explicitAttachmentReference || analysisRequest || recentVisualRequest);
 
   if (shouldUseAssets) {
     return {
       ...safeAssets,
       used_in_this_turn: true,
       explicit_reference: explicitAttachmentReference,
-      artifact_retry_assets: artifactRetry,
     };
   }
 
@@ -5460,80 +5439,46 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
     imageReferences: [],
     used_in_this_turn: false,
     explicit_reference: explicitAttachmentReference,
-    artifact_retry_assets: artifactRetry,
   };
 }
 
 function looksLikeArtifactRetry(text = "") {
   const value = normalizeQuery(text);
   if (!value) return false;
-  return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse|entao faca|então faça|entao gere|então gere|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento|continue|continuar|siga|siga em frente|pode continuar|pode seguir)$/.test(value);
-}
-
-function looksLikeAttachmentAnalysisTurn(text = "") {
-  const value = normalizeQuery(text);
-  if (!value) return false;
-  const hasAnalysisIntent = /(analise|analisar|explica|explique|resuma|resumir|interprete|interpretar|compare|comparar|revise|avaliar|avalie|diagnostique|comente|melhore|melhorar|otimize)/.test(value);
-  const hasAttachmentCue = /(arquivo|anexo|anexada|anexado|planilha|pdf|documento|foto|imagem|enviei|mandei|subi|essa|esse|isso|dessa|desse|deste|desta)/.test(value);
-  return hasAnalysisIntent && hasAttachmentCue;
-}
-
-function looksLikeGenericArtifactContinuation(text = "") {
-  const value = normalizeQuery(text);
-  if (!value) return false;
-  return /^(ok|okay|sim|pode gerar|gere|faça|faca|entao faca|então faça|entao gere|então gere|tente novamente|gere novamente|faça novamente|faca novamente|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento|faça a ultima solicitacao|faca a ultima solicitacao|gere isso|gere essa|gere esse|continue|pode continuar|pode seguir|siga em frente)$/.test(value);
+  return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse)\b/.test(value);
 }
 
 async function resolveArtifactRequestForTurn(conversationId, userText, referenceImages = []) {
   const currentKind = detectArtifactKind(userText, { referenceImages });
-  const wantsRetry = looksLikeArtifactRetry(userText);
-
-  if (currentKind && !looksLikeGenericArtifactContinuation(userText)) {
-    return { prompt: userText, kind: currentKind, source: "current", referenceImages };
+  if (currentKind) {
+    return { prompt: userText, kind: currentKind, source: "current" };
   }
 
-  if (wantsRetry) {
-    const latest = await getLatestArtifactSession(conversationId);
-    if (latest?.artifact_type && latest?.prompt_text) {
-      const mergedImages = Array.isArray(referenceImages) && referenceImages.length
-        ? referenceImages
-        : Array.isArray(latest.image_refs) ? latest.image_refs : [];
-      return {
-        prompt: latest.prompt_text,
-        kind: latest.artifact_type,
-        source: "artifact_session",
-        referenceImages: mergedImages,
-      };
-    }
-  }
-
-  if (!wantsRetry) {
-    return { prompt: userText, kind: currentKind, source: currentKind ? "current" : "none", referenceImages };
+  if (!looksLikeArtifactRetry(userText)) {
+    return { prompt: userText, kind: null, source: "none" };
   }
 
   const rows = await all(
-    `SELECT role, content, meta_json
+    `SELECT role, content
        FROM messages
       WHERE conversation_id=?
+        AND role='user'
         AND content IS NOT NULL
         AND TRIM(content)<>''
       ORDER BY id DESC
-      LIMIT 40`,
+      LIMIT 20`,
     [conversationId]
   );
 
   for (const row of rows) {
     const candidate = String(row?.content || "").trim();
     if (!candidate) continue;
-    if (normalizeQuery(candidate) === normalizeQuery(userText)) continue;
-    if (row.role !== 'user') continue;
-    if (looksLikeAttachmentAnalysisTurn(candidate)) continue;
     const candidateKind = detectArtifactKind(candidate, { referenceImages });
     if (!candidateKind) continue;
-    return { prompt: candidate, kind: candidateKind, source: "history", referenceImages };
+    return { prompt: candidate, kind: candidateKind, source: "history" };
   }
 
-  return { prompt: userText, kind: currentKind, source: currentKind ? "current" : "none", referenceImages };
+  return { prompt: userText, kind: null, source: "none" };
 }
 
 function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
@@ -8798,39 +8743,18 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const shouldBypassArtifactGeneration = looksLikeAttachmentAnalysisTurn(text) && supportAssets.used_in_this_turn;
-    const artifactRequest = shouldBypassArtifactGeneration
-      ? { prompt: text, kind: null, source: "analysis" }
-      : await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
-
-    if (artifactRequest.kind) {
-      await saveArtifactSession(id, artifactRequest.kind, artifactRequest.prompt, {
-        sourceText: text,
-        imageRefs: artifactRequest.referenceImages || supportAssets.imageReferences || [],
-        status: "pending",
-      });
-    }
-
+    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    let artifactError = null;
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
           prompt: artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: artifactRequest.referenceImages || supportAssets.imageReferences || [],
-        }).catch(async (err) => {
+          referenceImages: supportAssets.imageReferences || [],
+        }).catch((err) => {
+          artifactError = err;
           console.log("Erro na geracao de artefato:", err?.message || err);
-          if (artifactRequest.kind) {
-            await saveArtifactSession(id, artifactRequest.kind, artifactRequest.prompt, {
-              sourceText: text,
-              imageRefs: artifactRequest.referenceImages || supportAssets.imageReferences || [],
-              status: "failed",
-              lastError: String(err?.message || err || "artifact_failed"),
-            });
-          }
-          return {
-            kind: "message",
-            reply: "Tentei gerar esse artefato agora, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns segundos com o mesmo pedido.",
-          };
+          return null;
         })
       : null;
 
@@ -8843,6 +8767,22 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
           return null;
         })
       : null;
+
+    if (artifactRequest.kind && !artifact && artifactError) {
+      return res.json({
+        reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
+        sources: [],
+        meta: makeStructuredResponseMeta(responseProfile, { response_language: userLanguage, artifact_error: true, artifact_kind: artifactRequest.kind }),
+      });
+    }
+
+    if (artifactRequest.kind && !artifact && artifactError) {
+      return res.json({
+        reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
+        sources: [],
+        meta: makeStructuredResponseMeta(responseProfile, { response_language: userLanguage, artifact_error: true, artifact_kind: artifactRequest.kind }),
+      });
+    }
 
     if (artifact) {
       if (!artifact.fullPath) {
@@ -8860,13 +8800,6 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
           resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
           allowWeakResponseLog: false,
         });
-        if (artifactRequest.kind) {
-          await saveArtifactSession(id, artifactRequest.kind, artifactRequest.prompt, {
-            sourceText: text,
-            imageRefs: artifactRequest.referenceImages || supportAssets.imageReferences || [],
-            status: "completed",
-          });
-        }
         const contextAssemblyMs = Date.now() - contextStartedAt;
         finalizeChatPerformanceSample(perfSample, {
           total_response_ms: Date.now() - perfSample.started_at,
@@ -8902,13 +8835,6 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         language: userLanguage,
         resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
       });
-      if (artifactRequest.kind) {
-        await saveArtifactSession(id, artifactRequest.kind, artifactRequest.prompt, {
-          sourceText: text,
-          imageRefs: artifactRequest.referenceImages || supportAssets.imageReferences || [],
-          status: "completed",
-        });
-      }
       const contextAssemblyMs = Date.now() - contextStartedAt;
       finalizeChatPerformanceSample(perfSample, {
         total_response_ms: Date.now() - perfSample.started_at,
@@ -9276,30 +9202,18 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const shouldBypassArtifactGeneration = looksLikeAttachmentAnalysisTurn(text) && supportAssets.used_in_this_turn;
-    const artifactRequest = shouldBypassArtifactGeneration
-      ? { prompt: text, kind: null, source: "analysis" }
-      : await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
+    let artifactError = null;
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
           prompt: artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: artifactRequest.referenceImages || supportAssets.imageReferences || [],
-        }).catch(async (err) => {
+          referenceImages: supportAssets.imageReferences || [],
+        }).catch((err) => {
+          artifactError = err;
           console.log("Erro na geracao de artefato:", err?.message || err);
-          if (artifactRequest.kind) {
-            await saveArtifactSession(id, artifactRequest.kind, artifactRequest.prompt, {
-              sourceText: text,
-              imageRefs: artifactRequest.referenceImages || supportAssets.imageReferences || [],
-              status: "failed",
-              lastError: String(err?.message || err || "artifact_failed"),
-            });
-          }
-          return {
-            kind: "message",
-            reply: "Tentei gerar esse artefato agora, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns segundos com o mesmo pedido.",
-          };
+          return null;
         })
       : null;
 

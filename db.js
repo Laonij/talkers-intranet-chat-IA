@@ -70,6 +70,115 @@ function sanitizeLegacySqliteValue(value) {
   return value;
 }
 
+const ARTIFACT_SESSION_CANONICAL_COLUMNS = [
+  "id",
+  "conversation_id",
+  "artifact_type",
+  "intent_mode",
+  "prompt",
+  "resolved_prompt",
+  "source_message_id",
+  "input_files_json",
+  "image_refs_json",
+  "status",
+  "created_at",
+  "updated_at",
+];
+
+const LEGACY_ARTIFACT_SESSION_COLUMN_ALIASES = {
+  conversationid: "conversation_id",
+  artifacttype: "artifact_type",
+  intentmode: "intent_mode",
+  prompttext: "prompt",
+  prompt_text: "prompt",
+  resolvedprompt: "resolved_prompt",
+  sourcemessageid: "source_message_id",
+  source_messageid: "source_message_id",
+  inputfilesjson: "input_files_json",
+  image_refsjson: "image_refs_json",
+  imagerefsjson: "image_refs_json",
+  createdat: "created_at",
+  updatedat: "updated_at",
+};
+
+function normalizeArtifactSessionStatus(status = "pending") {
+  const safe = String(status || "pending").trim().toLowerCase();
+  if (!safe) return "pending";
+  if (safe === "done" || safe === "complete") return "completed";
+  return safe;
+}
+
+function parseArtifactSessionJsonField(value, fallback = []) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function parseArtifactSessionRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    prompt: sanitizeText(row.prompt),
+    resolved_prompt: sanitizeText(row.resolved_prompt || row.prompt || ""),
+    input_files: parseArtifactSessionJsonField(row.input_files_json, []),
+    image_refs: parseArtifactSessionJsonField(row.image_refs_json, []),
+    status: normalizeArtifactSessionStatus(row.status),
+  };
+}
+
+function normalizeArtifactSessionPayload(payload = {}) {
+  const conversationId = Number(payload.conversationId || payload.conversation_id || 0) || null;
+  const sourceMessageId = Number(payload.sourceMessageId || payload.source_message_id || 0) || null;
+  const prompt = sanitizeText(payload.prompt || payload.promptText || "");
+  const resolvedPrompt = sanitizeText(payload.resolvedPrompt || payload.resolved_prompt || prompt || "");
+  return {
+    conversation_id: conversationId,
+    artifact_type: sanitizeText(payload.artifactType || payload.artifact_type || ""),
+    intent_mode: sanitizeText(payload.intentMode || payload.intent_mode || null),
+    prompt,
+    resolved_prompt: resolvedPrompt || prompt,
+    source_message_id: sourceMessageId,
+    input_files_json: JSON.stringify(Array.isArray(payload.inputFiles || payload.input_files) ? (payload.inputFiles || payload.input_files) : []),
+    image_refs_json: JSON.stringify(Array.isArray(payload.imageRefs || payload.image_refs) ? (payload.imageRefs || payload.image_refs) : []),
+    status: normalizeArtifactSessionStatus(payload.status || "pending"),
+  };
+}
+
+function normalizeLegacyArtifactSessionRow(row = {}) {
+  const normalized = {};
+  for (const [key, value] of Object.entries(row || {})) {
+    const canonicalKey = LEGACY_ARTIFACT_SESSION_COLUMN_ALIASES[key] || key;
+    if (!ARTIFACT_SESSION_CANONICAL_COLUMNS.includes(canonicalKey)) continue;
+    normalized[canonicalKey] = sanitizeLegacySqliteValue(value);
+  }
+
+  normalized.prompt = sanitizeText(
+    normalized.prompt
+    || row.prompt
+    || row.prompt_text
+    || row.prompttext
+    || ""
+  );
+  normalized.resolved_prompt = sanitizeText(
+    normalized.resolved_prompt
+    || row.resolved_prompt
+    || row.resolvedprompt
+    || normalized.prompt
+    || ""
+  );
+  normalized.status = normalizeArtifactSessionStatus(normalized.status || row.status || "pending");
+  normalized.input_files_json = typeof normalized.input_files_json === "string"
+    ? sanitizeText(normalized.input_files_json)
+    : JSON.stringify([]);
+  normalized.image_refs_json = typeof normalized.image_refs_json === "string"
+    ? sanitizeText(normalized.image_refs_json)
+    : JSON.stringify([]);
+  return normalized;
+}
+
 function translateSqliteNowExpression(kind, amountText, unitText) {
   const amount = Number(amountText || 0);
   const unit = String(unitText || "day").trim().toLowerCase();
@@ -153,6 +262,333 @@ function closeSqlite(dbConn) {
   return new Promise((resolve, reject) => {
     dbConn.close((err) => (err ? reject(err) : resolve()));
   });
+}
+
+async function sqliteTableExists(tableName) {
+  const row = await getSqlite(
+    "SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=lower(?) LIMIT 1",
+    [tableName]
+  );
+  return Boolean(row?.name);
+}
+
+async function pgTableExists(tableName) {
+  const result = await pgPool.query(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM information_schema.tables
+        WHERE table_schema = current_schema()
+          AND lower(table_name) = lower($1)
+     ) AS exists`,
+    [tableName]
+  );
+  return Boolean(result.rows[0]?.exists);
+}
+
+async function getSqliteTableColumns(tableName) {
+  try {
+    return await allSqlite(`PRAGMA table_info(${tableName})`);
+  } catch {
+    return [];
+  }
+}
+
+async function getPostgresTableColumns(tableName) {
+  const result = await pgPool.query(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND lower(table_name) = lower($1)`,
+    [tableName]
+  );
+  return result.rows.map((row) => row.column_name);
+}
+
+async function ensureArtifactSessionsSchemaSqlite() {
+  const legacyExists = await sqliteTableExists("artifactsessions");
+  const canonicalExists = await sqliteTableExists("artifact_sessions");
+  if (legacyExists && !canonicalExists) {
+    await execSqlite("ALTER TABLE artifactsessions RENAME TO artifact_sessions");
+  }
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS artifact_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      artifact_type TEXT NOT NULL,
+      intent_mode TEXT,
+      prompt TEXT NOT NULL,
+      resolved_prompt TEXT,
+      source_message_id INTEGER,
+      input_files_json TEXT,
+      image_refs_json TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  const columns = await getSqliteTableColumns("artifact_sessions");
+  const columnNames = new Set(columns.map((column) => column.name));
+
+  if (legacyExists && canonicalExists) {
+    const legacyRows = await allSqlite("SELECT * FROM artifactsessions ORDER BY id ASC");
+    for (const legacyRow of legacyRows) {
+      const normalizedRow = normalizeLegacyArtifactSessionRow(legacyRow);
+      const entries = Object.entries(normalizedRow).filter(([, value]) => value !== undefined);
+      if (!entries.length) continue;
+      const insertColumns = entries.map(([key]) => key).join(", ");
+      const placeholders = entries.map(() => "?").join(", ");
+      const values = entries.map(([, value]) => value);
+      try {
+        await execSqlite(
+          `INSERT OR IGNORE INTO artifact_sessions (${insertColumns}) VALUES (${placeholders})`,
+          values
+        );
+      } catch (err) {
+        console.error("Falha ao migrar artifact session legada no SQLite:", {
+          row_id: legacyRow?.id || null,
+          message: err?.message || String(err || "sqlite_artifact_session_migration_failed"),
+        });
+      }
+    }
+  }
+
+  const addColumnSql = {
+    conversation_id: "ALTER TABLE artifact_sessions ADD COLUMN conversation_id INTEGER;",
+    artifact_type: "ALTER TABLE artifact_sessions ADD COLUMN artifact_type TEXT;",
+    intent_mode: "ALTER TABLE artifact_sessions ADD COLUMN intent_mode TEXT;",
+    prompt: "ALTER TABLE artifact_sessions ADD COLUMN prompt TEXT;",
+    resolved_prompt: "ALTER TABLE artifact_sessions ADD COLUMN resolved_prompt TEXT;",
+    source_message_id: "ALTER TABLE artifact_sessions ADD COLUMN source_message_id INTEGER;",
+    input_files_json: "ALTER TABLE artifact_sessions ADD COLUMN input_files_json TEXT;",
+    image_refs_json: "ALTER TABLE artifact_sessions ADD COLUMN image_refs_json TEXT;",
+    status: "ALTER TABLE artifact_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';",
+    created_at: "ALTER TABLE artifact_sessions ADD COLUMN created_at TEXT;",
+    updated_at: "ALTER TABLE artifact_sessions ADD COLUMN updated_at TEXT;",
+  };
+
+  for (const [columnName, sql] of Object.entries(addColumnSql)) {
+    if (!columnNames.has(columnName)) {
+      await execSqlite(sql);
+      columnNames.add(columnName);
+    }
+  }
+
+  const copyLegacyColumn = async (legacyName, canonicalName) => {
+    if (!columnNames.has(legacyName) || !columnNames.has(canonicalName)) return;
+    await execSqlite(
+      `UPDATE artifact_sessions
+          SET ${canonicalName} = COALESCE(${canonicalName}, ${legacyName})
+        WHERE (${canonicalName} IS NULL OR ${canonicalName} = '')`
+    );
+  };
+
+  await copyLegacyColumn("prompt_text", "prompt");
+  await copyLegacyColumn("prompttext", "prompt");
+  await copyLegacyColumn("resolvedprompt", "resolved_prompt");
+  await copyLegacyColumn("conversationid", "conversation_id");
+  await copyLegacyColumn("artifacttype", "artifact_type");
+  await copyLegacyColumn("intentmode", "intent_mode");
+  await copyLegacyColumn("source_messageid", "source_message_id");
+  await copyLegacyColumn("sourcemessageid", "source_message_id");
+  await copyLegacyColumn("inputfilesjson", "input_files_json");
+  await copyLegacyColumn("imagerefsjson", "image_refs_json");
+  await copyLegacyColumn("createdat", "created_at");
+  await copyLegacyColumn("updatedat", "updated_at");
+
+  await execSqlite("UPDATE artifact_sessions SET prompt = COALESCE(prompt, '') WHERE prompt IS NULL;");
+  await execSqlite("UPDATE artifact_sessions SET artifact_type = COALESCE(artifact_type, 'artifact') WHERE artifact_type IS NULL OR artifact_type='';");
+  await execSqlite("UPDATE artifact_sessions SET resolved_prompt = COALESCE(resolved_prompt, prompt, '') WHERE resolved_prompt IS NULL OR resolved_prompt='';");
+  await execSqlite("UPDATE artifact_sessions SET status = COALESCE(NULLIF(status, ''), 'pending') WHERE status IS NULL OR status='';");
+  await execSqlite("UPDATE artifact_sessions SET created_at = COALESCE(created_at, datetime('now')) WHERE created_at IS NULL OR created_at='';");
+  await execSqlite("UPDATE artifact_sessions SET updated_at = COALESCE(updated_at, created_at, datetime('now')) WHERE updated_at IS NULL OR updated_at='';");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_artifact_sessions_conversation_id ON artifact_sessions(conversation_id, id DESC);");
+}
+
+async function ensureArtifactSessionsSchemaPostgres() {
+  const legacyExists = await pgTableExists("artifactsessions");
+  const canonicalExists = await pgTableExists("artifact_sessions");
+
+  if (legacyExists && !canonicalExists) {
+    await pgPool.query("ALTER TABLE IF EXISTS artifactsessions RENAME TO artifact_sessions");
+  }
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS artifact_sessions (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      conversation_id INTEGER NOT NULL,
+      artifact_type TEXT NOT NULL,
+      intent_mode TEXT,
+      prompt TEXT NOT NULL,
+      resolved_prompt TEXT,
+      source_message_id INTEGER,
+      input_files_json TEXT,
+      image_refs_json TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  let columnNames = new Set(await getPostgresTableColumns("artifact_sessions"));
+
+  const renameColumnIfNeeded = async (legacyName, canonicalName) => {
+    if (columnNames.has(canonicalName) || !columnNames.has(legacyName)) return;
+    await pgPool.query(`ALTER TABLE artifact_sessions RENAME COLUMN ${quoteIdent(legacyName)} TO ${quoteIdent(canonicalName)}`);
+    columnNames.delete(legacyName);
+    columnNames.add(canonicalName);
+  };
+
+  await renameColumnIfNeeded("prompt_text", "prompt");
+  await renameColumnIfNeeded("prompttext", "prompt");
+  await renameColumnIfNeeded("resolvedprompt", "resolved_prompt");
+  await renameColumnIfNeeded("source_messageid", "source_message_id");
+  await renameColumnIfNeeded("sourcemessageid", "source_message_id");
+  await renameColumnIfNeeded("inputfilesjson", "input_files_json");
+  await renameColumnIfNeeded("imagerefsjson", "image_refs_json");
+  await renameColumnIfNeeded("conversationid", "conversation_id");
+  await renameColumnIfNeeded("artifacttype", "artifact_type");
+  await renameColumnIfNeeded("intentmode", "intent_mode");
+  await renameColumnIfNeeded("createdat", "created_at");
+  await renameColumnIfNeeded("updatedat", "updated_at");
+
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS conversation_id INTEGER");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS artifact_type TEXT");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS intent_mode TEXT");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS prompt TEXT");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS resolved_prompt TEXT");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS source_message_id INTEGER");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS input_files_json TEXT");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS image_refs_json TEXT");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS status TEXT");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ");
+  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ");
+
+  columnNames = new Set(await getPostgresTableColumns("artifact_sessions"));
+
+  const backfillLegacyColumn = async (legacyName, canonicalName) => {
+    if (!columnNames.has(legacyName) || !columnNames.has(canonicalName)) return;
+    await pgPool.query(
+      `UPDATE artifact_sessions
+          SET ${quoteIdent(canonicalName)} = COALESCE(${quoteIdent(canonicalName)}, ${quoteIdent(legacyName)})
+        WHERE ${quoteIdent(canonicalName)} IS NULL`
+    );
+  };
+
+  await backfillLegacyColumn("prompt_text", "prompt");
+  await backfillLegacyColumn("prompttext", "prompt");
+  await backfillLegacyColumn("resolvedprompt", "resolved_prompt");
+  await backfillLegacyColumn("conversationid", "conversation_id");
+  await backfillLegacyColumn("artifacttype", "artifact_type");
+  await backfillLegacyColumn("intentmode", "intent_mode");
+  await backfillLegacyColumn("source_messageid", "source_message_id");
+  await backfillLegacyColumn("sourcemessageid", "source_message_id");
+  await backfillLegacyColumn("inputfilesjson", "input_files_json");
+  await backfillLegacyColumn("imagerefsjson", "image_refs_json");
+  await backfillLegacyColumn("createdat", "created_at");
+  await backfillLegacyColumn("updatedat", "updated_at");
+
+  if (legacyExists && await pgTableExists("artifactsessions")) {
+    const legacyColumns = new Set(await getPostgresTableColumns("artifactsessions"));
+    const selectExpressions = [];
+    const insertColumns = [];
+    const expressionByColumn = {
+      id: legacyColumns.has("id") ? "id" : null,
+      conversation_id: legacyColumns.has("conversation_id")
+        ? "conversation_id"
+        : legacyColumns.has("conversationid")
+          ? "conversationid"
+          : null,
+      artifact_type: legacyColumns.has("artifact_type")
+        ? "artifact_type"
+        : legacyColumns.has("artifacttype")
+          ? "artifacttype"
+          : null,
+      intent_mode: legacyColumns.has("intent_mode")
+        ? "intent_mode"
+        : legacyColumns.has("intentmode")
+          ? "intentmode"
+          : null,
+      prompt: legacyColumns.has("prompt")
+        ? "prompt"
+        : legacyColumns.has("prompt_text")
+          ? "prompt_text"
+          : legacyColumns.has("prompttext")
+            ? "prompttext"
+            : null,
+      resolved_prompt: legacyColumns.has("resolved_prompt")
+        ? "resolved_prompt"
+        : legacyColumns.has("resolvedprompt")
+          ? "resolvedprompt"
+          : null,
+      source_message_id: legacyColumns.has("source_message_id")
+        ? "source_message_id"
+        : legacyColumns.has("source_messageid")
+          ? "source_messageid"
+          : legacyColumns.has("sourcemessageid")
+            ? "sourcemessageid"
+            : null,
+      input_files_json: legacyColumns.has("input_files_json")
+        ? "input_files_json"
+        : legacyColumns.has("inputfilesjson")
+          ? "inputfilesjson"
+          : null,
+      image_refs_json: legacyColumns.has("image_refs_json")
+        ? "image_refs_json"
+        : legacyColumns.has("imagerefsjson")
+          ? "imagerefsjson"
+          : null,
+      status: legacyColumns.has("status") ? "status" : "'pending'",
+      created_at: legacyColumns.has("created_at")
+        ? "created_at"
+        : legacyColumns.has("createdat")
+          ? "createdat"
+          : "CURRENT_TIMESTAMP",
+      updated_at: legacyColumns.has("updated_at")
+        ? "updated_at"
+        : legacyColumns.has("updatedat")
+          ? "updatedat"
+          : "CURRENT_TIMESTAMP",
+    };
+
+    for (const columnName of ARTIFACT_SESSION_CANONICAL_COLUMNS) {
+      const expression = expressionByColumn[columnName];
+      if (!expression) continue;
+      insertColumns.push(quoteIdent(columnName));
+      selectExpressions.push(expression.startsWith("'") || expression.includes("CURRENT_")
+        ? expression
+        : quoteIdent(expression));
+    }
+
+    if (insertColumns.length && selectExpressions.length) {
+      await pgPool.query(
+        `INSERT INTO artifact_sessions (${insertColumns.join(", ")})
+         SELECT ${selectExpressions.join(", ")}
+           FROM artifactsessions
+          ON CONFLICT (id) DO NOTHING`
+      );
+    }
+  }
+
+  await pgPool.query("UPDATE artifact_sessions SET prompt = COALESCE(prompt, '') WHERE prompt IS NULL");
+  await pgPool.query("UPDATE artifact_sessions SET artifact_type = COALESCE(NULLIF(artifact_type, ''), 'artifact') WHERE artifact_type IS NULL OR artifact_type = ''");
+  await pgPool.query("UPDATE artifact_sessions SET resolved_prompt = COALESCE(NULLIF(resolved_prompt, ''), prompt, '') WHERE resolved_prompt IS NULL OR resolved_prompt = ''");
+  await pgPool.query("UPDATE artifact_sessions SET status = COALESCE(NULLIF(status, ''), 'pending') WHERE status IS NULL OR status = ''");
+  await pgPool.query("UPDATE artifact_sessions SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE created_at IS NULL");
+  await pgPool.query("UPDATE artifact_sessions SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
+  await pgPool.query("ALTER TABLE artifact_sessions ALTER COLUMN prompt SET NOT NULL");
+  await pgPool.query("ALTER TABLE artifact_sessions ALTER COLUMN artifact_type SET NOT NULL");
+  await pgPool.query("ALTER TABLE artifact_sessions ALTER COLUMN status SET DEFAULT 'pending'");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_artifact_sessions_conversation_id ON artifact_sessions(conversation_id, id DESC)");
+}
+
+async function ensureArtifactSessionsSchema() {
+  if (DB_CLIENT === "postgres") {
+    await ensureArtifactSessionsSchemaPostgres();
+    return;
+  }
+  await ensureArtifactSessionsSchemaSqlite();
 }
 
 async function migrateSqlite() {
@@ -300,36 +736,7 @@ async function migrateSqlite() {
     );
   `);
 
-  await execSqlite(`
-    CREATE TABLE IF NOT EXISTS artifact_sessions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      conversation_id INTEGER NOT NULL,
-      artifact_type TEXT NOT NULL,
-      intent_mode TEXT,
-      prompt_text TEXT NOT NULL,
-      resolved_prompt TEXT,
-      source_message_id INTEGER,
-      source TEXT,
-      input_files_json TEXT,
-      image_refs_json TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-
-  await execSqlite("CREATE INDEX IF NOT EXISTS idx_artifact_sessions_conversation_id ON artifact_sessions(conversation_id, id DESC);");
-
-  const artifactSessionColumns = await allSqlite("PRAGMA table_info(artifact_sessions)");
-  if (!artifactSessionColumns.some((column) => column.name === "intent_mode")) {
-    await execSqlite("ALTER TABLE artifact_sessions ADD COLUMN intent_mode TEXT;");
-  }
-  if (!artifactSessionColumns.some((column) => column.name === "resolved_prompt")) {
-    await execSqlite("ALTER TABLE artifact_sessions ADD COLUMN resolved_prompt TEXT;");
-  }
-  if (!artifactSessionColumns.some((column) => column.name === "source_message_id")) {
-    await execSqlite("ALTER TABLE artifact_sessions ADD COLUMN source_message_id INTEGER;");
-  }
+  await ensureArtifactSessionsSchemaSqlite();
 
   await execSqlite(`
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -1161,28 +1568,7 @@ async function migratePostgres() {
     );
   `);
 
-  await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS artifact_sessions (
-      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-      conversation_id INTEGER NOT NULL,
-      artifact_type TEXT NOT NULL,
-      intent_mode TEXT,
-      prompt_text TEXT NOT NULL,
-      resolved_prompt TEXT,
-      source_message_id INTEGER,
-      source TEXT,
-      input_files_json TEXT,
-      image_refs_json TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_artifact_sessions_conversation_id ON artifact_sessions(conversation_id, id DESC);");
-  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS intent_mode TEXT;");
-  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS resolved_prompt TEXT;");
-  await pgPool.query("ALTER TABLE artifact_sessions ADD COLUMN IF NOT EXISTS source_message_id INTEGER;");
+  await ensureArtifactSessionsSchemaPostgres();
 
   await pgPool.query(`
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -1879,6 +2265,8 @@ async function importLegacySqliteIntoPostgres() {
         { name: "conversations", pk: "id", orderBy: "id" },
         { name: "messages", pk: "id", orderBy: "id" },
         { name: "files", pk: "id", orderBy: "id" },
+        { name: "artifact_sessions", targetName: "artifact_sessions", pk: "id", orderBy: "id", transformRow: normalizeLegacyArtifactSessionRow },
+        { name: "artifactsessions", targetName: "artifact_sessions", pk: "id", orderBy: "id", transformRow: normalizeLegacyArtifactSessionRow },
         { name: "audit_log", pk: "id", orderBy: "id" },
         { name: "documents", pk: "id", orderBy: "id" },
         { name: "document_chunks", pk: "id", orderBy: "id" },
@@ -1913,18 +2301,23 @@ async function importLegacySqliteIntoPostgres() {
       const availableTables = new Set(tableRows.map((row) => row.name));
 
       for (const table of tableOrder) {
-        if (!availableTables.has(table.name)) continue;
+        const sourceTableName = table.sourceName || table.name;
+        const targetTableName = table.targetName || sourceTableName;
+        if (!availableTables.has(sourceTableName)) continue;
         let rows = [];
         try {
-          rows = await sqliteAllFrom(legacyDb, `SELECT * FROM ${table.name} ORDER BY ${table.orderBy}`);
+          rows = await sqliteAllFrom(legacyDb, `SELECT * FROM ${sourceTableName} ORDER BY ${table.orderBy}`);
         } catch (err) {
-          console.error(`Falha ao ler tabela legada ${table.name}:`, err?.message || err);
+          console.error(`Falha ao ler tabela legada ${sourceTableName}:`, err?.message || err);
           continue;
         }
 
         for (const row of rows) {
           const rowId = row?.id ?? row?.[table.pk] ?? row?.conversation_id ?? null;
-          const entries = Object.entries(row).map(([key, value]) => [key, sanitizeLegacySqliteValue(value)]);
+          const normalizedRow = typeof table.transformRow === "function"
+            ? table.transformRow(row)
+            : Object.fromEntries(Object.entries(row).map(([key, value]) => [key, sanitizeLegacySqliteValue(value)]));
+          const entries = Object.entries(normalizedRow);
           if (!entries.length) continue;
           const columns = entries.map(([key]) => quoteIdent(key)).join(", ");
           const placeholders = entries.map((_, index) => `$${index + 1}`).join(", ");
@@ -1936,7 +2329,7 @@ async function importLegacySqliteIntoPostgres() {
           try {
             await client.query("SAVEPOINT legacy_row_import");
             const insertResult = await client.query(
-              `INSERT INTO ${quoteIdent(table.name)} (${columns}) VALUES (${placeholders}) ON CONFLICT (${conflictTarget}) DO NOTHING`,
+              `INSERT INTO ${quoteIdent(targetTableName)} (${columns}) VALUES (${placeholders}) ON CONFLICT (${conflictTarget}) DO NOTHING`,
               values
             );
             await client.query("RELEASE SAVEPOINT legacy_row_import");
@@ -1951,7 +2344,7 @@ async function importLegacySqliteIntoPostgres() {
               await client.query("ROLLBACK TO SAVEPOINT legacy_row_import");
             } catch {}
             console.error("Failed to migrate row", {
-              table: table.name,
+              table: targetTableName,
               row_id: rowId,
               message: err?.message || String(err || "migration_row_failed"),
               code: err?.code || null,
@@ -1967,6 +2360,7 @@ async function importLegacySqliteIntoPostgres() {
       await setPostgresSequence(client, "conversations", "id");
       await setPostgresSequence(client, "messages", "id");
       await setPostgresSequence(client, "files", "id");
+      await setPostgresSequence(client, "artifact_sessions", "id");
       await setPostgresSequence(client, "audit_log", "id");
       await setPostgresSequence(client, "documents", "id");
       await setPostgresSequence(client, "document_chunks", "id");
@@ -2096,6 +2490,101 @@ async function run(sql, params = []) {
   return execSqlite(sql, params);
 }
 
+async function getArtifactSessionById(sessionId) {
+  if (!Number(sessionId || 0)) return null;
+  const row = await get(
+    `SELECT id, conversation_id, artifact_type, intent_mode, prompt, resolved_prompt, source_message_id,
+            input_files_json, image_refs_json, status, created_at, updated_at
+       FROM artifact_sessions
+      WHERE id=?
+      LIMIT 1`,
+    [Number(sessionId)]
+  );
+  return parseArtifactSessionRow(row);
+}
+
+async function getLatestArtifactSession(conversationId) {
+  if (!Number(conversationId || 0)) return null;
+  const row = await get(
+    `SELECT id, conversation_id, artifact_type, intent_mode, prompt, resolved_prompt, source_message_id,
+            input_files_json, image_refs_json, status, created_at, updated_at
+       FROM artifact_sessions
+      WHERE conversation_id=?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [Number(conversationId)]
+  );
+  return parseArtifactSessionRow(row);
+}
+
+async function saveArtifactSession(payload = {}) {
+  const normalized = normalizeArtifactSessionPayload(payload);
+  if (!normalized.conversation_id || !normalized.artifact_type || !normalized.prompt) {
+    throw new Error("artifact_session_invalid_payload");
+  }
+
+  const created = await run(
+    `INSERT INTO artifact_sessions (
+       conversation_id,
+       artifact_type,
+       intent_mode,
+       prompt,
+       resolved_prompt,
+       source_message_id,
+       input_files_json,
+       image_refs_json,
+       status,
+       updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      normalized.conversation_id,
+      normalized.artifact_type,
+      normalized.intent_mode,
+      normalized.prompt,
+      normalized.resolved_prompt,
+      normalized.source_message_id,
+      normalized.input_files_json,
+      normalized.image_refs_json,
+      normalized.status,
+    ]
+  );
+
+  const byId = await getArtifactSessionById(created.lastID);
+  if (byId) return byId;
+  return getLatestArtifactSession(normalized.conversation_id);
+}
+
+async function updateArtifactSessionStatus(sessionId, updates = {}) {
+  const safeSessionId = Number(sessionId || 0);
+  if (!safeSessionId) return null;
+
+  const sets = [];
+  const params = [];
+  const normalized = {};
+
+  if (updates.artifactType !== undefined) normalized.artifact_type = sanitizeText(updates.artifactType);
+  if (updates.intentMode !== undefined) normalized.intent_mode = sanitizeText(updates.intentMode);
+  if (updates.prompt !== undefined || updates.promptText !== undefined) {
+    normalized.prompt = sanitizeText(updates.prompt ?? updates.promptText);
+  }
+  if (updates.resolvedPrompt !== undefined) normalized.resolved_prompt = sanitizeText(updates.resolvedPrompt);
+  if (updates.sourceMessageId !== undefined) normalized.source_message_id = Number(updates.sourceMessageId || 0) || null;
+  if (updates.inputFiles !== undefined) normalized.input_files_json = JSON.stringify(Array.isArray(updates.inputFiles) ? updates.inputFiles : []);
+  if (updates.imageRefs !== undefined) normalized.image_refs_json = JSON.stringify(Array.isArray(updates.imageRefs) ? updates.imageRefs : []);
+  if (updates.status !== undefined) normalized.status = normalizeArtifactSessionStatus(updates.status);
+
+  Object.entries(normalized).forEach(([column, value]) => {
+    sets.push(`${column}=?`);
+    params.push(value);
+  });
+
+  sets.push("updated_at=datetime('now')");
+  params.push(safeSessionId);
+
+  await run(`UPDATE artifact_sessions SET ${sets.join(", ")} WHERE id=?`, params);
+  return getArtifactSessionById(safeSessionId);
+}
+
 function buildSqliteFtsQuery(query) {
   const tokens = String(query || "")
     .toLowerCase()
@@ -2190,26 +2679,21 @@ module.exports = {
   DB_CLIENT,
   all,
   db,
+  ensureArtifactSessionsSchema,
   get,
+  getLatestArtifactSession,
   importLegacySqliteIntoPostgres,
   kbDir,
   logEvent,
   migrate,
+  parseArtifactSessionRow,
   run,
+  saveArtifactSession,
   searchDocuments,
   sqlitePath,
+  updateArtifactSessionStatus,
   uploadsDir,
 };
-
-
-
-
-
-
-
-
-
-
 
 
 

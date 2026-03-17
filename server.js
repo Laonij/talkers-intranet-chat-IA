@@ -11,7 +11,22 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 const jwt = require("jsonwebtoken");
 
-const { DATA_DIR, DB_CLIENT, migrate, get, all, run, uploadsDir, kbDir, logEvent, searchDocuments, importLegacySqliteIntoPostgres } = require("./db");
+const {
+  DATA_DIR,
+  DB_CLIENT,
+  migrate,
+  get,
+  all,
+  run,
+  uploadsDir,
+  kbDir,
+  logEvent,
+  searchDocuments,
+  importLegacySqliteIntoPostgres,
+  getLatestArtifactSession,
+  saveArtifactSession,
+  updateArtifactSessionStatus,
+} = require("./db");
 const {
   DEFAULT_LOCALE,
   detectLanguage,
@@ -3290,38 +3305,6 @@ async function getRecentConversationFiles(conversationId, limit = 8) {
   })).filter((row) => row.stored_name && fs.existsSync(row.fullPath));
 }
 
-function normalizeArtifactSessionStatus(status = "pending") {
-  const safe = String(status || "pending").trim().toLowerCase();
-  return safe || "pending";
-}
-
-function parseArtifactJsonField(value, fallback = []) {
-  const parsed = safeJsonParse(value);
-  return Array.isArray(parsed) ? parsed : fallback;
-}
-
-function hydrateArtifactSessionRow(row) {
-  if (!row) return null;
-  return {
-    ...row,
-    input_files: parseArtifactJsonField(row.input_files_json, []),
-    image_refs: parseArtifactJsonField(row.image_refs_json, []),
-    status: normalizeArtifactSessionStatus(row.status),
-  };
-}
-
-async function getLatestArtifactSession(conversationId) {
-  const row = await get(
-    `SELECT *
-       FROM artifact_sessions
-      WHERE conversation_id=?
-      ORDER BY id DESC
-      LIMIT 1`,
-    [conversationId]
-  );
-  return hydrateArtifactSessionRow(row);
-}
-
 function buildArtifactSessionFileRefs(files = []) {
   return (Array.isArray(files) ? files : [])
     .map((file) => ({
@@ -3361,84 +3344,6 @@ function restoreArtifactSessionImageRefs(session = null) {
       };
     })
     .filter(Boolean);
-}
-
-async function createArtifactSessionRecord({
-  conversationId,
-  artifactType,
-  intentMode,
-  promptText,
-  resolvedPrompt = null,
-  sourceMessageId = null,
-  source = "current",
-  inputFiles = [],
-  imageRefs = [],
-  status = "pending",
-}) {
-  const created = await run(
-    `INSERT INTO artifact_sessions (
-       conversation_id,
-       artifact_type,
-       intent_mode,
-       prompt_text,
-       resolved_prompt,
-       source_message_id,
-       source,
-       input_files_json,
-       image_refs_json,
-       status,
-       updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-    [
-      conversationId,
-      artifactType,
-      intentMode || null,
-      promptText,
-      resolvedPrompt || promptText,
-      sourceMessageId || null,
-      source || null,
-      JSON.stringify(buildArtifactSessionFileRefs(inputFiles)),
-      JSON.stringify(buildArtifactSessionImageRefs(imageRefs)),
-      normalizeArtifactSessionStatus(status),
-    ]
-  );
-
-  return getLatestArtifactSession(conversationId);
-}
-
-async function updateArtifactSessionRecord(sessionId, updates = {}) {
-  const sets = [];
-  const params = [];
-  const map = {
-    artifact_type: updates.artifactType,
-    intent_mode: updates.intentMode,
-    prompt_text: updates.promptText,
-    resolved_prompt: updates.resolvedPrompt,
-    source_message_id: updates.sourceMessageId,
-    source: updates.source,
-    status: updates.status ? normalizeArtifactSessionStatus(updates.status) : undefined,
-  };
-
-  Object.entries(map).forEach(([column, value]) => {
-    if (value === undefined) return;
-    sets.push(`${column}=?`);
-    params.push(value);
-  });
-
-  if (updates.inputFiles !== undefined) {
-    sets.push("input_files_json=?");
-    params.push(JSON.stringify(buildArtifactSessionFileRefs(updates.inputFiles)));
-  }
-  if (updates.imageRefs !== undefined) {
-    sets.push("image_refs_json=?");
-    params.push(JSON.stringify(buildArtifactSessionImageRefs(updates.imageRefs)));
-  }
-
-  sets.push("updated_at=datetime('now')");
-  params.push(sessionId);
-
-  await run(`UPDATE artifact_sessions SET ${sets.join(", ")} WHERE id=?`, params);
-  return get("SELECT * FROM artifact_sessions WHERE id=?", [sessionId]).then(hydrateArtifactSessionRow);
 }
 
 async function handleConversationUpload(req, res) {
@@ -5676,8 +5581,8 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
   if (executionPlan?.route?.intent_mode === "continue_artifact" && latestArtifactSession?.artifact_type) {
     const restoredImageRefs = restoreArtifactSessionImageRefs(latestArtifactSession);
     return {
-      prompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt_text || userText,
-      resolvedPrompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt_text || userText,
+      prompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt || userText,
+      resolvedPrompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt || userText,
       kind: latestArtifactSession.artifact_type,
       source: "artifact_session",
       intentMode: "continue_artifact",
@@ -9058,16 +8963,15 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     });
     let activeArtifactSession = null;
     if (artifactRequest.kind) {
-      activeArtifactSession = await createArtifactSessionRecord({
+      activeArtifactSession = await saveArtifactSession({
         conversationId: id,
         artifactType: artifactRequest.kind,
         intentMode: artifactRequest.intentMode,
-        promptText: text,
+        prompt: text,
         resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
         sourceMessageId,
-        source: artifactRequest.source,
-        inputFiles: artifactRequest.inputFiles || [],
-        imageRefs: artifactRequest.imageReferences || [],
+        inputFiles: buildArtifactSessionFileRefs(artifactRequest.inputFiles || []),
+        imageRefs: buildArtifactSessionImageRefs(artifactRequest.imageReferences || []),
         status: "pending",
       });
     }
@@ -9097,7 +9001,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
 
     if (artifactRequest.kind && !artifact && artifactError) {
       if (activeArtifactSession?.id) {
-        await updateArtifactSessionRecord(activeArtifactSession.id, { status: "failed" });
+        await updateArtifactSessionStatus(activeArtifactSession.id, { status: "failed" });
       }
       return res.json({
         reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
@@ -9109,7 +9013,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
     if (artifact) {
       if (!artifact.fullPath) {
         if (activeArtifactSession?.id) {
-          await updateArtifactSessionRecord(activeArtifactSession.id, {
+          await updateArtifactSessionStatus(activeArtifactSession.id, {
             status: "completed",
             resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
           });
@@ -9156,7 +9060,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         content: artifact.reply,
       });
       if (activeArtifactSession?.id) {
-        await updateArtifactSessionRecord(activeArtifactSession.id, {
+        await updateArtifactSessionStatus(activeArtifactSession.id, {
           status: "completed",
           resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
         });
@@ -9587,16 +9491,15 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
     });
     let activeArtifactSession = null;
     if (artifactRequest.kind) {
-      activeArtifactSession = await createArtifactSessionRecord({
+      activeArtifactSession = await saveArtifactSession({
         conversationId: id,
         artifactType: artifactRequest.kind,
         intentMode: artifactRequest.intentMode,
-        promptText: text,
+        prompt: text,
         resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
         sourceMessageId,
-        source: artifactRequest.source,
-        inputFiles: artifactRequest.inputFiles || [],
-        imageRefs: artifactRequest.imageReferences || [],
+        inputFiles: buildArtifactSessionFileRefs(artifactRequest.inputFiles || []),
+        imageRefs: buildArtifactSessionImageRefs(artifactRequest.imageReferences || []),
         status: "pending",
       });
     }
@@ -9626,7 +9529,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
 
     if (artifactRequest.kind && !artifact && artifactError) {
       if (activeArtifactSession?.id) {
-        await updateArtifactSessionRecord(activeArtifactSession.id, { status: "failed" });
+        await updateArtifactSessionStatus(activeArtifactSession.id, { status: "failed" });
       }
       writeEventStreamPacket(res, "done", {
         reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
@@ -9642,7 +9545,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
     if (artifact) {
       if (!artifact.fullPath) {
         if (activeArtifactSession?.id) {
-          await updateArtifactSessionRecord(activeArtifactSession.id, {
+          await updateArtifactSessionStatus(activeArtifactSession.id, {
             status: "completed",
             resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
           });
@@ -9689,7 +9592,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         content: artifact.reply,
       });
       if (activeArtifactSession?.id) {
-        await updateArtifactSessionRecord(activeArtifactSession.id, {
+        await updateArtifactSessionStatus(activeArtifactSession.id, {
           status: "completed",
           resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
         });
@@ -12220,9 +12123,6 @@ function startServer() {
 }
 
 startServer();
-
-
-
 
 
 

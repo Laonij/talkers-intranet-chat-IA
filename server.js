@@ -471,6 +471,17 @@ function clearSessionCookie(req, res) {
   });
 }
 
+function sendNoCacheFile(res, absolutePath) {
+  return res.sendFile(absolutePath, {
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+      "Surrogate-Control": "no-store",
+    },
+  });
+}
+
 function titleFromMessage(text) {
   const title = String(text || "").trim().split("\n")[0].slice(0, 60);
   return title || "Nova conversa";
@@ -1258,6 +1269,55 @@ async function hydrateUserRecord(user) {
     can_access_intranet: coerceDbBoolean(user.can_access_intranet),
     preferred_locale: normalizeLocaleCode(user.preferred_locale || DEFAULT_LOCALE),
   };
+}
+
+function buildSessionUserFallback(sessionUser = null, fallbackUserId = null) {
+  const safeSession = sessionUser && typeof sessionUser === "object" ? sessionUser : {};
+  const resolvedId = Number(safeSession.sub || safeSession.id || fallbackUserId || 0) || null;
+  if (!resolvedId) return null;
+
+  const sessionDepartments = Array.isArray(safeSession.departments)
+    ? safeSession.departments.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const primaryDepartment = String(safeSession.department || sessionDepartments[0] || "").trim();
+  const normalizedDepartments = primaryDepartment && !sessionDepartments.includes(primaryDepartment)
+    ? [primaryDepartment, ...sessionDepartments]
+    : sessionDepartments;
+
+  return {
+    id: resolvedId,
+    sub: resolvedId,
+    email: String(safeSession.email || "").trim(),
+    name: String(safeSession.name || "Usuario").trim() || "Usuario",
+    role: String(safeSession.role || "user").trim() || "user",
+    department: primaryDepartment,
+    departments: normalizedDepartments,
+    department_details: normalizedDepartments.map((name, index) => ({
+      department_id: null,
+      name,
+      access_level: index === 0 ? "principal" : "colaborador",
+      is_primary: index === 0,
+      slug: slugifyDepartmentName(name),
+      is_active: true,
+    })),
+    can_access_intranet: Boolean(
+      Object.prototype.hasOwnProperty.call(safeSession, "can_access_intranet")
+        ? safeSession.can_access_intranet
+        : true
+    ),
+    preferred_locale: normalizeLocaleCode(safeSession.preferred_locale || DEFAULT_LOCALE),
+    job_title: String(safeSession.job_title || "").trim(),
+    unit_name: String(safeSession.unit_name || "").trim(),
+    created_at: null,
+    session_fallback: true,
+  };
+}
+
+async function resolveRequestUser(sessionUser = null, fallbackUserId = null) {
+  const resolvedId = Number(sessionUser?.sub || sessionUser?.id || fallbackUserId || 0) || null;
+  const dbUser = resolvedId ? await getUserById(resolvedId).catch(() => null) : null;
+  if (dbUser) return dbUser;
+  return buildSessionUserFallback(sessionUser, resolvedId);
 }
 
 async function syncUserDepartments(userId, departmentValues = []) {
@@ -7841,7 +7901,7 @@ async function ensureMarketingIndicatorSeeds() {
 }
 
 async function requireIntranetAccess(req, res, next) {
-  const user = await getUserById(req.user.sub);
+  const user = await resolveRequestUser(req.user, req.user?.sub);
   if (!user) return res.status(401).json({ error: 'not_authenticated' });
   if (!hasIntranetAccess(user)) return res.status(403).json({ error: 'intranet_access_denied' });
   req.currentUser = user;
@@ -8078,11 +8138,11 @@ function makeHttpError(message, statusCode = 400) {
   return err;
 }
 
-async function prepareConversationMessageState({ conversationId, userId, text, requestLocale = DEFAULT_LOCALE }) {
+async function prepareConversationMessageState({ conversationId, userId, text, requestLocale = DEFAULT_LOCALE, sessionUser = null }) {
   const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [conversationId, userId]);
   if (!conv) throw makeHttpError("not_found", 404);
 
-  const currentUser = await getUserById(userId);
+  const currentUser = await resolveRequestUser(sessionUser, userId);
   if (!currentUser) throw makeHttpError("not_authenticated", 401);
 
   const safeLocale = normalizeLocaleCode(requestLocale || currentUser?.preferred_locale || DEFAULT_LOCALE);
@@ -8266,7 +8326,7 @@ app.get("/logout", (req, res) => {
 });
 
 app.get("/api/me", requireAuth(JWT_SECRET), async (req, res) => {
-  const user = await getUserById(req.user.sub);
+  const user = await resolveRequestUser(req.user, req.user?.sub);
   const requestLocale = getRequestLocale(req, user?.preferred_locale || DEFAULT_LOCALE);
 
   res.json({
@@ -8426,6 +8486,7 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       userId: req.user.sub,
       text,
       requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
+      sessionUser: req.user,
     });
     const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation } = prepared;
 
@@ -8802,6 +8863,7 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       userId: req.user.sub,
       text,
       requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
+      sessionUser: req.user,
     });
     const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation } = prepared;
 
@@ -11311,19 +11373,19 @@ app.get("/api/intranet/training/bootstrap", requireAuth(JWT_SECRET), requireIntr
 });
 
 app.get("/", (req, res) => res.redirect("/index.html"));
-app.get("/login.html", (req, res) => res.sendFile(path.join(publicDir, "login.html")));
+app.get("/login.html", (req, res) => sendNoCacheFile(res, path.join(publicDir, "login.html")));
 
 app.get("/index.html", (req, res) => {
   const user = tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
-  return res.sendFile(path.join(publicDir, "index.html"));
+  return sendNoCacheFile(res, path.join(publicDir, "index.html"));
 });
 
 app.get("/admin.html", (req, res) => {
   const user = tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
   if (user.role !== "admin") return res.redirect("/index.html");
-  return res.sendFile(path.join(publicDir, "admin.html"));
+  return sendNoCacheFile(res, path.join(publicDir, "admin.html"));
 });
 
 app.get("/intranet.html", async (req, res) => {
@@ -11331,7 +11393,7 @@ app.get("/intranet.html", async (req, res) => {
   if (!session) return res.redirect("/login.html");
   const user = await getUserById(session.sub);
   if (!user || !hasIntranetAccess(user)) return res.redirect("/index.html");
-  return res.sendFile(path.join(publicDir, "intranet.html"));
+  return sendNoCacheFile(res, path.join(publicDir, "intranet.html"));
 });
 
 app.use(express.static(publicDir));
@@ -11452,13 +11514,6 @@ function startServer() {
 }
 
 startServer();
-
-
-
-
-
-
-
 
 
 

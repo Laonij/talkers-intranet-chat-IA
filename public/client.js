@@ -50,6 +50,16 @@ const CHAT_SIDEBAR_STORAGE_KEY = "talkers_chat_sidebar_state_v1";
 
 const MAX_COMPOSER_FILE_BYTES = 25 * 1024 * 1024;
 
+function isAuthErrorMessage(message = "") {
+  return /^(not_authenticated|invalid_session)$/i.test(String(message || "").trim());
+}
+
+function handleAuthFailure(message = "") {
+  if (!isAuthErrorMessage(message)) return false;
+  window.location.href = "/login.html";
+  return true;
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     credentials: "include",
@@ -71,6 +81,9 @@ async function api(path, opts = {}) {
 
   if (!res.ok) {
     const msg = data?.error || `HTTP ${res.status}`;
+    if (res.status === 401 && handleAuthFailure(msg)) {
+      throw new Error("session_redirect");
+    }
     throw new Error(msg);
   }
 
@@ -1010,7 +1023,11 @@ async function streamConversationReply(convId, text) {
       try {
         parsed = raw ? JSON.parse(raw) : null;
       } catch {}
-      throw new Error(parsed?.error || raw || `HTTP ${response.status}`);
+      const message = parsed?.error || raw || `HTTP ${response.status}`;
+      if (response.status === 401 && handleAuthFailure(message)) {
+        throw new Error("session_redirect");
+      }
+      throw new Error(message);
     }
 
     const reader = response.body.getReader();
@@ -1061,7 +1078,11 @@ async function streamConversationReply(convId, text) {
       }
 
       if (eventName === "error") {
-        throw new Error(payload?.error || payload?.message || t("chat.errorPrefix", {}, "Erro: "));
+        const message = payload?.error || payload?.message || t("chat.errorPrefix", {}, "Erro: ");
+        if (handleAuthFailure(message)) {
+          throw new Error("session_redirect");
+        }
+        throw new Error(message);
       }
     };
 
@@ -1246,6 +1267,7 @@ async function sendTextOnlyMessage(text) {
     await streamConversationReply(convId, text);
     await loadConversations();
   } catch (err) {
+    if (String(err?.message || "") === "session_redirect") return;
     addMessage("assistant", t("chat.errorPrefix") + err.message);
     scrollChat();
   } finally {
@@ -1699,7 +1721,6 @@ async function init() {
 }
 
 window.addEventListener("DOMContentLoaded", init);
-
 
 
 

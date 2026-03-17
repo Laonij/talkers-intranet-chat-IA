@@ -4777,6 +4777,83 @@ function responseLooksSelfLimiting(text = "") {
   return /(minhas limita[cç][oõ]es|nao tenho acesso|não tenho acesso|nao consigo verificar|não consigo verificar|consulte outro site|consultar outro site|sou focad[oa] apenas|nao mantenho um historico|não mantenho um histórico|nao tenho informac|não tenho informac|nao consigo acessar|não consigo acessar)/i.test(safe);
 }
 
+function queryAsksAboutAssistantCapabilities(query = "") {
+  const raw = repairMojibakeText(String(query || "")).toLowerCase();
+  const value = normalizeQuery(query);
+  const candidates = [raw, value].filter(Boolean);
+  if (!candidates.length) return false;
+
+  const fragments = [
+    "limitac",
+    "limita",
+    "limitation",
+    "capaci",
+    "capacidad",
+    "capabilit",
+    "o que voce consegue",
+    "o que voce faz",
+    "o que voce sabe",
+    "do que voce e capaz",
+    "what can you do",
+    "what do you know",
+    "internet access",
+    "web search",
+    "pesquisa na internet",
+    "busca na internet",
+    "pesquisa fora",
+    "acessa a internet",
+    "dados atuais",
+    "tempo real",
+  ];
+
+  return candidates.some((candidate) => fragments.some((fragment) => candidate.includes(fragment)));
+}
+
+function buildAssistantCapabilitiesAnswer(userLanguage = "pt") {
+  const language = normalizeLanguageCode(userLanguage || "pt");
+  if (language.startsWith("en")) {
+    return [
+      "I can operate as a broad, modern assistant: answer general questions, research on the web, combine public data with Talkers context, read conversation files, and organize everything into a clear, useful answer.",
+      "",
+      "### What I can do well",
+      "- answer general, technical, institutional, operational, and current-topic questions",
+      "- research outside the internal base when the request needs public or recent information",
+      "- combine web context, Talkers knowledge, internal files, and the conversation history when relevant",
+      "- explain, compare, summarize, suggest improvements, and turn information into plans, messages, reports, or presentations",
+      "- help with data such as exchange rates, weather, news, contacts, products, services, and public information",
+      "",
+      "### The only real human limit",
+      "- I do not have human emotional consciousness or personal lived experience. I can respond with empathy and context, but I do not feel emotions as a person does.",
+      "",
+      "\u2705 If you want, I can also:",
+      "- research a topic right now",
+      "- compare two options or two sources",
+      "- build a table, summary, action plan, or structured brief",
+      "- refine an answer until it becomes presentation-ready",
+    ].join("\n");
+  }
+
+  return [
+    "Posso atuar como um assistente amplo e moderno: responder perguntas gerais, pesquisar na web, cruzar dados publicos com o contexto da Talkers, ler arquivos da conversa e organizar tudo em uma resposta clara e util.",
+    "",
+    "### O que eu consigo fazer bem",
+    "- responder sobre assuntos gerais, tecnicos, institucionais, operacionais e atuais",
+    "- pesquisar fora da base interna quando a pergunta pedir informacao publica ou recente",
+    "- cruzar web, base da Talkers, arquivos enviados e historico da conversa quando isso fizer sentido",
+    "- explicar, comparar, resumir, sugerir melhorias e transformar informacao em plano, texto, relatorio, apresentacao ou mensagem pronta",
+    "- ajudar com dados como cotacao, clima, noticias, contatos, produtos, servicos e informacoes publicas",
+    "",
+    "### O unico limite humano real",
+    "- Eu nao tenho consciencia emocional humana real nem experiencia pessoal como uma pessoa. Posso responder com empatia e contexto, mas nao sinto emocao como um ser humano.",
+    "",
+    "\u2705 Se quiser, posso tambem:",
+    "- pesquisar um tema especifico agora",
+    "- comparar duas opcoes ou duas fontes",
+    "- montar uma tabela, resumo executivo ou plano de acao",
+    "- refinar uma resposta ate ela ficar pronta para apresentar",
+  ].join("\n");
+}
+
 function mergeToolUsageMetrics(...metricsList) {
   const merged = {
     web_search_calls: 0,
@@ -5488,6 +5565,7 @@ Comportamento:
 - Se faltar informacao suficiente, deixe isso claro e peca complemento.
 - Nunca responda de forma rasa quando a pergunta pedir profundidade ou aplicacao pratica.
 - Nunca se compare negativamente com outros assistentes, nunca diga que tem menos capacidade, e nunca responda com frases como "nao tenho acesso" se houver contexto atual disponivel.
+- Se o usuario perguntar sobre capacidades, limitacoes, pesquisas, acesso a internet, dados atuais ou conhecimento geral, destaque primeiro tudo o que voce consegue fazer com web, base Talkers, base interna e arquivos. O unico limite aceitavel de mencionar de forma breve e natural e a ausencia de consciencia emocional humana real.
 - Quando houver valor atual, faixa de cotacao, dado publico ou resultado de busca no contexto, responda de forma direta e util, citando a natureza aproximada do dado quando cabivel.
 - Quando fizer sentido, encerre a resposta com um bloco curto no estilo "✅ Se quiser, posso tambem..." e ofereca de 2 a 4 proximos passos uteis, sem exagerar.
 
@@ -8198,11 +8276,13 @@ async function persistAssistantTextReply({
   cacheSemantic = false,
   recordUsage = false,
   allowWeakResponseLog = true,
+  persistDerivedMemory = true,
 }) {
   const persistStartedAt = Date.now();
   const safeAssistantText = String(assistantText || "").trim();
   const shouldPersistDerivedMemory = Boolean(
-    safeAssistantText
+    persistDerivedMemory
+      && safeAssistantText
       && !responseLooksSelfLimiting(safeAssistantText)
       && !responseLooksWeak(safeAssistantText)
   );
@@ -8268,6 +8348,42 @@ async function persistAssistantTextReply({
 
   return {
     persistence_ms: Date.now() - persistStartedAt,
+  };
+}
+
+async function buildAssistantCapabilitiesResult({
+  conversationId,
+  userId,
+  userText,
+  preferredLocale = DEFAULT_LOCALE,
+}) {
+  const conv = await get("SELECT id FROM conversations WHERE id=? AND user_id=?", [conversationId, userId]);
+  if (!conv) throw makeHttpError("not_found", 404);
+
+  const userLanguage = normalizeLanguageCode(preferredLocale || detectConversationLanguage(userText, []));
+  const responseProfile = analyzeConversationIntent(userText, userLanguage, {});
+  const reply = buildAssistantCapabilitiesAnswer(userLanguage);
+  const metaObject = makeStructuredResponseMeta(responseProfile, {
+    response_language: userLanguage,
+    capability_shortcut: true,
+  });
+  const persistMetrics = await persistAssistantTextReply({
+    conversationId,
+    userId,
+    userText,
+    assistantText: reply,
+    responseProfile,
+    responseLanguage: userLanguage,
+    metaObject,
+    allowWeakResponseLog: false,
+    persistDerivedMemory: false,
+  });
+
+  return {
+    reply,
+    meta: metaObject,
+    userLanguage,
+    persistence_ms: persistMetrics.persistence_ms,
   };
 }
 
@@ -8481,6 +8597,27 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
   if (!text) return res.status(400).json({ error: "empty_message" });
   const perfSample = beginChatPerformanceSample(text.length);
   try {
+    if (queryAsksAboutAssistantCapabilities(text)) {
+      const capabilityResult = await buildAssistantCapabilitiesResult({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        preferredLocale: req.user?.preferred_locale || DEFAULT_LOCALE,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: 0,
+        persistence_ms: capabilityResult.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: capabilityResult.reply.length,
+        response_bytes: Buffer.byteLength(String(capabilityResult.reply || ""), "utf8"),
+        status: "capability_shortcut",
+      });
+      return res.json({ reply: capabilityResult.reply, meta: capabilityResult.meta });
+    }
+
     const prepared = await prepareConversationMessageState({
       conversationId: id,
       userId: req.user.sub,
@@ -8520,6 +8657,38 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         status: "moderated",
       });
       return res.json({ reply: moderation.message, meta: moderationMetaObject });
+    }
+
+    if (queryAsksAboutAssistantCapabilities(text)) {
+      const capabilityReply = buildAssistantCapabilitiesAnswer(userLanguage);
+      const capabilityMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+        capability_shortcut: true,
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: capabilityReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: capabilityMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+        persistDerivedMemory: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: 0,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: capabilityReply.length,
+        response_bytes: Buffer.byteLength(String(capabilityReply || ""), "utf8"),
+        status: "capability_shortcut",
+      });
+      return res.json({ reply: capabilityReply, meta: capabilityMetaObject });
     }
 
     const contextStartedAt = Date.now();
@@ -8791,6 +8960,9 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       if (directFallback) {
         finalAssistantText = directFallback;
         finalAssistantSources = (contextLayers.externalToolContext?.sources || []).slice(0, 8);
+      } else if (queryAsksAboutAssistantCapabilities(text)) {
+        finalAssistantText = buildAssistantCapabilitiesAnswer(userLanguage);
+        finalAssistantSources = [];
       }
     }
 
@@ -8858,6 +9030,28 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
   res.flushHeaders?.();
 
   try {
+    if (queryAsksAboutAssistantCapabilities(text)) {
+      const capabilityResult = await buildAssistantCapabilitiesResult({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        preferredLocale: req.user?.preferred_locale || DEFAULT_LOCALE,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: 0,
+        persistence_ms: capabilityResult.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: capabilityResult.reply.length,
+        response_bytes: Buffer.byteLength(String(capabilityResult.reply || ""), "utf8"),
+        status: "capability_shortcut",
+      });
+      writeEventStreamPacket(res, "done", { reply: capabilityResult.reply, meta: capabilityResult.meta });
+      return res.end();
+    }
+
     const prepared = await prepareConversationMessageState({
       conversationId: id,
       userId: req.user.sub,
@@ -8897,6 +9091,39 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         status: "moderated",
       });
       writeEventStreamPacket(res, "done", { reply: moderation.message, meta: moderationMetaObject });
+      return res.end();
+    }
+
+    if (queryAsksAboutAssistantCapabilities(text)) {
+      const capabilityReply = buildAssistantCapabilitiesAnswer(userLanguage);
+      const capabilityMetaObject = makeStructuredResponseMeta(responseProfile, {
+        response_language: userLanguage,
+        capability_shortcut: true,
+      });
+      const persistMetrics = await persistAssistantTextReply({
+        conversationId: id,
+        userId: req.user.sub,
+        userText: text,
+        assistantText: capabilityReply,
+        responseProfile,
+        responseLanguage: userLanguage,
+        metaObject: capabilityMetaObject,
+        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
+        allowWeakResponseLog: false,
+        persistDerivedMemory: false,
+      });
+      finalizeChatPerformanceSample(perfSample, {
+        total_response_ms: Date.now() - perfSample.started_at,
+        api_latency_ms: 0,
+        internal_processing_ms: Date.now() - perfSample.started_at,
+        context_assembly_ms: 0,
+        persistence_ms: persistMetrics.persistence_ms,
+        prompt_chars: text.length,
+        response_chars: capabilityReply.length,
+        response_bytes: Buffer.byteLength(String(capabilityReply || ""), "utf8"),
+        status: "capability_shortcut",
+      });
+      writeEventStreamPacket(res, "done", { reply: capabilityReply, meta: capabilityMetaObject });
       return res.end();
     }
 
@@ -9187,6 +9414,9 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       if (directFallback) {
         finalAssistantText = directFallback;
         finalAssistantSources = (contextLayers.externalToolContext?.sources || []).slice(0, 8);
+      } else if (queryAsksAboutAssistantCapabilities(text)) {
+        finalAssistantText = buildAssistantCapabilitiesAnswer(userLanguage);
+        finalAssistantSources = [];
       }
     }
 
@@ -11514,17 +11744,6 @@ function startServer() {
 }
 
 startServer();
-
-
-
-
-
-
-
-
-
-
-
 
 
 

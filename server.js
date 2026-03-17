@@ -5390,7 +5390,7 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
   const topicShift = topicSnapshot?.topicShift || { isShift: false, reason: "unknown" };
   const explicitAttachmentReference = queryExplicitlyReferencesConversationAssets(userText);
   const artifactRetry = looksLikeArtifactRetry(userText);
-  const shouldUseAssets = !topicShift.isShift && (explicitAttachmentReference || artifactRetry);
+  const shouldUseAssets = artifactRetry || (!topicShift.isShift && explicitAttachmentReference);
 
   if (shouldUseAssets) {
     return {
@@ -5416,7 +5416,7 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
 function looksLikeArtifactRetry(text = "") {
   const value = normalizeQuery(text);
   if (!value) return false;
-  return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse|entao faca|então faça|entao gere|então gere|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento)/.test(value);
+  return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse|entao faca|então faça|entao gere|então gere|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento|continue|continuar|siga|siga em frente|pode continuar|pode seguir)$/.test(value);
 }
 
 function looksLikeAttachmentAnalysisTurn(text = "") {
@@ -5430,7 +5430,7 @@ function looksLikeAttachmentAnalysisTurn(text = "") {
 function looksLikeGenericArtifactContinuation(text = "") {
   const value = normalizeQuery(text);
   if (!value) return false;
-  return /^(ok|okay|sim|pode gerar|gere|faça|faca|entao faca|então faça|entao gere|então gere|tente novamente|gere novamente|faça novamente|faca novamente|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento|faça a ultima solicitacao|faca a ultima solicitacao|gere isso|gere essa|gere esse)$/.test(value);
+  return /^(ok|okay|sim|pode gerar|gere|faça|faca|entao faca|então faça|entao gere|então gere|tente novamente|gere novamente|faça novamente|faca novamente|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento|faça a ultima solicitacao|faca a ultima solicitacao|gere isso|gere essa|gere esse|continue|pode continuar|pode seguir|siga em frente)$/.test(value);
 }
 
 async function resolveArtifactRequestForTurn(conversationId, userText, referenceImages = []) {
@@ -5446,14 +5446,13 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
   }
 
   const rows = await all(
-    `SELECT role, content
+    `SELECT role, content, meta_json
        FROM messages
       WHERE conversation_id=?
-        AND role='user'
         AND content IS NOT NULL
         AND TRIM(content)<>''
       ORDER BY id DESC
-      LIMIT 20`,
+      LIMIT 40`,
     [conversationId]
   );
 
@@ -5461,6 +5460,8 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
     const candidate = String(row?.content || "").trim();
     if (!candidate) continue;
     if (normalizeQuery(candidate) === normalizeQuery(userText)) continue;
+    if (row.role !== 'user') continue;
+    if (looksLikeAttachmentAnalysisTurn(candidate)) continue;
     const candidateKind = detectArtifactKind(candidate, { referenceImages });
     if (!candidateKind) continue;
     return { prompt: candidate, kind: candidateKind, source: "history", referenceImages };

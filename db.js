@@ -21,10 +21,10 @@ if (!fs.existsSync(kbDir)) fs.mkdirSync(kbDir, { recursive: true });
 
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const requestedDbClient = String(process.env.DB_CLIENT || "").trim().toLowerCase();
-const DB_CLIENT = requestedDbClient === "sqlite"
-  ? "sqlite"
-  : requestedDbClient === "postgres"
-    ? "postgres"
+const DB_CLIENT = requestedDbClient === "postgres"
+  ? "postgres"
+  : requestedDbClient === "sqlite"
+    ? "sqlite"
     : (DATABASE_URL ? "postgres" : "sqlite");
 
 const sqlitePath = process.env.SQLITE_PATH
@@ -1763,6 +1763,7 @@ async function setPostgresSequence(client, table, column) {
 }
 
 async function importLegacySqliteIntoPostgres() {
+  if (DB_CLIENT !== "postgres" || !pgPool) return false;
   if (String(process.env.SKIP_SQLITE_IMPORT || "").trim() === "1") return false;
   if (!fs.existsSync(sqlitePath)) return false;
   if (await postgresHasData()) return false;
@@ -1939,7 +1940,6 @@ async function migrate() {
     migratePromise = (async () => {
       if (DB_CLIENT === "postgres") {
         await migratePostgres();
-        await importLegacySqliteIntoPostgres();
       } else {
         await migrateSqlite();
       }
@@ -2111,6 +2111,7 @@ module.exports = {
   all,
   db,
   get,
+  importLegacySqliteIntoPostgres,
   kbDir,
   logEvent,
   migrate,

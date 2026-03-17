@@ -11,7 +11,7 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 const jwt = require("jsonwebtoken");
 
-const { DATA_DIR, DB_CLIENT, migrate, get, all, run, uploadsDir, kbDir, logEvent, searchDocuments } = require("./db");
+const { DATA_DIR, DB_CLIENT, migrate, get, all, run, uploadsDir, kbDir, logEvent, searchDocuments, importLegacySqliteIntoPostgres } = require("./db");
 const {
   DEFAULT_LOCALE,
   detectLanguage,
@@ -11336,16 +11336,29 @@ app.get("/intranet.html", async (req, res) => {
 
 app.use(express.static(publicDir));
 
-async function startServer() {
-  await migrate();
+let startupBootstrapPromise = null;
+
+/*
+async function runStartupBootstrap() {
+  if (startupBootstrapPromise) return startupBootstrapPromise;
+
+  startupBootstrapPromise = (async () => {
+    await migrate();
+
+    try {
+      await importLegacySqliteIntoPostgres();
+      console.log("Legacy migration completed");
+    } catch (err) {
+      console.error("Migration failed but server continues:", err?.message || err);
+    }
   await ensureAdmin();
   await ensureDepartmentCatalog();
   await ensureDepartmentSubmenus();
   await ensureMarketingIndicatorSeeds();
   await ensureCalendarEventTypes();
   await syncLegacyUserDepartmentData();
-  await ensureFixedDepartments();
-  const incompatibleCleanup = await purgeIncompatibleKnowledgeAssets(null);
+    await ensureFixedDepartments();
+    const incompatibleCleanup = await purgeIncompatibleKnowledgeAssets(null);
   if (
     incompatibleCleanup.removed_sources
     || incompatibleCleanup.removed_documents
@@ -11355,29 +11368,90 @@ async function startServer() {
     console.log("Limpeza de arquivos incompatíveis concluída:", incompatibleCleanup);
   }
 
+  return startupBootstrapPromise;
+}
+
+function startServer() {
+  console.log("DB_CLIENT:", process.env.DB_CLIENT || DB_CLIENT);
+  console.log("DATABASE_URL present:", Boolean(process.env.DATABASE_URL));
+
   app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
     console.log(`Talkers IA rodando em ${BASE_URL}`);
     console.log(`Login: ${BASE_URL}/login.html`);
     console.log(`Banco ativo: ${DB_CLIENT}`);
-    scheduleKnowledgeBackfillSweep(3 * 1000);
-    triggerTalkersKnowledgeSync();
+
+    setTimeout(() => {
+      runStartupBootstrap().catch((err) => {
+        console.error("Falha no bootstrap pós-start:", err?.message || err);
+      });
+    }, 2000);
   });
 }
 
-startServer().catch((err) => {
-  console.error("Falha ao iniciar o servidor:", err);
-  process.exit(1);
-});
+startServer();
+*/
 
+async function runStartupBootstrap() {
+  if (startupBootstrapPromise) return startupBootstrapPromise;
 
+  startupBootstrapPromise = (async () => {
+    await migrate();
 
+    try {
+      await importLegacySqliteIntoPostgres();
+      console.log("Legacy migration completed");
+    } catch (err) {
+      console.error("Migration failed but server continues:", err?.message || err);
+    }
 
+    await ensureAdmin();
+    await ensureDepartmentCatalog();
+    await ensureDepartmentSubmenus();
+    await ensureMarketingIndicatorSeeds();
+    await ensureCalendarEventTypes();
+    await syncLegacyUserDepartmentData();
+    await ensureFixedDepartments();
 
+    const incompatibleCleanup = await purgeIncompatibleKnowledgeAssets(null);
+    if (
+      incompatibleCleanup.removed_sources
+      || incompatibleCleanup.removed_documents
+      || incompatibleCleanup.removed_local_files
+      || incompatibleCleanup.removed_transcripts
+    ) {
+      console.log("Limpeza de arquivos incompatíveis concluída:", incompatibleCleanup);
+    }
 
+    scheduleKnowledgeBackfillSweep(3 * 1000);
+    triggerTalkersKnowledgeSync();
+  })().catch((err) => {
+    console.error("Falha no bootstrap assíncrono do servidor:", err?.message || err);
+    return null;
+  });
 
+  return startupBootstrapPromise;
+}
 
+function startServer() {
+  console.log("DB_CLIENT:", process.env.DB_CLIENT || DB_CLIENT);
+  console.log("DATABASE_URL present:", Boolean(process.env.DATABASE_URL));
 
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Talkers IA rodando em ${BASE_URL}`);
+    console.log(`Login: ${BASE_URL}/login.html`);
+    console.log(`Banco ativo: ${DB_CLIENT}`);
 
+    setTimeout(() => {
+      runStartupBootstrap().catch((err) => {
+        console.error("Falha no bootstrap pós-start:", err?.message || err);
+      });
+    }, 2000);
+  });
+}
+
+startServer();
 
 
 

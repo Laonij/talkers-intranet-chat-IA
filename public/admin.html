@@ -910,6 +910,16 @@ const t = (key, params = {}, fallback = '') => {
 };
 const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
 
+function summarizeApiErrorPayload(payload, status) {
+  const raw = String(payload || '').trim();
+  if (!raw) return `HTTP ${status}`;
+  if (/<!doctype html/i.test(raw) || /<html/i.test(raw)) {
+    if (status >= 500) return `HTTP ${status} - serviço indisponível temporariamente`;
+    return `HTTP ${status} - resposta inválida do servidor`;
+  }
+  return raw;
+}
+
 async function api(path, opts = {}) {
   const headers = opts.body instanceof FormData
     ? { ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) }
@@ -924,7 +934,7 @@ async function api(path, opts = {}) {
   const txt = await res.text();
   let json = null;
   try { json = txt ? JSON.parse(txt) : null; } catch {}
-  if (!res.ok) throw new Error(json?.error || txt || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(json?.error || summarizeApiErrorPayload(txt, res.status) || `HTTP ${res.status}`);
   return json;
 }
 

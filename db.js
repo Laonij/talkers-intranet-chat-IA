@@ -70,9 +70,35 @@ function sanitizeLegacySqliteValue(value) {
   return value;
 }
 
+function translateSqliteNowExpression(kind, amountText, unitText) {
+  const amount = Number(amountText || 0);
+  const unit = String(unitText || "day").trim().toLowerCase();
+  if (!Number.isFinite(amount) || !unit) {
+    return kind === "date" ? "CURRENT_DATE" : "CURRENT_TIMESTAMP";
+  }
+
+  if (amount === 0) {
+    return kind === "date" ? "CURRENT_DATE" : "CURRENT_TIMESTAMP";
+  }
+
+  const direction = amount < 0 ? "-" : "+";
+  const absolute = Math.abs(amount);
+  const intervalSql = `(CURRENT_TIMESTAMP ${direction} INTERVAL '${absolute} ${unit}')`;
+  return kind === "date" ? `(${intervalSql})::date` : intervalSql;
+}
+
 function normalizeSqlForPostgres(sql) {
   return String(sql || "")
+    .replace(
+      /datetime\(\s*'now'\s*,\s*'([+-]?\d+)\s+(second|minute|hour|day|month|year)s?'\s*\)/gi,
+      (_, amountText, unitText) => translateSqliteNowExpression("datetime", amountText, unitText)
+    )
+    .replace(
+      /date\(\s*'now'\s*,\s*'([+-]?\d+)\s+(second|minute|hour|day|month|year)s?'\s*\)/gi,
+      (_, amountText, unitText) => translateSqliteNowExpression("date", amountText, unitText)
+    )
     .replace(/datetime\('now'\)/gi, "CURRENT_TIMESTAMP")
+    .replace(/date\('now'\)/gi, "CURRENT_DATE")
     .replace(/datetime\(([^)]+)\)/gi, "$1");
 }
 

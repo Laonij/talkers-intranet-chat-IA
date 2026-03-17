@@ -40,7 +40,7 @@ const {
 } = require("./lib/calendar");
 const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
-const { generateArtifact, detectArtifactKind, inferArtifactKindFromHistoryPrompt } = require("./lib/generate");
+const { generateArtifact, detectArtifactKind } = require("./lib/generate");
 const { buildDocumentKnowledgeProfile, normalizeDisplayName } = require("./lib/knowledge");
 const { ocrImage } = require("./lib/ocr");
 const { isAudioFile, isMediaFile, isVideoFile, transcribeAudio, transcribeMedia } = require("./lib/audio");
@@ -5389,13 +5389,15 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
 
   const topicShift = topicSnapshot?.topicShift || { isShift: false, reason: "unknown" };
   const explicitAttachmentReference = queryExplicitlyReferencesConversationAssets(userText);
-  const shouldUseAssets = (explicitAttachmentReference || queryLikelyNeedsArtifactContextReuse(userText)) && !topicShift.isShift;
+  const artifactRetry = looksLikeArtifactRetry(userText);
+  const shouldUseAssets = !topicShift.isShift && (explicitAttachmentReference || artifactRetry);
 
   if (shouldUseAssets) {
     return {
       ...safeAssets,
       used_in_this_turn: true,
-      explicit_reference: true,
+      explicit_reference: explicitAttachmentReference,
+      artifact_retry_assets: artifactRetry,
     };
   }
 
@@ -5407,73 +5409,64 @@ function sanitizeSupportAssetsForTurn(supportAssets = null, userText = "", topic
     imageReferences: [],
     used_in_this_turn: false,
     explicit_reference: explicitAttachmentReference,
+    artifact_retry_assets: artifactRetry,
   };
 }
 
 function looksLikeArtifactRetry(text = "") {
   const value = normalizeQuery(text);
   if (!value) return false;
-  return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse)/.test(value);
+  return /^(ok|okay|sim|pode|pode gerar|gere|faça|faca|tente|tente novamente|gere novamente|faça novamente|faca novamente|repita|repita a ultima|faça a ultima solicitacao|faca a ultima solicitacao|tente gerar novamente|gere isso|gere essa|gere esse|entao faca|então faça|entao gere|então gere|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento)/.test(value);
 }
 
-function queryImpliesAssetAnalysis(query = "") {
-  const value = normalizeQuery(query);
+function looksLikeAttachmentAnalysisTurn(text = "") {
+  const value = normalizeQuery(text);
   if (!value) return false;
-  return /(analise|análise|analisar|explique|explicar|interprete|interpretar|resuma|resumir|compare|comparar|diagnostique|diagnosticar|avalie|avaliar|me fale sobre|o que tem|quais dados|como melhorar)/i.test(value)
-    && /(arquivo|documento|pdf|planilha|imagem|foto|anexo|anexada|anexado|enviei|mandei|subi|nessa|nesta|desse|dessa)/i.test(value);
+  const hasAnalysisIntent = /(analise|analisar|explica|explique|resuma|resumir|interprete|interpretar|compare|comparar|revise|avaliar|avalie|diagnostique|comente|melhore|melhorar|otimize)/.test(value);
+  const hasAttachmentCue = /(arquivo|anexo|anexada|anexado|planilha|pdf|documento|foto|imagem|enviei|mandei|subi|essa|esse|isso|dessa|desse|deste|desta)/.test(value);
+  return hasAnalysisIntent && hasAttachmentCue;
 }
 
-function queryLikelyNeedsArtifactContextReuse(query = "") {
-  const value = normalizeQuery(query);
+function looksLikeGenericArtifactContinuation(text = "") {
+  const value = normalizeQuery(text);
   if (!value) return false;
-  return looksLikeArtifactRetry(value) || /^(entao|então)\s+(fa[çc]a|gere|crie)/.test(value);
+  return /^(ok|okay|sim|pode gerar|gere|faça|faca|entao faca|então faça|entao gere|então gere|tente novamente|gere novamente|faça novamente|faca novamente|faça a imagem|faca a imagem|faça o pdf|faca o pdf|faça o documento|faca o documento|faça a ultima solicitacao|faca a ultima solicitacao|gere isso|gere essa|gere esse)$/.test(value);
 }
 
-async function resolveArtifactRequestForTurn(conversationId, userText, options = {}) {
-  const referenceImages = Array.isArray(options.referenceImages) ? options.referenceImages : [];
-  const hasSupportAssets = Boolean(options.hasSupportAssets);
-  if (queryImpliesAssetAnalysis(userText) && hasSupportAssets) {
-    return { prompt: userText, kind: null, source: "analysis" };
+async function resolveArtifactRequestForTurn(conversationId, userText, referenceImages = []) {
+  const currentKind = detectArtifactKind(userText, { referenceImages });
+  const wantsRetry = looksLikeArtifactRetry(userText);
+
+  if (currentKind && !looksLikeGenericArtifactContinuation(userText)) {
+    return { prompt: userText, kind: currentKind, source: "current", referenceImages };
   }
 
-  const currentKind = detectArtifactKind(userText, { referenceImages, hasSupportAssets });
-  const continuation = queryLikelyNeedsArtifactContextReuse(userText);
-  if (currentKind && !continuation) {
-    return { prompt: userText, kind: currentKind, source: "current" };
-  }
-
-  if (!looksLikeArtifactRetry(userText) && !continuation) {
-    return { prompt: userText, kind: currentKind || null, source: currentKind ? "current" : "none" };
+  if (!wantsRetry) {
+    return { prompt: userText, kind: currentKind, source: currentKind ? "current" : "none", referenceImages };
   }
 
   const rows = await all(
-    `SELECT id, role, content
+    `SELECT role, content
        FROM messages
       WHERE conversation_id=?
         AND role='user'
         AND content IS NOT NULL
         AND TRIM(content)<>''
       ORDER BY id DESC
-      LIMIT 30`,
+      LIMIT 20`,
     [conversationId]
   );
 
   for (const row of rows) {
     const candidate = String(row?.content || "").trim();
-    if (!candidate || candidate === userText) continue;
-    const candidateKind = detectArtifactKind(candidate, { referenceImages, hasSupportAssets: true }) || inferArtifactKindFromHistoryPrompt(candidate, { referenceImages });
+    if (!candidate) continue;
+    if (normalizeQuery(candidate) === normalizeQuery(userText)) continue;
+    const candidateKind = detectArtifactKind(candidate, { referenceImages });
     if (!candidateKind) continue;
-    return {
-      prompt: continuation && currentKind ? `${candidate}
-
-Instrucao adicional desta vez: ${userText}` : candidate,
-      kind: currentKind || candidateKind,
-      source: "history",
-      seedPrompt: candidate,
-    };
+    return { prompt: candidate, kind: candidateKind, source: "history", referenceImages };
   }
 
-  return { prompt: userText, kind: currentKind || null, source: currentKind ? "current" : "none" };
+  return { prompt: userText, kind: currentKind, source: currentKind ? "current" : "none", referenceImages };
 }
 
 function buildOpenAIPromptConfig(user = null, intent = null, language = "pt") {
@@ -8738,22 +8731,22 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, {
-      referenceImages: (queryLikelyNeedsArtifactContextReuse(text) ? (rawSupportAssets.imageReferences || []) : (supportAssets.imageReferences || [])),
-      hasSupportAssets: Boolean((supportAssets.documentInputs || []).length || (supportAssets.imageReferences || []).length || (rawSupportAssets.documentInputs || []).length || (rawSupportAssets.imageReferences || []).length),
-    });
-    const artifactReferenceImages = artifactRequest.source === "history"
-      ? (rawSupportAssets.imageReferences || [])
-      : (supportAssets.imageReferences || []);
+    const shouldBypassArtifactGeneration = looksLikeAttachmentAnalysisTurn(text) && supportAssets.used_in_this_turn;
+    const artifactRequest = shouldBypassArtifactGeneration
+      ? { prompt: text, kind: null, source: "analysis" }
+      : await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
           prompt: artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: artifactReferenceImages,
+          referenceImages: artifactRequest.referenceImages || supportAssets.imageReferences || [],
         }).catch((err) => {
           console.log("Erro na geracao de artefato:", err?.message || err);
-          return null;
+          return {
+            kind: "message",
+            reply: "Tentei gerar esse artefato agora, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns segundos com o mesmo pedido.",
+          };
         })
       : null;
 
@@ -9185,22 +9178,22 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, {
-      referenceImages: (queryLikelyNeedsArtifactContextReuse(text) ? (rawSupportAssets.imageReferences || []) : (supportAssets.imageReferences || [])),
-      hasSupportAssets: Boolean((supportAssets.documentInputs || []).length || (supportAssets.imageReferences || []).length || (rawSupportAssets.documentInputs || []).length || (rawSupportAssets.imageReferences || []).length),
-    });
-    const artifactReferenceImages = artifactRequest.source === "history"
-      ? (rawSupportAssets.imageReferences || [])
-      : (supportAssets.imageReferences || []);
+    const shouldBypassArtifactGeneration = looksLikeAttachmentAnalysisTurn(text) && supportAssets.used_in_this_turn;
+    const artifactRequest = shouldBypassArtifactGeneration
+      ? { prompt: text, kind: null, source: "analysis" }
+      : await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || []);
     const artifact = artifactRequest.kind
       ? await generateArtifact({
           apiKey: process.env.OPENAI_API_KEY || "",
           prompt: artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: artifactReferenceImages,
+          referenceImages: artifactRequest.referenceImages || supportAssets.imageReferences || [],
         }).catch((err) => {
           console.log("Erro na geracao de artefato:", err?.message || err);
-          return null;
+          return {
+            kind: "message",
+            reply: "Tentei gerar esse artefato agora, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns segundos com o mesmo pedido.",
+          };
         })
       : null;
 

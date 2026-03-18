@@ -10,7 +10,8 @@
     "index": "node scripts/index_drive.js",
     "watch": "node scripts/watch_drive.js",
     "sync": "node scripts/sync_drive.js",
-    "migrate:postgres": "node scripts/migrate_postgres.js"
+    "migrate:postgres": "node scripts/migrate_postgres.js",
+    "check:syntax": "node --check server.js && node --check db.js && node --check auth.js"
   },
   "dependencies": {
     "axios": "^1.7.7",

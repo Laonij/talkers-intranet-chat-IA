@@ -1,6 +1,20 @@
-﻿const jwt = require("jsonwebtoken");
+const jwt = require("jsonwebtoken");
+const { createLogger } = require("./lib/appLogger");
+
+const authLogger = createLogger("auth");
+const JWT_ALGORITHM = "HS256";
+
+function ensureJwtSecret(jwtSecret) {
+  const safeSecret = String(jwtSecret || "").trim();
+  if (!safeSecret) {
+    throw new Error("jwt_secret_missing");
+  }
+  return safeSecret;
+}
 
 function signSession(user, jwtSecret) {
+  const safeSecret = ensureJwtSecret(jwtSecret);
+
   return jwt.sign(
     {
       sub: user.id,
@@ -12,19 +26,34 @@ function signSession(user, jwtSecret) {
       can_access_intranet: Boolean(user.can_access_intranet),
       preferred_locale: user.preferred_locale || "pt-BR",
     },
-    jwtSecret,
-    { expiresIn: "7d" }
+    safeSecret,
+    {
+      expiresIn: "7d",
+      algorithm: JWT_ALGORITHM,
+    }
   );
 }
 
 function requireAuth(jwtSecret) {
+  const configuredSecret = String(jwtSecret || "").trim();
+
   return (req, res, next) => {
+    if (!configuredSecret) {
+      authLogger.error("Tentativa de autenticar sem JWT_SECRET configurado.");
+      return res.status(503).json({ error: "auth_unavailable" });
+    }
+
     const token = req.cookies?.session;
     if (!token) return res.status(401).json({ error: "not_authenticated" });
+
     try {
-      req.user = jwt.verify(token, jwtSecret);
+      req.user = jwt.verify(token, configuredSecret, { algorithms: [JWT_ALGORITHM] });
       next();
-    } catch (e) {
+    } catch (err) {
+      authLogger.warn("Sessao JWT invalida.", {
+        message: err?.message || String(err || "invalid_session"),
+        name: err?.name || "",
+      });
       return res.status(401).json({ error: "invalid_session" });
     }
   };

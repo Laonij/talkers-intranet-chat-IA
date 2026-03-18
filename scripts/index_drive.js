@@ -2,13 +2,16 @@
 const fs = require("fs");
 const path = require("path");
 const { migrate, get, all, run } = require("../db");
+const { createLogger } = require("../lib/appLogger");
 const { extractText } = require("../lib/extract");
 const { detectLanguage } = require("../lib/language");
+const { sanitizeTextForPostgres } = require("../lib/postgresSanitizer");
 const { chunkTextSemantically, extractKeywords, hashText } = require("../lib/semantic");
 
 const INDEX_FOLDER = process.env.INDEX_FOLDER || "kb";
 const SUPPORTED = new Set([".txt", ".md", ".pdf", ".docx", ".xlsx", ".csv", ".pptx"]);
-const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+const MAX_FILE_SIZE_BYTES = Math.max(1, Number(process.env.MAX_UPLOAD_SIZE_MB || 25)) * 1024 * 1024;
+const indexLogger = createLogger("indexing");
 
 function walk(dir) {
   const out = [];
@@ -33,7 +36,12 @@ async function upsertDocumentChunks(documentId, relPath, safeText, language, key
   await run("DELETE FROM document_chunks WHERE document_id=?", [documentId]);
 
   const documentKeywords = keywordText ? keywordText.split(", ").filter(Boolean) : [];
-  const chunks = chunkTextSemantically(safeText || relPath, {
+  const normalizedText = sanitizeTextForPostgres(safeText || relPath, {
+    trim: true,
+    normalizeWhitespace: true,
+    maxLength: 250000,
+  }) || relPath;
+  const chunks = chunkTextSemantically(normalizedText, {
     maxChars: 1400,
     minChars: 420,
   });
@@ -41,7 +49,7 @@ async function upsertDocumentChunks(documentId, relPath, safeText, language, key
   if (!chunks.length) {
     await run(
       "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [documentId, relPath, 0, safeText, language, "", null, hashText(safeText), keywordText]
+      [documentId, relPath, 0, normalizedText, language, "", null, hashText(normalizedText), keywordText]
     );
     return 1;
   }
@@ -49,11 +57,19 @@ async function upsertDocumentChunks(documentId, relPath, safeText, language, key
   let created = 0;
   for (const chunk of chunks) {
     const keywords = [...new Set([...(chunk.keywords || []), ...documentKeywords])].slice(0, 16).join(", ");
-    await run(
-      "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [documentId, relPath, chunk.index, chunk.text, language, "", null, chunk.hash, keywords]
-    );
-    created += 1;
+    try {
+      await run(
+        "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [documentId, relPath, chunk.index, sanitizeTextForPostgres(chunk.text, { trim: true, normalizeWhitespace: true }) || normalizedText, language, "", null, chunk.hash, keywords]
+      );
+      created += 1;
+    } catch (err) {
+      indexLogger.warn("Falha ao persistir chunk no indexador.", {
+        document_id: documentId,
+        chunk_index: chunk.index,
+        message: err?.message || String(err || "document_chunk_insert_failed"),
+      });
+    }
   }
 
   return created;
@@ -107,7 +123,11 @@ async function main() {
     }
 
     try {
-      const extracted = (await extractText(full, path.basename(full), "")).trim();
+      const extracted = sanitizeTextForPostgres(await extractText(full, path.basename(full), ""), {
+        trim: true,
+        normalizeWhitespace: true,
+        maxLength: 250000,
+      }) || "";
       const safeText = extracted.length ? extracted : `(sem texto extraido) ${relPath}`;
       const language = detectLanguage(safeText, "pt");
       const keywordText = extractKeywords(safeText, 14).join(", ");
@@ -138,7 +158,10 @@ async function main() {
       }
     } catch (err) {
       failed++;
-      console.log("Falha ao indexar:", relPath, String(err?.message || err));
+      indexLogger.warn("Falha ao indexar arquivo.", {
+        rel_path: relPath,
+        message: err?.message || String(err || "drive_index_failed"),
+      });
     }
   }
 

@@ -2,6 +2,14 @@ const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 const { Pool } = require("pg");
+const { createLogger } = require("./lib/appLogger");
+const {
+  safeJsonStringifyForPostgres,
+  sanitizeDbParams,
+  sanitizeTextForPostgres,
+} = require("./lib/postgresSanitizer");
+
+const databaseLogger = createLogger("database");
 
 const renderDiskCandidates = ["/var/data", "/data"];
 const detectedRenderDiskDir = renderDiskCandidates.find((candidate) => fs.existsSync(candidate));
@@ -35,6 +43,12 @@ let sqliteDb = null;
 let pgPool = null;
 let migratePromise = null;
 
+function readPositiveIntEnv(name, fallback, minimum = 1) {
+  const parsed = Number(process.env[name] || fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.floor(parsed));
+}
+
 if (DB_CLIENT === "sqlite") {
   sqliteDb = new sqlite3.Database(sqlitePath);
 } else {
@@ -46,6 +60,21 @@ if (DB_CLIENT === "sqlite") {
   pgPool = new Pool({
     connectionString: DATABASE_URL,
     ssl: sslMode === "disable" ? false : { rejectUnauthorized: false },
+    max: readPositiveIntEnv("PG_POOL_MAX", 12),
+    idleTimeoutMillis: readPositiveIntEnv("PG_IDLE_TIMEOUT_MS", 30000, 1000),
+    connectionTimeoutMillis: readPositiveIntEnv("PG_CONNECTION_TIMEOUT_MS", 10000, 1000),
+    statement_timeout: readPositiveIntEnv("PG_STATEMENT_TIMEOUT_MS", 30000, 1000),
+    query_timeout: readPositiveIntEnv("PG_QUERY_TIMEOUT_MS", 30000, 1000),
+    allowExitOnIdle: true,
+    application_name: "talkers-intranet-chat-ia",
+  });
+
+  pgPool.on("error", (err) => {
+    databaseLogger.error("Pool Postgres emitiu erro.", {
+      message: err?.message || String(err || "pg_pool_error"),
+      code: err?.code || "",
+      severity: err?.severity || "",
+    });
   });
 }
 
@@ -56,10 +85,7 @@ function quoteIdent(value) {
 }
 
 function sanitizeText(value) {
-  if (value === null || value === undefined) return null;
-  return String(value)
-    .replace(/\u0000/g, "")
-    .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
+  return sanitizeTextForPostgres(value);
 }
 
 function sanitizeLegacySqliteValue(value) {
@@ -141,8 +167,8 @@ function normalizeArtifactSessionPayload(payload = {}) {
     prompt,
     resolved_prompt: resolvedPrompt || prompt,
     source_message_id: sourceMessageId,
-    input_files_json: JSON.stringify(Array.isArray(payload.inputFiles || payload.input_files) ? (payload.inputFiles || payload.input_files) : []),
-    image_refs_json: JSON.stringify(Array.isArray(payload.imageRefs || payload.image_refs) ? (payload.imageRefs || payload.image_refs) : []),
+    input_files_json: safeJsonStringifyForPostgres(Array.isArray(payload.inputFiles || payload.input_files) ? (payload.inputFiles || payload.input_files) : [], "[]"),
+    image_refs_json: safeJsonStringifyForPostgres(Array.isArray(payload.imageRefs || payload.image_refs) ? (payload.imageRefs || payload.image_refs) : [], "[]"),
     status: normalizeArtifactSessionStatus(payload.status || "pending"),
   };
 }
@@ -172,10 +198,10 @@ function normalizeLegacyArtifactSessionRow(row = {}) {
   normalized.status = normalizeArtifactSessionStatus(normalized.status || row.status || "pending");
   normalized.input_files_json = typeof normalized.input_files_json === "string"
     ? sanitizeText(normalized.input_files_json)
-    : JSON.stringify([]);
+    : safeJsonStringifyForPostgres([], "[]");
   normalized.image_refs_json = typeof normalized.image_refs_json === "string"
     ? sanitizeText(normalized.image_refs_json)
-    : JSON.stringify([]);
+    : safeJsonStringifyForPostgres([], "[]");
   return normalized;
 }
 
@@ -216,9 +242,36 @@ function toPostgresSql(sql) {
   return normalizeSqlForPostgres(sql).replace(/\?/g, () => `$${++index}`);
 }
 
+function summarizeSql(sql = "") {
+  return String(sql || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 320);
+}
+
+async function queryPostgres(sql, params = [], options = {}) {
+  const translatedSql = options.skipTranslate ? String(sql || "") : toPostgresSql(sql);
+  const safeParams = sanitizeDbParams(params);
+  try {
+    return await pgPool.query(translatedSql, safeParams);
+  } catch (err) {
+    databaseLogger.error("Falha em query Postgres.", {
+      message: err?.message || String(err || "pg_query_failed"),
+      code: err?.code || "",
+      severity: err?.severity || "",
+      detail: err?.detail || "",
+      routine: err?.routine || "",
+      sql: summarizeSql(translatedSql),
+      param_count: safeParams.length,
+    });
+    throw err;
+  }
+}
+
 function execSqlite(sql, params = []) {
+  const safeParams = sanitizeDbParams(params);
   return new Promise((resolve, reject) => {
-    sqliteDb.run(sql, params, function onRun(err) {
+    sqliteDb.run(sql, safeParams, function onRun(err) {
       if (err) return reject(err);
       resolve({ lastID: this.lastID, changes: this.changes });
     });
@@ -226,14 +279,16 @@ function execSqlite(sql, params = []) {
 }
 
 function getSqlite(sql, params = []) {
+  const safeParams = sanitizeDbParams(params);
   return new Promise((resolve, reject) => {
-    sqliteDb.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
+    sqliteDb.get(sql, safeParams, (err, row) => (err ? reject(err) : resolve(row)));
   });
 }
 
 function allSqlite(sql, params = []) {
+  const safeParams = sanitizeDbParams(params);
   return new Promise((resolve, reject) => {
-    sqliteDb.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
+    sqliteDb.all(sql, safeParams, (err, rows) => (err ? reject(err) : resolve(rows)));
   });
 }
 
@@ -2439,10 +2494,13 @@ async function logEvent(userId, action, meta = {}) {
   try {
     return await run(
       "INSERT INTO audit_log (user_id, action, meta_json) VALUES (?, ?, ?)",
-      [userId ?? null, action, JSON.stringify(meta ?? {})]
+      [userId ?? null, action, safeJsonStringifyForPostgres(meta ?? {}, "{}")]
     );
   } catch (err) {
-    console.log("Erro ao registrar audit_log:", err?.message || err);
+    databaseLogger.warn("Erro ao registrar audit_log.", {
+      message: err?.message || String(err || "audit_log_failed"),
+      code: err?.code || "",
+    });
     return null;
   }
 }
@@ -2451,7 +2509,7 @@ async function get(sql, params = []) {
   await migrate();
 
   if (DB_CLIENT === "postgres") {
-    const result = await pgPool.query(toPostgresSql(sql), params);
+    const result = await queryPostgres(sql, params);
     return result.rows[0] || undefined;
   }
 
@@ -2462,7 +2520,7 @@ async function all(sql, params = []) {
   await migrate();
 
   if (DB_CLIENT === "postgres") {
-    const result = await pgPool.query(toPostgresSql(sql), params);
+    const result = await queryPostgres(sql, params);
     return result.rows || [];
   }
 
@@ -2480,7 +2538,7 @@ async function run(sql, params = []) {
       translated = `${translated} RETURNING *`;
     }
 
-    const result = await pgPool.query(translated, params);
+    const result = await queryPostgres(translated, params, { skipTranslate: true });
     return {
       lastID: trimmed.startsWith("insert ") ? inferLastId(result.rows[0]) : 0,
       changes: result.rowCount || 0,
@@ -2569,8 +2627,8 @@ async function updateArtifactSessionStatus(sessionId, updates = {}) {
   }
   if (updates.resolvedPrompt !== undefined) normalized.resolved_prompt = sanitizeText(updates.resolvedPrompt);
   if (updates.sourceMessageId !== undefined) normalized.source_message_id = Number(updates.sourceMessageId || 0) || null;
-  if (updates.inputFiles !== undefined) normalized.input_files_json = JSON.stringify(Array.isArray(updates.inputFiles) ? updates.inputFiles : []);
-  if (updates.imageRefs !== undefined) normalized.image_refs_json = JSON.stringify(Array.isArray(updates.imageRefs) ? updates.imageRefs : []);
+  if (updates.inputFiles !== undefined) normalized.input_files_json = safeJsonStringifyForPostgres(Array.isArray(updates.inputFiles) ? updates.inputFiles : [], "[]");
+  if (updates.imageRefs !== undefined) normalized.image_refs_json = safeJsonStringifyForPostgres(Array.isArray(updates.imageRefs) ? updates.imageRefs : [], "[]");
   if (updates.status !== undefined) normalized.status = normalizeArtifactSessionStatus(updates.status);
 
   Object.entries(normalized).forEach(([column, value]) => {
@@ -2694,10 +2752,6 @@ module.exports = {
   updateArtifactSessionStatus,
   uploadsDir,
 };
-
-
-
-
 
 
 

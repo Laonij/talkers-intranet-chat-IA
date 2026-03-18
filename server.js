@@ -27,6 +27,7 @@ const {
   saveArtifactSession,
   updateArtifactSessionStatus,
 } = require("./db");
+const { createLogger } = require("./lib/appLogger");
 const {
   DEFAULT_LOCALE,
   detectLanguage,
@@ -61,6 +62,12 @@ const { buildTurnExecutionPlan } = require("./lib/chatOrchestrator");
 const { buildStructuredFileContext, parseStructuredConversationFile } = require("./lib/filePipeline");
 const { ocrImage } = require("./lib/ocr");
 const { isAudioFile, isMediaFile, isVideoFile, transcribeAudio, transcribeMedia } = require("./lib/audio");
+const {
+  buildSanitizationSummary,
+  deepSanitizeForPostgres,
+  safeJsonStringifyForPostgres,
+  sanitizeTextForPostgres,
+} = require("./lib/postgresSanitizer");
 const {
   attachFileToVectorStore,
   buildOpenAIInputFilePart,
@@ -104,6 +111,9 @@ const DEFAULT_ADMIN_EMAIL = "admin@talkers.com";
 const DEFAULT_ADMIN_NAME = "Admin";
 const DEFAULT_ADMIN_PASSWORD = "Talkers#2026!";
 const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
+const MAX_UPLOAD_SIZE_MB = Math.max(1, Number(process.env.MAX_UPLOAD_SIZE_MB || 25));
+const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
+const MAX_CONCURRENT_JOBS = Math.max(1, Number(process.env.MAX_CONCURRENT_JOBS || 5));
 const MAX_CONVERSATION_MEMORY = 6000;
 const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
 const OPENAI_EMBEDDING_MODEL = String(process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small").trim();
@@ -157,6 +167,14 @@ const WHATSAPP_PROVIDER_ENABLED = String(process.env.WHATSAPP_PROVIDER_ENABLED |
 const WHATSAPP_PROVIDER_NAME = String(process.env.WHATSAPP_PROVIDER_NAME || "").trim();
 const WHATSAPP_PROVIDER_API_URL = String(process.env.WHATSAPP_PROVIDER_API_URL || "").trim();
 const WHATSAPP_PROVIDER_TOKEN = String(process.env.WHATSAPP_PROVIDER_TOKEN || "").trim();
+
+const startupLogger = createLogger("startup");
+const databaseLogger = createLogger("database");
+const uploadLogger = createLogger("uploads");
+const indexingLogger = createLogger("indexing");
+const jobsLogger = createLogger("jobs");
+const authLogger = createLogger("auth");
+const openaiLogger = createLogger("openai");
 
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
@@ -224,21 +242,21 @@ const RAG_LOCAL_EXTRACTION_LIMITS = {
   ".txt": 5 * 1024 * 1024,
   ".md": 5 * 1024 * 1024,
   ".json": 5 * 1024 * 1024,
-  ".mp3": 25 * 1024 * 1024,
-  ".wav": 25 * 1024 * 1024,
-  ".m4a": 25 * 1024 * 1024,
-  ".aac": 25 * 1024 * 1024,
-  ".ogg": 25 * 1024 * 1024,
-  ".webm": 25 * 1024 * 1024,
-  ".flac": 25 * 1024 * 1024,
-  ".wma": 25 * 1024 * 1024,
-  ".mp4": 25 * 1024 * 1024,
-  ".mov": 25 * 1024 * 1024,
-  ".avi": 25 * 1024 * 1024,
-  ".mkv": 25 * 1024 * 1024,
-  ".m4v": 25 * 1024 * 1024,
-  ".mpeg": 25 * 1024 * 1024,
-  ".mpg": 25 * 1024 * 1024,
+  ".mp3": MAX_UPLOAD_SIZE_BYTES,
+  ".wav": MAX_UPLOAD_SIZE_BYTES,
+  ".m4a": MAX_UPLOAD_SIZE_BYTES,
+  ".aac": MAX_UPLOAD_SIZE_BYTES,
+  ".ogg": MAX_UPLOAD_SIZE_BYTES,
+  ".webm": MAX_UPLOAD_SIZE_BYTES,
+  ".flac": MAX_UPLOAD_SIZE_BYTES,
+  ".wma": MAX_UPLOAD_SIZE_BYTES,
+  ".mp4": MAX_UPLOAD_SIZE_BYTES,
+  ".mov": MAX_UPLOAD_SIZE_BYTES,
+  ".avi": MAX_UPLOAD_SIZE_BYTES,
+  ".mkv": MAX_UPLOAD_SIZE_BYTES,
+  ".m4v": MAX_UPLOAD_SIZE_BYTES,
+  ".mpeg": MAX_UPLOAD_SIZE_BYTES,
+  ".mpg": MAX_UPLOAD_SIZE_BYTES,
 };
 const MEDIA_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".wma", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg"]);
 const MEMORY_ENTRY_MIN_SIMILARITY = 0.43;
@@ -247,7 +265,7 @@ const CALENDAR_EVENT_STATUSES = new Set(["scheduled", "cancelled"]);
 const DOCUMENT_MEMORY_USER_ID = 0;
 const KNOWLEDGE_MEMORY_SCOPE = "knowledge_document";
 const KNOWLEDGE_MEMORY_KIND = "document_semantic";
-const BACKGROUND_KNOWLEDGE_SWEEP_BATCH = 50;
+const BACKGROUND_KNOWLEDGE_SWEEP_BATCH = Math.max(10, MAX_CONCURRENT_JOBS * 10);
 const BACKGROUND_KNOWLEDGE_SWEEP_INTERVAL_MS = 12 * 1000;
 const BACKGROUND_KNOWLEDGE_IDLE_INTERVAL_MS = 2 * 60 * 1000;
 
@@ -525,11 +543,33 @@ function safeJsonParse(value) {
 }
 
 function safeJsonStringify(value, fallback = "{}") {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return fallback;
-  }
+  return safeJsonStringifyForPostgres(value, fallback);
+}
+
+function sanitizePersistedText(value, options = {}) {
+  return sanitizeTextForPostgres(value, {
+    trim: true,
+    normalizeWhitespace: false,
+    ...options,
+  }) || "";
+}
+
+function sanitizePersistedValue(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array || value instanceof Date) return value;
+  if (typeof value === "string") return sanitizePersistedText(value, { trim: false });
+  if (Array.isArray(value) || typeof value === "object") return safeJsonStringify(value, "{}");
+  return value;
+}
+
+function logSanitizationIfNeeded(domainLogger, message, value, context = {}) {
+  const summary = buildSanitizationSummary(value, { trim: false, normalizeWhitespace: false });
+  if (!summary) return;
+  domainLogger.warn(message, {
+    ...context,
+    ...summary,
+  });
 }
 
 function trimContextText(value = "", maxChars = CHAT_CONTEXT_BLOCK_MAX_CHARS) {
@@ -849,6 +889,10 @@ function detectKnowledgeTextIssues(text = "") {
     issues.push("encoding_suspeito");
   }
 
+  if (/\u0000/.test(safe)) {
+    issues.push("byte_nulo_detectado");
+  }
+
   if (safe.trim() && safe.replace(/\s+/g, "").length < 32) {
     issues.push("texto_muito_curto");
   }
@@ -916,13 +960,14 @@ function extractKnowledgeLastError(state) {
 
 async function appendKnowledgeProcessingLog(knowledgeSourceId, stageKey, stageStatus, message = "", detail = {}, actorUserId = null) {
   if (!knowledgeSourceId) return;
+  const safeMessage = sanitizePersistedText(message || "", { trim: true, maxLength: 3000 }) || null;
   await run(
     "INSERT INTO knowledge_processing_logs (knowledge_source_id, stage_key, stage_status, message, detail_json, actor_user_id) VALUES (?, ?, ?, ?, ?, ?)",
     [
       knowledgeSourceId,
       stageKey,
       stageStatus,
-      message || null,
+      safeMessage,
       detail && Object.keys(detail).length ? safeJsonStringify(detail, "{}") : null,
       actorUserId || null,
     ]
@@ -950,7 +995,7 @@ async function updateKnowledgeSourceFields(knowledgeSourceId, fields = {}) {
   if (!knowledgeSourceId || !entries.length) return;
 
   const columns = entries.map(([key]) => `${key}=?`).join(", ");
-  const values = entries.map(([, value]) => value);
+  const values = entries.map(([, value]) => sanitizePersistedValue(value));
   values.push(knowledgeSourceId);
 
   await run(
@@ -3267,22 +3312,24 @@ async function createFileMessage({
   role,
   content,
 }) {
+  const safeOriginalName = sanitizeFilename(originalName || "arquivo");
+  const safeStoredName = sanitizeFilename(storedName || `upload-${Date.now()}`);
   const fileResult = await run(
     "INSERT INTO files (conversation_id, uploaded_by, original_name, stored_name, mime_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
-    [conversationId, uploadedBy, originalName, storedName, mimeType || null, sizeBytes || null]
+    [conversationId, uploadedBy, safeOriginalName, safeStoredName, mimeType || null, sizeBytes || null]
   );
 
   const meta = {
     type: "file",
     file_id: fileResult.lastID,
-    filename: originalName,
+    filename: safeOriginalName,
     mimetype: mimeType || "",
     size: sizeBytes || 0,
   };
 
   await run(
     "INSERT INTO messages (conversation_id, role, content, meta_json) VALUES (?, ?, ?, ?)",
-    [conversationId, role, content || "", JSON.stringify(meta)]
+    [conversationId, role, sanitizePersistedText(content || "", { trim: false, maxLength: 12000 }), safeJsonStringify(meta, "{}")]
   );
 
   await run("UPDATE conversations SET updated_at=datetime('now') WHERE id=?", [conversationId]);
@@ -3353,6 +3400,10 @@ async function handleConversationUpload(req, res) {
 
   const uploaded = req.file;
   if (!uploaded) return res.status(400).json({ error: "missing_file" });
+  if (Number(uploaded.size || 0) <= 0) {
+    deleteFileIfExists(uploaded.path || path.join(uploadsDir, uploaded.filename || ""));
+    return res.status(400).json({ error: "empty_file" });
+  }
 
   const saved = await createFileMessage({
     conversationId: id,
@@ -3495,7 +3546,14 @@ async function upsertMemoryEntry({
   language = "pt",
   sourceMessageIds = [],
 }) {
-  const safeText = compactMemory(String(contentText || "").trim(), 2200);
+  const safeText = compactMemory(
+    sanitizePersistedText(contentText || "", {
+      trim: true,
+      normalizeWhitespace: false,
+      maxLength: 6000,
+    }),
+    2200
+  );
   if (!safeText) return null;
 
   const hasUserId = ![undefined, null, ""].includes(userId);
@@ -3524,13 +3582,13 @@ async function upsertMemoryEntry({
 
   const embedding = await getEmbeddingForText(safeText);
   const payload = [
-    title || buildMemoryEntryTitle(safeText),
+    sanitizePersistedText(title || buildMemoryEntryTitle(safeText), { trim: true, maxLength: 240 }),
     safeText,
     normalizedText,
     safeJsonStringify(topics || [], "[]"),
-    language || "pt",
+    sanitizePersistedText(language || "pt", { trim: true, maxLength: 24 }) || "pt",
     safeJsonStringify(sourceMessageIds || [], "[]"),
-    embedding ? JSON.stringify(embedding) : null,
+    embedding ? safeJsonStringify(embedding, "[]") : null,
     embedding ? OPENAI_EMBEDDING_MODEL : null,
   ];
 
@@ -3713,7 +3771,12 @@ function shouldExtractKnowledgeLocally(ext, sizeBytes) {
 }
 
 function normalizeKnowledgeText(value = "") {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  const sanitized = sanitizeTextForPostgres(value || "", {
+    trim: true,
+    normalizeWhitespace: true,
+    maxLength: 250000,
+  }) || "";
+  return sanitized.replace(/\s+/g, " ").trim();
 }
 
 async function hashFileSha256(filePath) {
@@ -3783,29 +3846,61 @@ async function upsertDocumentChunks(documentId, relPath, extractedText, language
   await run("DELETE FROM document_chunks WHERE document_id=?", [documentId]);
 
   const departmentName = String(options.departmentName || '').trim() || null;
-  const chunks = chunkTextSemantically(extractedText || relPath, {
+  const baseText = normalizeKnowledgeText(extractedText || relPath || "");
+  const safeRelPath = sanitizePersistedText(relPath || "", { trim: true, maxLength: 512 }) || "documento";
+  const chunks = chunkTextSemantically(baseText || safeRelPath, {
     maxChars: 1400,
     minChars: 420,
   });
 
   if (!chunks.length) {
-    const contentText = String(extractedText || relPath || '').trim();
+    const contentText = baseText || safeRelPath;
     const keywordText = extractKeywords(contentText, 12).join(', ');
     await run(
       "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, department_name, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [documentId, relPath, 0, contentText, departmentName, language, '', null, hashText(contentText), keywordText]
+      [documentId, safeRelPath, 0, contentText, departmentName, language, '', null, hashText(contentText), keywordText]
     );
     return 1;
   }
 
   let created = 0;
+  let failed = 0;
   for (const chunk of chunks) {
+    const chunkText = normalizeKnowledgeText(chunk.text || "");
+    if (!chunkText) continue;
     const keywords = [...new Set([...(chunk.keywords || []), ...documentKeywords])].slice(0, 16).join(', ');
+    try {
+      await run(
+        "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, department_name, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [documentId, safeRelPath, chunk.index, chunkText, departmentName, language, '', null, chunk.hash || hashText(chunkText), keywords]
+      );
+      created += 1;
+    } catch (err) {
+      failed += 1;
+      indexingLogger.warn("Falha ao persistir chunk documental.", {
+        document_id: documentId,
+        chunk_index: chunk.index,
+        message: err?.message || String(err || "document_chunk_insert_failed"),
+        code: err?.code || "",
+      });
+    }
+  }
+
+  if (!created) {
+    const fallbackText = safeRelPath;
     await run(
       "INSERT INTO document_chunks (document_id, rel_path, chunk_index, content_text, department_name, language, translated_text, translated_language, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [documentId, relPath, chunk.index, chunk.text, departmentName, language, '', null, chunk.hash, keywords]
+      [documentId, safeRelPath, 0, fallbackText, departmentName, language, '', null, hashText(fallbackText), 'fallback']
     );
-    created += 1;
+    created = 1;
+  }
+
+  if (failed) {
+    indexingLogger.warn("Persistencia de chunks concluida com falhas parciais.", {
+      document_id: documentId,
+      created,
+      failed,
+    });
   }
 
   return created;
@@ -3830,6 +3925,17 @@ async function upsertIndexedDocument({
     extractedTextOverride
     || (shouldExtract ? await extractText(sourcePath, originalName, mimeType) : "")
   );
+  if (!shouldExtract) {
+    indexingLogger.info("Arquivo mantido para indexacao vetorial sem extracao local completa.", {
+      rel_path: relPath,
+      ext,
+      size_bytes: stat.size,
+    });
+  }
+  logSanitizationIfNeeded(indexingLogger, "Conteudo extraido exigiu sanitizacao antes de persistir.", extractedTextOverride || extracted, {
+    rel_path: relPath,
+    ext,
+  });
   const safeText = extracted || (shouldExtract
     ? `(sem texto extraido) ${relPath}`
     : `(arquivo grande para indexacao local, mantido para busca vetorial) ${relPath}`);
@@ -3880,7 +3986,12 @@ async function upsertIndexedDocument({
 
 async function getEmbeddingForText(text) {
   const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
-  if (!apiKey || !text) return null;
+  const safeText = sanitizePersistedText(text || "", {
+    trim: true,
+    normalizeWhitespace: true,
+    maxLength: 6000,
+  });
+  if (!apiKey || !safeText) return null;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
@@ -3895,12 +4006,12 @@ async function getEmbeddingForText(text) {
         signal: controller.signal,
         body: JSON.stringify({
           model: OPENAI_EMBEDDING_MODEL,
-          input: String(text).slice(0, 6000),
+          input: safeText,
         }),
       });
 
       if (!resp.ok) {
-        console.error('Erro embeddings OpenAI:', {
+        openaiLogger.error('Erro em embeddings OpenAI.', {
           status: resp.status,
           url: 'https://api.openai.com/v1/embeddings',
           attempt: attempt + 1,
@@ -3919,12 +4030,12 @@ async function getEmbeddingForText(text) {
         url: 'https://api.openai.com/v1/embeddings',
       });
       if (err?.name === "AbortError") {
-        console.error("Embedding cancelado por timeout.", details);
+        openaiLogger.warn("Embedding cancelado por timeout.", details);
       } else {
-        console.error('Falha ao gerar embedding:', details);
+        openaiLogger.error('Falha ao gerar embedding.', details);
       }
       if (attempt === 0) {
-        console.warn("Repetindo geração de embedding após falha temporária.");
+        openaiLogger.warn("Repetindo geracao de embedding apos falha temporaria.");
         continue;
       }
       return null;
@@ -3961,11 +4072,21 @@ async function materializeDocumentEmbeddings(documentId) {
       continue;
     }
 
-    await run(
-      "UPDATE document_chunks SET embedding_json=?, embedding_model=?, updated_at=datetime('now') WHERE id=?",
-      [JSON.stringify(embedding), OPENAI_EMBEDDING_MODEL, chunk.id]
-    );
-    completed += 1;
+    try {
+      await run(
+        "UPDATE document_chunks SET embedding_json=?, embedding_model=?, updated_at=datetime('now') WHERE id=?",
+        [safeJsonStringify(embedding, "[]"), OPENAI_EMBEDDING_MODEL, chunk.id]
+      );
+      completed += 1;
+    } catch (err) {
+      failed += 1;
+      indexingLogger.warn("Falha ao persistir embedding de chunk.", {
+        chunk_id: chunk.id,
+        document_id: documentId,
+        message: err?.message || String(err || "chunk_embedding_update_failed"),
+        code: err?.code || "",
+      });
+    }
   }
 
   return {
@@ -4645,10 +4766,10 @@ async function logAiTrainingEvent({
       userId || null,
       conversationId || null,
       knowledgeSourceId || null,
-      eventType,
-      eventStatus,
-      title || null,
-      detailText || null,
+      sanitizePersistedText(eventType, { trim: true, maxLength: 64 }),
+      sanitizePersistedText(eventStatus, { trim: true, maxLength: 32 }) || "info",
+      sanitizePersistedText(title || "", { trim: true, maxLength: 240 }) || null,
+      sanitizePersistedText(detailText || "", { trim: true, maxLength: 4000 }) || null,
       meta ? safeJsonStringify(meta, "{}") : null,
     ]
   );
@@ -8189,12 +8310,20 @@ async function requireIntranetAccess(req, res, next) {
 
 const app = express();
 app.set("trust proxy", 1);
-app.use(express.json({ limit: "20mb" }));
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
+app.use(express.json({ limit: `${MAX_UPLOAD_SIZE_MB}mb` }));
+app.use(express.urlencoded({ extended: true, limit: `${MAX_UPLOAD_SIZE_MB}mb` }));
 app.use(cookieParser());
 
 const upload = multer({
   dest: uploadsDir,
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
 });
 const ragUpload = upload.fields([
   { name: "files", maxCount: 1 },
@@ -10671,6 +10800,7 @@ function getRagUploadFailureStatus(errors = []) {
   const codes = [...new Set((errors || []).map((item) => String(item?.error || '').trim()).filter(Boolean))];
   if (!codes.length) return 500;
   if (codes.every((code) => code === 'knowledge_file_too_large')) return 413;
+  if (codes.every((code) => code === 'knowledge_file_empty')) return 400;
   if (codes.every((code) => code === 'unsupported_knowledge_file' || code === 'blocked_knowledge_file')) return 400;
   return 500;
 }
@@ -10689,21 +10819,22 @@ async function createKnowledgeSourceRecord({
   uploadedBy = null,
   processingState = null,
 }) {
+  const safeProcessingState = processingState ? deepSanitizeForPostgres(processingState, { convertBuffersToText: true }) : null;
   const created = await run(
     "INSERT INTO knowledge_sources (original_name, stored_name, mime_type, language, content_hash, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
     [
-      originalName,
-      storedName,
-      mimeType || null,
-      language || null,
-      contentHash || null,
-      departmentName || null,
-      sourceKind,
-      syncStatus,
+      sanitizeFilename(originalName || "arquivo"),
+      sanitizeFilename(storedName || `knowledge-${Date.now()}`),
+      sanitizePersistedText(mimeType || "", { trim: true, maxLength: 255 }) || null,
+      sanitizePersistedText(language || "", { trim: true, maxLength: 24 }) || null,
+      sanitizePersistedText(contentHash || "", { trim: true, maxLength: 255 }) || null,
+      sanitizePersistedText(departmentName || "", { trim: true, maxLength: 120 }) || null,
+      sanitizePersistedText(sourceKind || "manual_upload", { trim: true, maxLength: 60 }) || "manual_upload",
+      sanitizePersistedText(syncStatus || "processing", { trim: true, maxLength: 32 }) || "processing",
       openaiFileId,
       vectorStoreFileId,
       uploadedBy,
-      processingState ? safeJsonStringify(processingState, "{}") : null,
+      safeProcessingState ? safeJsonStringify(safeProcessingState, "{}") : null,
     ]
   );
   return created.lastID;
@@ -10717,7 +10848,11 @@ async function prepareKnowledgeVectorUploadFile(source, transcriptText = "") {
 
   if (isMediaKnowledgeFile(source.original_name, source.mime_type, fullPath)) {
     const transcriptPath = getTranscriptFilePathForKnowledge(source.stored_name);
-    const normalizedTranscript = String(transcriptText || "").trim();
+    const normalizedTranscript = sanitizePersistedText(transcriptText || "", {
+      trim: true,
+      normalizeWhitespace: false,
+      maxLength: 250000,
+    });
     if (!normalizedTranscript) {
       throw new Error("transcript_missing_for_vector_store");
     }
@@ -10745,7 +10880,12 @@ async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
   const departmentName = String(options.departmentName || '').trim() || null;
   const sourceKind = String(options.sourceKind || 'manual_upload').trim() || 'manual_upload';
 
-  if (sizeBytes > 25 * 1024 * 1024) {
+  if (sizeBytes <= 0) {
+    deleteFileIfExists(tempPath);
+    throw new Error("knowledge_file_empty");
+  }
+
+  if (sizeBytes > MAX_UPLOAD_SIZE_BYTES) {
     deleteFileIfExists(tempPath);
     throw new Error("knowledge_file_too_large");
   }
@@ -10771,7 +10911,10 @@ async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
     try {
       if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     } catch (err) {
-      console.log("Erro ao descartar duplicado temporario:", err?.message || err);
+      uploadLogger.warn("Erro ao descartar duplicado temporario.", {
+        filename: safeOriginalName,
+        message: err?.message || String(err || "temp_duplicate_cleanup_failed"),
+      });
     }
 
     await logEvent(userId, "admin_rag_upload_duplicate", {
@@ -10836,6 +10979,10 @@ async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
 
       const transcriptResult = await transcribeMedia(finalPath, safeOriginalName, uploaded.mimetype || "");
       transcriptText = normalizeKnowledgeText(transcriptResult?.text || "");
+      logSanitizationIfNeeded(uploadLogger, "Transcricao exigiu sanitizacao antes da persistencia.", transcriptResult?.text || "", {
+        knowledge_source_id: knowledgeSourceId,
+        original_name: safeOriginalName,
+      });
       transcriptLanguage = normalizeLanguageCode(transcriptResult?.transcriptLanguage || detectConversationLanguage(transcriptText || safeOriginalName));
 
       state = withKnowledgeStage(state, "transcript", {
@@ -11073,7 +11220,12 @@ async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
       last_error: finalRow.last_error,
     };
   } catch (err) {
-    console.log("Erro no pipeline de conhecimento:", err?.message || err);
+    jobsLogger.error("Erro no pipeline de conhecimento.", {
+      knowledge_source_id: knowledgeSourceId,
+      original_name: safeOriginalName,
+      message: err?.message || String(err || "knowledge_processing_failed"),
+      code: err?.code || "",
+    });
     state = withKnowledgeStage(state, "health", {
       status: "failed",
       issues: [...new Set([...(state.health?.issues || []), "falha_processamento"])],
@@ -11147,6 +11299,10 @@ async function reprocessKnowledgeSourceById(knowledgeSourceId, actorUserId, opti
 
       const transcriptResult = await transcribeMedia(fullPath, source.original_name, source.mime_type || "");
       transcriptText = normalizeKnowledgeText(transcriptResult?.text || "");
+      logSanitizationIfNeeded(uploadLogger, "Transcricao reprocessada exigiu sanitizacao.", transcriptResult?.text || "", {
+        knowledge_source_id: knowledgeSourceId,
+        original_name: source.original_name || source.stored_name,
+      });
       transcriptLanguage = normalizeLanguageCode(transcriptResult?.transcriptLanguage || detectConversationLanguage(transcriptText || source.original_name));
 
       state = withKnowledgeStage(state, "transcript", {
@@ -11530,7 +11686,9 @@ function enqueueKnowledgeSourceForBackgroundReprocess(knowledgeSourceId, options
   knowledgeBackgroundState.queue_enqueued += 1;
   setTimeout(() => {
     runKnowledgeBackgroundWorker().catch((err) => {
-      console.log("Erro no worker de reprocessamento em background:", err?.message || err);
+      jobsLogger.error("Erro no worker de reprocessamento em background.", {
+        message: err?.message || String(err || "knowledge_background_worker_failed"),
+      });
     });
   }, 0);
   return true;
@@ -11578,6 +11736,11 @@ async function runKnowledgeBackgroundWorker() {
       try {
         const source = await getKnowledgeSourceById(nextItem.id);
         const shouldReuseVector = Boolean(source?.vector_store_file_id);
+        jobsLogger.info("Reprocessamento em background iniciado.", {
+          knowledge_source_id: Number(nextItem.id),
+          reason: nextItem.reason || "background_backfill",
+          reuse_vector_store: shouldReuseVector,
+        });
         await reprocessKnowledgeSourceById(nextItem.id, nextItem.actorUserId, {
           skipVectorStoreUpload: shouldReuseVector,
           reason: nextItem.reason || "background_backfill",
@@ -11587,7 +11750,12 @@ async function runKnowledgeBackgroundWorker() {
       } catch (err) {
         knowledgeBackgroundState.queue_failed += 1;
         knowledgeBackgroundState.last_error = err?.message || "knowledge_background_reprocess_failed";
-        console.log("Falha no reprocessamento em background:", err?.message || err);
+        jobsLogger.error("Falha no reprocessamento em background.", {
+          knowledge_source_id: Number(nextItem.id),
+          reason: nextItem.reason || "background_backfill",
+          message: err?.message || String(err || "knowledge_background_reprocess_failed"),
+          code: err?.code || "",
+        });
       } finally {
         knowledgeBackgroundState.current_source_id = null;
       }
@@ -11608,7 +11776,9 @@ function scheduleKnowledgeBackfillSweep(delayMs = BACKGROUND_KNOWLEDGE_SWEEP_INT
       if (knowledgeBackgroundState.queue.length && !knowledgeBackgroundState.running) {
         runKnowledgeBackgroundWorker().catch((err) => {
           knowledgeBackgroundState.last_error = err?.message || "knowledge_background_worker_failed";
-          console.log("Erro ao reiniciar worker de conhecimento:", err?.message || err);
+          jobsLogger.error("Erro ao reiniciar worker de conhecimento.", {
+            message: err?.message || String(err || "knowledge_background_worker_failed"),
+          });
         });
       }
       if (added > 0 || knowledgeBackgroundState.queue.length) {
@@ -11618,7 +11788,9 @@ function scheduleKnowledgeBackfillSweep(delayMs = BACKGROUND_KNOWLEDGE_SWEEP_INT
       }
     } catch (err) {
       knowledgeBackgroundState.last_error = err?.message || "knowledge_backfill_sweep_failed";
-      console.log("Erro ao varrer base para backfill documental:", err?.message || err);
+      jobsLogger.error("Erro ao varrer base para backfill documental.", {
+        message: err?.message || String(err || "knowledge_backfill_sweep_failed"),
+      });
       scheduleKnowledgeBackfillSweep(BACKGROUND_KNOWLEDGE_IDLE_INTERVAL_MS);
     }
   }, Math.max(1000, Number(delayMs || BACKGROUND_KNOWLEDGE_SWEEP_INTERVAL_MS)));
@@ -12009,7 +12181,7 @@ app.use(express.static(publicDir));
 
 let startupBootstrapPromise = null;
 
-/*
+
 async function runStartupBootstrap() {
   if (startupBootstrapPromise) return startupBootstrapPromise;
 
@@ -12018,62 +12190,11 @@ async function runStartupBootstrap() {
 
     try {
       await importLegacySqliteIntoPostgres();
-      console.log("Legacy migration completed");
+      startupLogger.info("Migracao legada SQLite -> Postgres concluida.");
     } catch (err) {
-      console.error("Migration failed but server continues:", err?.message || err);
-    }
-  await ensureAdmin();
-  await ensureDepartmentCatalog();
-  await ensureDepartmentSubmenus();
-  await ensureMarketingIndicatorSeeds();
-  await ensureCalendarEventTypes();
-  await syncLegacyUserDepartmentData();
-    await ensureFixedDepartments();
-    const incompatibleCleanup = await purgeIncompatibleKnowledgeAssets(null);
-  if (
-    incompatibleCleanup.removed_sources
-    || incompatibleCleanup.removed_documents
-    || incompatibleCleanup.removed_local_files
-    || incompatibleCleanup.removed_transcripts
-  ) {
-    console.log("Limpeza de arquivos incompatíveis concluída:", incompatibleCleanup);
-  }
-
-  return startupBootstrapPromise;
-}
-
-function startServer() {
-  console.log("DB_CLIENT:", process.env.DB_CLIENT || DB_CLIENT);
-  console.log("DATABASE_URL present:", Boolean(process.env.DATABASE_URL));
-
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Talkers IA rodando em ${BASE_URL}`);
-    console.log(`Login: ${BASE_URL}/login.html`);
-    console.log(`Banco ativo: ${DB_CLIENT}`);
-
-    setTimeout(() => {
-      runStartupBootstrap().catch((err) => {
-        console.error("Falha no bootstrap pós-start:", err?.message || err);
+      startupLogger.error("Migracao legada falhou, mas o servidor continua.", {
+        message: err?.message || String(err || "legacy_migration_failed"),
       });
-    }, 2000);
-  });
-}
-
-startServer();
-*/
-
-async function runStartupBootstrap() {
-  if (startupBootstrapPromise) return startupBootstrapPromise;
-
-  startupBootstrapPromise = (async () => {
-    await migrate();
-
-    try {
-      await importLegacySqliteIntoPostgres();
-      console.log("Legacy migration completed");
-    } catch (err) {
-      console.error("Migration failed but server continues:", err?.message || err);
     }
 
     await ensureAdmin();
@@ -12091,70 +12212,73 @@ async function runStartupBootstrap() {
       || incompatibleCleanup.removed_local_files
       || incompatibleCleanup.removed_transcripts
     ) {
-      console.log("Limpeza de arquivos incompatíveis concluída:", incompatibleCleanup);
+      startupLogger.info("Limpeza de arquivos incompatíveis concluida.", incompatibleCleanup);
     }
 
     scheduleKnowledgeBackfillSweep(3 * 1000);
     triggerTalkersKnowledgeSync();
   })().catch((err) => {
-    console.error("Falha no bootstrap assíncrono do servidor:", err?.message || err);
+    startupLogger.error("Falha no bootstrap assincrono do servidor.", {
+      message: err?.message || String(err || "startup_bootstrap_failed"),
+    });
     return null;
   });
 
   return startupBootstrapPromise;
 }
 
+function validateRuntimeConfiguration() {
+  const issues = [];
+
+  if (IS_PRODUCTION && !String(JWT_SECRET || "").trim()) {
+    issues.push("JWT_SECRET ausente em producao");
+  }
+
+  if (DB_CLIENT === "postgres" && !String(process.env.DATABASE_URL || "").trim()) {
+    issues.push("DATABASE_URL ausente para Postgres");
+  }
+
+  if (MAX_UPLOAD_SIZE_BYTES <= 0) {
+    issues.push("MAX_UPLOAD_SIZE_MB invalido");
+  }
+
+  if (issues.length) {
+    startupLogger.error("Falha de configuracao critica na inicializacao.", {
+      issues,
+      db_client: DB_CLIENT,
+      is_production: IS_PRODUCTION,
+    });
+    throw new Error(`runtime_configuration_invalid: ${issues.join("; ")}`);
+  }
+}
+
 function startServer() {
-  console.log("DB_CLIENT:", process.env.DB_CLIENT || DB_CLIENT);
-  console.log("DATABASE_URL present:", Boolean(process.env.DATABASE_URL));
+  validateRuntimeConfiguration();
+  startupLogger.info("Inicializando servidor.", {
+    db_client: process.env.DB_CLIENT || DB_CLIENT,
+    database_url_present: Boolean(process.env.DATABASE_URL),
+    max_upload_size_mb: MAX_UPLOAD_SIZE_MB,
+    max_concurrent_jobs: MAX_CONCURRENT_JOBS,
+  });
 
   app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Talkers IA rodando em ${BASE_URL}`);
-    console.log(`Login: ${BASE_URL}/login.html`);
-    console.log(`Banco ativo: ${DB_CLIENT}`);
+    startupLogger.info("Servidor HTTP iniciado.", {
+      port: PORT,
+      base_url: BASE_URL,
+      db_client: DB_CLIENT,
+    });
 
     setTimeout(() => {
       runStartupBootstrap().catch((err) => {
-        console.error("Falha no bootstrap pós-start:", err?.message || err);
+        startupLogger.error("Falha no bootstrap pos-start.", {
+          message: err?.message || String(err || "startup_bootstrap_failed"),
+        });
       });
     }, 2000);
   });
 }
 
 startServer();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -1,3 +1,12 @@
 node_modules/
 .env
 .DS_Store
+data/
+*.log
+*.err.log
+*.out.log
+codex-local-server*.log
+codex-local-server*.err.log
+uploads/
+kb/
+.transcripts/

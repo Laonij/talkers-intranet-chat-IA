@@ -5663,7 +5663,7 @@ function looksLikeArtifactRetry(text = "") {
 function applyExecutionPlanToSupportAssets(supportAssets = null, executionPlan = null) {
   if (!supportAssets) return supportAssets;
   if (!executionPlan?.fileContext) return supportAssets;
-  if (!["analyze_attachment", "image_edit"].includes(String(executionPlan?.route?.intent_mode || ""))) {
+  if (!["analyze_attachment", "image_edit", "transform_attachment"].includes(String(executionPlan?.route?.intent_mode || ""))) {
     return supportAssets;
   }
 
@@ -5685,15 +5685,17 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
     uploadsDir,
   });
 
-  if (["generate_artifact", "image_edit"].includes(executionPlan?.route?.intent_mode)) {
+  if (["generate_artifact", "image_edit", "transform_attachment"].includes(executionPlan?.route?.intent_mode)) {
     return {
       prompt: userText,
-      resolvedPrompt: userText,
+      resolvedPrompt: executionPlan.artifactSourceContext
+        ? `${userText}\n\n${executionPlan.artifactSourceContext}`
+        : userText,
       kind: executionPlan.route.artifact_kind,
       source: "current",
       intentMode: executionPlan.route.intent_mode,
       inputFiles: executionPlan.selectedFile ? [executionPlan.selectedFile] : [],
-      imageReferences: Array.isArray(referenceImages) ? referenceImages : [],
+      imageReferences: Array.isArray(executionPlan.referenceImagesForTurn) ? executionPlan.referenceImagesForTurn : (Array.isArray(referenceImages) ? referenceImages : []),
       latestArtifactSession,
       executionPlan,
     };
@@ -9054,17 +9056,22 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    if (executionPlan?.route?.intent_mode === "analyze_attachment" && executionPlan.localAnalysisReply) {
+    if (
+      ["analyze_attachment", "artifact_followup_meta"].includes(String(executionPlan?.route?.intent_mode || ""))
+      && (executionPlan.localAnalysisReply || executionPlan.followUpReply)
+    ) {
+      const inlineReply = executionPlan.localAnalysisReply || executionPlan.followUpReply;
       const localAnalysisMetaObject = makeStructuredResponseMeta(responseProfile, {
         response_language: userLanguage,
         response_locale: requestLocale,
-        structured_file_analysis: true,
+        structured_file_analysis: executionPlan?.route?.intent_mode === "analyze_attachment",
+        artifact_followup: executionPlan?.route?.intent_mode === "artifact_followup_meta",
       });
       const persistMetrics = await persistAssistantTextReply({
         conversationId: id,
         userId: req.user.sub,
         userText: text,
-        assistantText: executionPlan.localAnalysisReply,
+        assistantText: inlineReply,
         responseProfile,
         responseLanguage: userLanguage,
         metaObject: localAnalysisMetaObject,
@@ -9078,11 +9085,11 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
         context_assembly_ms: Date.now() - contextStartedAt,
         persistence_ms: persistMetrics.persistence_ms,
         prompt_chars: text.length,
-        response_chars: executionPlan.localAnalysisReply.length,
-        response_bytes: Buffer.byteLength(String(executionPlan.localAnalysisReply || ""), "utf8"),
-        status: "attachment_analysis_local",
+        response_chars: inlineReply.length,
+        response_bytes: Buffer.byteLength(String(inlineReply || ""), "utf8"),
+        status: executionPlan?.route?.intent_mode === "artifact_followup_meta" ? "artifact_followup_meta" : "attachment_analysis_local",
       });
-      return res.json({ reply: executionPlan.localAnalysisReply, meta: localAnalysisMetaObject });
+      return res.json({ reply: inlineReply, meta: localAnalysisMetaObject });
     }
 
     const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || [], {
@@ -9110,7 +9117,10 @@ app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res
           apiKey: process.env.OPENAI_API_KEY || "",
           prompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: artifactRequest.imageReferences || supportAssets.imageReferences || [],
+          referenceImages: artifactRequest.imageReferences || executionPlan.referenceImagesForTurn || supportAssets.imageReferences || [],
+          sourceFileProfile: executionPlan.fileProfile,
+          taskMode: artifactRequest.intentMode,
+          sourceContext: executionPlan.artifactSourceContext || "",
         }).catch((err) => {
           artifactError = err;
           console.log("Erro na geracao de artefato:", err?.message || err);
@@ -9581,17 +9591,22 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
       ? []
       : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
 
-    if (executionPlan?.route?.intent_mode === "analyze_attachment" && executionPlan.localAnalysisReply) {
+    if (
+      ["analyze_attachment", "artifact_followup_meta"].includes(String(executionPlan?.route?.intent_mode || ""))
+      && (executionPlan.localAnalysisReply || executionPlan.followUpReply)
+    ) {
+      const inlineReply = executionPlan.localAnalysisReply || executionPlan.followUpReply;
       const localAnalysisMetaObject = makeStructuredResponseMeta(responseProfile, {
         response_language: userLanguage,
         response_locale: requestLocale,
-        structured_file_analysis: true,
+        structured_file_analysis: executionPlan?.route?.intent_mode === "analyze_attachment",
+        artifact_followup: executionPlan?.route?.intent_mode === "artifact_followup_meta",
       });
       const persistMetrics = await persistAssistantTextReply({
         conversationId: id,
         userId: req.user.sub,
         userText: text,
-        assistantText: executionPlan.localAnalysisReply,
+        assistantText: inlineReply,
         responseProfile,
         responseLanguage: userLanguage,
         metaObject: localAnalysisMetaObject,
@@ -9605,11 +9620,11 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
         context_assembly_ms: Date.now() - contextStartedAt,
         persistence_ms: persistMetrics.persistence_ms,
         prompt_chars: text.length,
-        response_chars: executionPlan.localAnalysisReply.length,
-        response_bytes: Buffer.byteLength(String(executionPlan.localAnalysisReply || ""), "utf8"),
-        status: "attachment_analysis_local",
+        response_chars: inlineReply.length,
+        response_bytes: Buffer.byteLength(String(inlineReply || ""), "utf8"),
+        status: executionPlan?.route?.intent_mode === "artifact_followup_meta" ? "artifact_followup_meta" : "attachment_analysis_local",
       });
-      writeEventStreamPacket(res, "done", { reply: executionPlan.localAnalysisReply, meta: localAnalysisMetaObject });
+      writeEventStreamPacket(res, "done", { reply: inlineReply, meta: localAnalysisMetaObject });
       return res.end();
     }
 
@@ -9638,7 +9653,10 @@ app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (r
           apiKey: process.env.OPENAI_API_KEY || "",
           prompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
           outDir: uploadsDir,
-          referenceImages: artifactRequest.imageReferences || supportAssets.imageReferences || [],
+          referenceImages: artifactRequest.imageReferences || executionPlan.referenceImagesForTurn || supportAssets.imageReferences || [],
+          sourceFileProfile: executionPlan.fileProfile,
+          taskMode: artifactRequest.intentMode,
+          sourceContext: executionPlan.artifactSourceContext || "",
         }).catch((err) => {
           artifactError = err;
           console.log("Erro na geracao de artefato:", err?.message || err);

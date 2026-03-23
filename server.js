@@ -4905,7 +4905,7 @@ function queryLooksInternalWorkspace(query = "") {
   const value = normalizeQuery(query);
   if (!value) return false;
 
-  return /(intranet|departamento|departamentos|documento|documentos|arquivo|arquivos|processo|processos|agenda|dashboard|marketing|pedagog|pedag[oó]gic|financeir|comercial|matricula|matr[ií]cula|aluno|alunos|campanha|campanhas|whatsapp|usuario|usu[aá]rio|colaborador|time|crm|closer|rh|jur[ií]dic|professor|professores)/i.test(value);
+  return /(intranet|departamento|departamentos|documento interno|documentos internos|arquivo interno|arquivos internos|processo interno|processos internos|agenda da equipe|dashboard interno|pedagogico da talkers|financeiro da talkers|comercial da talkers|marketing da talkers|matricula interna|matricula da talkers|aluno da talkers|alunos da talkers|campanha interna|campanhas internas|whatsapp pedagogico|usuario interno|colaborador|time interno|crm interno|closer|rh|juridico|professor da talkers|professores da talkers|base interna|procedimento interno|politica interna)/i.test(value);
 }
 
 function buildChatContextStrategy(query = "", responseProfile = null) {
@@ -4918,8 +4918,8 @@ function buildChatContextStrategy(query = "", responseProfile = null) {
   const fastExternalOnly = looksExternal
     && !looksTalkers
     && !looksInternal;
-  const fastTalkersOnly = looksTalkers && !looksInternal && !talkersNeedsLiveSearch;
-  const fastPath = (fastExternalOnly || fastTalkersOnly || fastGeneralOnly) && !attachmentAware;
+  const fastTalkersOnly = false;
+  const fastPath = (fastExternalOnly || fastGeneralOnly) && !attachmentAware;
 
   return {
     fastExternalOnly,
@@ -5199,15 +5199,17 @@ Data atual no Brasil:
 ${nowBrazil()}
 
 Roteamento desta pergunta:
-- Perguntas sobre a Talkers devem priorizar a base pública oficial da Talkers e a base interna da empresa.
+- Perguntas gerais devem ser tratadas como uma IA generalista, sem presumir contexto institucional.
+- Use a base da Talkers somente quando a pergunta mencionar a empresa, pedir conteúdo institucional ou quando houver alta relevância documental.
 - Perguntas gerais, atuais, públicas ou de mercado devem usar os dados externos atualizados e a busca web quando houver contexto disponível.
-- Nunca diga que voce nao consegue acessar dados atuais se ja houver contexto externo, API ou resultado de busca no contexto.
+- Se houver anexo e uma ação executável for possível, prefira executar ou analisar de forma objetiva.
+- Nunca diga que você não consegue acessar dados atuais se já houver contexto externo, API ou resultado de busca no contexto.
 
 Idioma detectado do usuário:
 ${getLanguageLabel(userLanguage)}
 
 Base pública oficial da Talkers:
-${trimContextText(talkersPublicBundle.text || "Sem bloco público específico da Talkers para esta pergunta.")}
+${trimContextText(talkersPublicBundle.text || "Não relevante para esta pergunta.")}
 
 Memória interna da empresa:
 ${trimContextText(knowledgeBundle.text || "Sem resultados relevantes da base interna.")}
@@ -5663,7 +5665,7 @@ function looksLikeArtifactRetry(text = "") {
 function applyExecutionPlanToSupportAssets(supportAssets = null, executionPlan = null) {
   if (!supportAssets) return supportAssets;
   if (!executionPlan?.fileContext) return supportAssets;
-  if (!["analyze_attachment", "image_edit", "transform_attachment"].includes(String(executionPlan?.route?.intent_mode || ""))) {
+  if (!["analyze_attachment", "image_edit", "image_generate", "transform_attachment", "spreadsheet_transform", "document_generate"].includes(String(executionPlan?.route?.intent_mode || ""))) {
     return supportAssets;
   }
 
@@ -5685,7 +5687,22 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
     uploadsDir,
   });
 
-  if (["generate_artifact", "image_edit", "transform_attachment"].includes(executionPlan?.route?.intent_mode)) {
+  if (executionPlan?.route?.retry_from_session && latestArtifactSession?.artifact_type) {
+    const restoredImageRefs = restoreArtifactSessionImageRefs(latestArtifactSession);
+    return {
+      prompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt || userText,
+      resolvedPrompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt || userText,
+      kind: latestArtifactSession.artifact_type,
+      source: "artifact_session",
+      intentMode: executionPlan.route.intent_mode,
+      inputFiles: Array.isArray(latestArtifactSession.input_files) ? latestArtifactSession.input_files : [],
+      imageReferences: restoredImageRefs.length ? restoredImageRefs : (Array.isArray(referenceImages) ? referenceImages : []),
+      latestArtifactSession,
+      executionPlan,
+    };
+  }
+
+  if (["image_edit", "image_generate", "transform_attachment", "spreadsheet_transform", "document_generate"].includes(executionPlan?.route?.intent_mode)) {
     return {
       prompt: userText,
       resolvedPrompt: executionPlan.artifactSourceContext
@@ -5722,7 +5739,7 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
       resolvedPrompt: userText,
       kind: null,
       source: "none",
-      intentMode: executionPlan?.route?.intent_mode || "normal_question",
+      intentMode: executionPlan?.route?.intent_mode || "general_chat",
       inputFiles: [],
       imageReferences: [],
       latestArtifactSession,
@@ -5761,15 +5778,15 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
   }
 
   return {
-    prompt: userText,
-    resolvedPrompt: userText,
-    kind: null,
-    source: "none",
-    intentMode: executionPlan?.route?.intent_mode || "normal_question",
-    inputFiles: [],
-    imageReferences: [],
-    latestArtifactSession,
-    executionPlan,
+      prompt: userText,
+      resolvedPrompt: userText,
+      kind: null,
+      source: "none",
+      intentMode: executionPlan?.route?.intent_mode || "general_chat",
+      inputFiles: [],
+      imageReferences: [],
+      latestArtifactSession,
+      executionPlan,
   };
 }
 
@@ -5865,7 +5882,7 @@ async function buildOpenAIInput({
     : trimContextText(memoryBundle.text || 'Sem memorias semanticas relevantes para esta pergunta.', CHAT_MEMORY_BLOCK_MAX_CHARS);
 
   const systemText = `
-Voce e a TALKERS IA, assistente moderna, natural, util e confiavel da empresa Talkers.
+Voce e a TALKERS IA, assistente multimodal moderna, natural, util, executora e confiavel.
 Idioma principal da resposta atual: ${getLanguageLabel(userLanguage)}.
 Tom desejado para esta resposta: ${getToneInstruction(intent)}.
 
@@ -5873,12 +5890,13 @@ Comportamento:
 - Detecte automaticamente o idioma do usuario e responda nesse idioma.
 - Quando o usuario pedir traducao, traduza para o idioma solicitado mantendo contexto e intencao.
 - Quando documentos estiverem em outro idioma, interprete o conteudo no idioma original, traduza silenciosamente quando necessario e responda no idioma do usuario.
-- Voce e um assistente amplo e inteligente, capaz de responder sobre assuntos gerais, tecnicos, atuais, institucionais e informativos, nao ficando restrito apenas ao contexto da escola.
-- Para perguntas sobre a Talkers, seus cursos, metodologia, contatos, site, presenca publica e comunicacao institucional, priorize a base oficial da Talkers e a base interna quando estiverem disponiveis, mas complemente com contexto externo atualizado sempre que a pergunta pedir informacoes publicas, institucionais, verificaveis ou potencialmente desatualizadas.
-- Para perguntas sobre processos, materiais, regras, vendas de cursos, atendimento, operacao pedagogica, marketing, financeiro e informacoes da Talkers, priorize sempre a base interna da empresa, a intranet e os arquivos da conversa.
+- Seja uma IA generalista por padrao. Nunca presuma contexto institucional, escolar ou da Talkers sem evidencia explicita na pergunta, nos anexos ou na recuperacao documental.
+- Use a base da Talkers somente quando a pergunta mencionar a empresa, envolver contexto interno ou quando a recuperacao trouxer alta relevancia institucional.
 - Para perguntas gerais, atuais, publicas, de mercado, cotacoes, clima, noticias ou dados recentes, use naturalmente o contexto externo, a busca web e os dados atualizados quando eles aparecerem no contexto.
 - Se houver conflito entre base interna e web em assuntos da empresa, avise e priorize a base interna. Para temas gerais e atuais, priorize os dados externos atualizados.
-- Analise a intencao antes de responder, identifique a area do negocio e adapte o tom naturalmente.
+- Analise a intencao antes de responder e escolha o modo certo: responder, analisar anexo, transformar anexo ou gerar artefato.
+- Se houver anexo e uma acao executavel for possivel, execute em vez de apenas orientar.
+- Se houver imagem enviada e o pedido for de modificacao, transformacao ou edicao visual, trate como edicao de imagem com base na imagem enviada.
 - Sempre que fizer sentido, entregue contexto, explicacao, passo a passo, exemplos, melhores praticas, alertas e proximo passo recomendado.
 - Se o pedido envolver explicacao, orientacao, passo a passo, melhoria de texto, organizacao de informacao, sugestoes, traducao, resumo, reescrita, roteiro, mensagem comercial, comunicado ou texto pronto para uso, entregue em markdown bem estruturado, com hierarquia visual clara, blocos curtos e reutilizaveis.
 - Para respostas institucionais, comerciais, explicativas ou comparativas, prefira uma abertura curta, 2 a 5 blocos claros com titulos e bullets objetivos, em vez de um texto corrido confuso.

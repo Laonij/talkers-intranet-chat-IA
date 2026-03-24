@@ -271,15 +271,15 @@ function syncSidebarButtons() {
 }
 
 function renderIntranetChrome() {
-  document.title = t('intranet.title');
+  document.title = 'Talkers Intranet';
   const brandTitle = el('intranetBrandTitle');
-  if (brandTitle) brandTitle.textContent = t('intranet.title');
+  if (brandTitle) brandTitle.textContent = 'Talkers Intranet';
   const brandSub = el('intranetBrandSub');
-  if (brandSub) brandSub.textContent = t('intranet.brandSub');
+  if (brandSub) brandSub.textContent = 'Ambiente corporativo interno';
   const topbarEyebrow = el('intranetTopbarEyebrow');
-  if (topbarEyebrow) topbarEyebrow.textContent = t('intranet.eyebrow');
+  if (topbarEyebrow) topbarEyebrow.textContent = 'Workspace corporativo';
   const heroBadge = el('intranetHeroBadge');
-  if (heroBadge) heroBadge.textContent = t('intranet.heroBadge');
+  if (heroBadge) heroBadge.textContent = 'Intranet corporativa';
   const overviewEyebrow = el('homeOverviewEyebrow');
   if (overviewEyebrow) overviewEyebrow.textContent = t('intranet.overviewEyebrow');
   const overviewTitle = el('homeOverviewTitle');
@@ -318,9 +318,14 @@ function renderIntranetChrome() {
   if (dashboardBreakdownTitle) dashboardBreakdownTitle.textContent = t('intranet.dashboardBreakdownTitle', {}, 'Visão por área');
   const dashboardHighlightsTitle = el('dashboardHighlightsTitle');
   if (dashboardHighlightsTitle) dashboardHighlightsTitle.textContent = t('intranet.dashboardHighlightsTitle', {}, 'Leituras e alertas');
-  document.querySelectorAll('.intranet-back-btn, .intranet-topbar-actions .btn[href="/index.html"]').forEach((node) => {
-    node.textContent = t('common.backToChat');
-  });
+  const sidebarLogoutBtn = el('sidebarLogoutBtn');
+  if (sidebarLogoutBtn) sidebarLogoutBtn.textContent = 'Sair';
+  const topbarLogoutBtn = el('topbarLogoutBtn');
+  if (topbarLogoutBtn) topbarLogoutBtn.textContent = 'Sair';
+  const sidebarAdminLink = el('sidebarAdminLink');
+  if (sidebarAdminLink) sidebarAdminLink.textContent = 'Admin';
+  const topbarAdminLink = el('topbarAdminLink');
+  if (topbarAdminLink) topbarAdminLink.textContent = 'Admin';
   const calendarSectionEyebrow = el('calendarSectionEyebrow');
   if (calendarSectionEyebrow) calendarSectionEyebrow.textContent = t('calendar.sectionEyebrow', {}, 'Planejamento interno');
   const calendarSectionTitle = el('calendarSectionTitle');
@@ -460,10 +465,8 @@ function renderIntranetChrome() {
     ['#calendar .intranet-section-head .intranet-section-title', t('intranet.nav.calendar')],
     ['#departments .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.departmentsEyebrow', {}, 'Áreas de trabalho')],
     ['#departments .intranet-section-head .intranet-section-title', t('intranet.routes.departmentsTitle', {}, 'Departamentos')],
-    ['#documents .intranet-section-eyebrow', t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento')],
+    ['#documents .intranet-section-eyebrow', t('intranet.routes.documentsEyebrow', {}, 'Documentos internos')],
     ['#documents .intranet-section-title', t('intranet.routes.documentsTitle', {}, 'Documentos')],
-    ['#training .intranet-section-eyebrow', t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestão')],
-    ['#training .intranet-section-title', t('intranet.routes.trainingTitle', {}, 'Treinamento IA')],
     ['#communication .intranet-section-eyebrow', t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados')],
     ['#communication .intranet-section-title', t('intranet.routes.communicationTitle', {}, 'Comunicação')],
   ];
@@ -566,8 +569,7 @@ function getRouteMeta(route = {}, intranet) {
     modules: { title: t('intranet.routes.modulesTitle', {}, 'Módulos'), eyebrow: t('intranet.routes.modulesEyebrow', {}, 'Workspace') },
     calendar: { title: t('intranet.nav.calendar'), eyebrow: t('intranet.routes.calendarEyebrow', {}, 'Calendário corporativo') },
     departments: { title: t('intranet.routes.departmentsTitle', {}, 'Departamentos'), eyebrow: t('intranet.routes.departmentsEyebrow', {}, 'Áreas de trabalho') },
-    documents: { title: t('intranet.routes.documentsTitle', {}, 'Documentos'), eyebrow: t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento') },
-    training: { title: t('intranet.routes.trainingTitle', {}, 'Treinamento IA'), eyebrow: t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestao') },
+    documents: { title: t('intranet.routes.documentsTitle', {}, 'Documentos'), eyebrow: t('intranet.routes.documentsEyebrow', {}, 'Documentos internos') },
     communication: { title: t('intranet.routes.communicationTitle', {}, 'Comunicação'), eyebrow: t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados') },
     sales: { title: t('intranet.nav.sales'), eyebrow: t('intranet.routes.salesEyebrow', {}, 'Operação comercial') },
   };
@@ -774,6 +776,16 @@ function renderSidebarUtility(intranet) {
   });
 }
 
+function renderIntranetUtilityActions(user) {
+  const isAdmin = user?.role === 'admin';
+  ['sidebarAdminLink', 'topbarAdminLink'].forEach((id) => {
+    const node = el(id);
+    if (!node) return;
+    node.hidden = !isAdmin;
+    node.href = '/admin.html';
+  });
+}
+
 function renderSidebar(user, intranet) {
   const visibleDepartments = getVisibleDepartments(intranet);
   el('intranetBrandSub').textContent = user.role === 'admin'
@@ -861,6 +873,7 @@ function renderSidebar(user, intranet) {
   }
 
   renderSidebarUtility(intranet);
+  renderIntranetUtilityActions(user);
   syncSidebarNavigation(intranet);
 }
 
@@ -3357,18 +3370,7 @@ function renderTrainingPanel(training = {}) {
 }
 
 async function fetchTrainingBootstrap() {
-  if (bootstrapData?.user?.role !== 'admin') {
-    setTrainingSectionVisible(false);
-    return;
-  }
-  try {
-    const data = await api('/api/intranet/training/bootstrap');
-    trainingState = data.training || null;
-    setTrainingSectionVisible(Boolean(trainingState));
-    if (trainingState) renderTrainingPanel(trainingState);
-  } catch (err) {
-    setTrainingSectionVisible(false);
-  }
+  setTrainingSectionVisible(false);
 }
 
 function getTodayDateKey() {
@@ -4410,7 +4412,7 @@ async function init() {
     bootstrapData = await api('/api/intranet/bootstrap');
   } catch (err) {
     if (String(err.message || '').includes('intranet_access_denied')) {
-      window.location.href = '/index.html';
+      window.location.href = '/login.html';
       return;
     }
     alert(t('intranet.loadError', { error: err.message }, `Não foi possível carregar a intranet: ${err.message}`));
@@ -4421,7 +4423,6 @@ async function init() {
     await i18n()?.setLocale?.(bootstrapData.user.preferred_locale, { persist: false });
   }
 
-  await fetchTrainingBootstrap();
   await fetchCalendarBootstrap().catch(() => {});
   expandedDepartmentSlugs = readExpandedDepartmentPreference();
   applySidebarPreference();
@@ -4433,6 +4434,14 @@ async function init() {
   }
 
   el('documentSearch').addEventListener('input', applyDocumentFilter);
+  ['sidebarLogoutBtn', 'topbarLogoutBtn'].forEach((id) => {
+    el(id)?.addEventListener('click', async () => {
+      try {
+        await api('/api/logout', { method: 'POST' });
+      } catch {}
+      window.location.href = '/login.html';
+    });
+  });
   el('communicationAudienceScope')?.addEventListener('change', syncCommunicationAudienceControls);
   el('btnCancelCommunicationEdit')?.addEventListener('click', () => {
     resetCommunicationForm();

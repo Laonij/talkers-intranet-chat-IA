@@ -34,8 +34,9 @@
         <div class="intranet-sidebar-links intranet-sidebar-utility-feed" id="sidebarUtilityFeed"></div>
       </div>
 
-      <div class="intranet-sidebar-footer">
-        <a class="btn intranet-back-btn" href="/index.html">Voltar ao chat</a>
+      <div class="intranet-sidebar-footer" style="display:flex; gap:10px; flex-wrap:wrap;">
+        <a class="btn" href="/admin.html" id="sidebarAdminLink" hidden>Admin</a>
+        <button class="btn" id="sidebarLogoutBtn" type="button">Sair</button>
       </div>
     </aside>
 
@@ -58,13 +59,14 @@
 
         <div class="intranet-topbar-actions">
           <div id="intranetLanguageSwitcher"></div>
-          <a class="btn" href="/index.html">Voltar ao chat</a>
+          <a class="btn" href="/admin.html" id="topbarAdminLink" hidden>Admin</a>
+          <button class="btn" id="topbarLogoutBtn" type="button">Sair</button>
         </div>
       </header>
 
       <section class="intranet-hero intranet-view" id="home" data-view="home">
         <div>
-          <div class="intranet-hero-badge" id="intranetHeroBadge">IA + conteúdo corporativo</div>
+          <div class="intranet-hero-badge" id="intranetHeroBadge">Intranet corporativa</div>
           <h2 class="intranet-hero-title" id="heroTitle">Carregando workspace...</h2>
           <p class="intranet-hero-text" id="heroDescription">Montando a visão personalizada da intranet.</p>
         </div>
@@ -467,41 +469,6 @@
             </form>
             <div class="intranet-sales-history" id="salesHistoryList"></div>
           </aside>
-        </div>
-      </section>
-
-      <section class="intranet-section intranet-view" id="training" data-view="training" hidden>
-        <div class="intranet-section-head intranet-section-head-stack">
-          <div>
-            <div class="intranet-section-eyebrow">Treinamento da IA</div>
-            <h3 class="intranet-section-title">Saude da base de conhecimento e memoria operacional</h3>
-          </div>
-        </div>
-
-        <div class="intranet-training-grid">
-          <div class="intranet-training-summary" id="trainingSummaryCards"></div>
-          <div class="intranet-training-panel">
-            <div class="intranet-block-title">Documentos mais usados</div>
-            <div id="trainingTopDocuments" class="intranet-chip-list"></div>
-            <div class="intranet-block-title" style="margin-top:14px;">Temas recorrentes</div>
-            <div id="trainingTopTopics" class="intranet-chip-list"></div>
-          </div>
-        </div>
-
-        <div class="intranet-training-layout">
-          <div class="intranet-training-panel">
-            <div class="intranet-block-title">Arquivos com atenção</div>
-            <div id="trainingFailuresList" class="intranet-training-list"></div>
-          </div>
-          <div class="intranet-training-panel">
-            <div class="intranet-block-title">Memorias recentes da IA</div>
-            <div id="trainingMemoriesList" class="intranet-training-list"></div>
-          </div>
-        </div>
-
-        <div class="intranet-training-panel">
-          <div class="intranet-block-title">Eventos recentes</div>
-          <div id="trainingEventsList" class="intranet-training-list"></div>
         </div>
       </section>
 

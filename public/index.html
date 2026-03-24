@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Redirect</title>
+  <script>
+    fetch('/api/me')
+      .then(res => {
+        if (res.ok) {
+          window.location.href = '/intranet.html';
+        } else {
+          window.location.href = '/login.html';
+        }
+      })
+      .catch(() => {
+        window.location.href = '/login.html';
+      });
+  </script>
+</head>
+<body></body>
+</html>

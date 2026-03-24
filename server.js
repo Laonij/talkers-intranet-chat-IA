@@ -9729,14 +9729,16 @@ app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAcces
 });
 
 app.get("/", (req, res) => {
-  const user = tryDecodeSession(req);
+  const sessionUser = req.session && req.session.user ? req.session.user : null;
+  const user = sessionUser || tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
   return res.redirect("/intranet.html");
 });
 app.get("/login.html", (req, res) => sendNoCacheFile(res, path.join(publicDir, "login.html")));
 
 app.get("/index.html", (req, res) => {
-  const user = tryDecodeSession(req);
+  const sessionUser = req.session && req.session.user ? req.session.user : null;
+  const user = sessionUser || tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
   return res.redirect("/intranet.html");
 });

@@ -1,21 +1,23 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <title>Redirect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Redirecionando...</title>
+</head>
+<body>
   <script>
-    fetch('/api/me')
-      .then(res => {
+    fetch('/api/me', { credentials: 'include' })
+      .then((res) => {
         if (res.ok) {
-          window.location.href = '/intranet.html';
+          window.location.replace('/intranet.html');
         } else {
-          window.location.href = '/login.html';
+          window.location.replace('/login.html');
         }
       })
       .catch(() => {
-        window.location.href = '/login.html';
+        window.location.replace('/login.html');
       });
   </script>
-</head>
-<body></body>
+</body>
 </html>

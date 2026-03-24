@@ -9728,18 +9728,16 @@ app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAcces
   res.json(payload || { user: null, intranet: null, department_catalog: [] });
 });
 
-app.get("/", (req, res) => {
+function redirectAuthenticatedHome(req, res) {
   const user = req.session?.user || tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
   return res.redirect("/intranet.html");
-});
+}
+
+app.get("/", redirectAuthenticatedHome);
 app.get("/login.html", (req, res) => sendNoCacheFile(res, path.join(publicDir, "login.html")));
 
-app.get("/index.html", (req, res) => {
-  const user = req.session?.user || tryDecodeSession(req);
-  if (!user) return res.redirect("/login.html");
-  return res.redirect("/intranet.html");
-});
+app.get("/index.html", redirectAuthenticatedHome);
 
 app.get("/admin.html", (req, res) => {
   const user = tryDecodeSession(req);

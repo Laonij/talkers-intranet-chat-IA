@@ -4646,6 +4646,257 @@ body{
   gap:16px;
 }
 
+.academic-workspace{
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+}
+
+.academic-toolbar{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  padding:6px 2px 2px;
+}
+
+.academic-toolbar-side{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:10px;
+}
+
+.academic-import-form{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.academic-summary-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));
+  gap:14px;
+}
+
+.academic-filter-grid{
+  display:grid;
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:12px;
+}
+
+.academic-filter-grid-compact{
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+}
+
+.academic-filter-actions{
+  display:flex;
+  align-items:flex-end;
+  justify-content:flex-end;
+}
+
+.academic-layout{
+  display:grid;
+  grid-template-columns:minmax(300px, .95fr) minmax(0, 1.35fr);
+  gap:16px;
+  align-items:start;
+}
+
+.academic-list-panel,
+.academic-detail-panel{
+  border:1px solid #e5e7eb;
+  border-radius:24px;
+  background:#fff;
+  box-shadow:0 18px 40px rgba(15,23,42,.05);
+  padding:16px 18px;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.academic-list{
+  display:grid;
+  gap:12px;
+  max-height:960px;
+  overflow:auto;
+  padding-right:2px;
+}
+
+.academic-record{
+  border:1px solid #e5e7eb;
+  border-radius:20px;
+  background:#f8fafc;
+  padding:14px 15px;
+  display:grid;
+  gap:10px;
+  cursor:pointer;
+  transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+.academic-record:hover{
+  border-color:#cbd5e1;
+  box-shadow:0 14px 30px rgba(15,23,42,.06);
+  transform:translateY(-1px);
+}
+
+.academic-record.is-active{
+  border-color:#0f766e;
+  box-shadow:0 18px 36px rgba(15,118,110,.10);
+  background:linear-gradient(180deg, rgba(236,253,245,.95), #ffffff 78%);
+}
+
+.academic-record-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.academic-record-head h4{
+  margin:0 0 6px;
+  font-size:16px;
+}
+
+.academic-form{
+  display:grid;
+  gap:14px;
+}
+
+.academic-form-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+
+.academic-grid-span{
+  grid-column:1 / -1;
+}
+
+.academic-form-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.academic-inline-head{
+  align-items:center;
+}
+
+.academic-inline-split{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+
+.academic-inline-form{
+  border:1px solid #e5e7eb;
+  border-radius:20px;
+  background:#f8fafc;
+  padding:14px;
+  display:grid;
+  gap:10px;
+}
+
+.academic-inline-form h5,
+.academic-history-panel h5{
+  margin:0;
+  font-size:15px;
+}
+
+.academic-history-grid,
+.academic-class-columns{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+
+.academic-history-panel{
+  border:1px solid #e5e7eb;
+  border-radius:20px;
+  background:#fff;
+  padding:14px;
+  display:grid;
+  gap:10px;
+}
+
+.academic-guardians-wrap{
+  display:grid;
+  gap:12px;
+}
+
+.academic-guardian-card{
+  border:1px solid #e5e7eb;
+  border-radius:20px;
+  background:#f8fafc;
+  padding:14px;
+  display:grid;
+  gap:12px;
+}
+
+.academic-guardian-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+}
+
+.academic-guardian-checks{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:10px;
+}
+
+.academic-guardian-checks label{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.academic-guardian-actions{
+  display:flex;
+  justify-content:flex-end;
+}
+
+.academic-schedules-wrap{
+  display:grid;
+  gap:10px;
+}
+
+.academic-schedule-row{
+  display:grid;
+  grid-template-columns:1.1fr .8fr .8fr 1.4fr;
+  gap:10px;
+}
+
+.academic-attendance-panel{
+  gap:14px;
+}
+
+.academic-attendance-list{
+  display:grid;
+  gap:10px;
+}
+
+.academic-attendance-row{
+  display:grid;
+  grid-template-columns:minmax(220px, 1.2fr) 180px minmax(220px, 1fr);
+  gap:10px;
+  align-items:center;
+  border:1px solid #e5e7eb;
+  border-radius:18px;
+  background:#f8fafc;
+  padding:12px 14px;
+}
+
+.academic-attendance-row small{
+  display:block;
+  margin-top:4px;
+  color:#64748b;
+}
+
 .workspace-section-empty{
   border:1px dashed rgba(15,23,42,.12);
   border-radius:20px;
@@ -5760,7 +6011,11 @@ body{
   .admin-cockpit-grid,
   .admin-cockpit-summary,
   .whatsapp-summary-grid,
-  .whatsapp-settings-grid{
+  .whatsapp-settings-grid,
+  .academic-layout,
+  .academic-history-grid,
+  .academic-class-columns,
+  .academic-inline-split{
     grid-template-columns:1fr;
   }
 }
@@ -5803,7 +6058,9 @@ body{
   .influencer-toolbar-actions,
   .influencer-analysis-toolbar,
   .indicator-person-stats,
-  .whatsapp-selection-grid{
+  .whatsapp-selection-grid,
+  .academic-filter-grid,
+  .academic-filter-grid-compact{
     grid-template-columns:repeat(2, minmax(0, 1fr));
   }
 }
@@ -5877,7 +6134,12 @@ body{
   .influencer-detail-summary,
   .influencer-detail-meta,
   .influencer-list-grid,
-  .influencer-chart-grid{
+  .influencer-chart-grid,
+  .academic-form-grid,
+  .academic-guardian-grid,
+  .academic-guardian-checks,
+  .academic-schedule-row,
+  .academic-attendance-row{
     grid-template-columns:1fr;
   }
 
@@ -5909,7 +6171,9 @@ body{
   .admin-cockpit-summary,
   .admin-cockpit-metrics,
   .whatsapp-selection-grid,
-  .whatsapp-settings-grid{
+  .whatsapp-settings-grid,
+  .academic-filter-grid,
+  .academic-filter-grid-compact{
     grid-template-columns:1fr;
   }
 
@@ -5922,7 +6186,9 @@ body{
   .influencer-history-head,
   .influencer-evolution-head,
   .admin-cockpit-list-item,
-  .whatsapp-queue-item{
+  .whatsapp-queue-item,
+  .academic-toolbar,
+  .academic-record-head{
     grid-template-columns:1fr;
     flex-direction:column;
     align-items:flex-start;
@@ -5961,7 +6227,9 @@ body{
   .influencer-detail-panel,
   .influencer-metric-panel,
   .influencer-chart-card,
-  .influencer-analysis-box{
+  .influencer-analysis-box,
+  .academic-list-panel,
+  .academic-detail-panel{
     padding:16px 14px;
   }
 }

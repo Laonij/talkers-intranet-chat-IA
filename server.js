@@ -77,6 +77,21 @@ const {
   readWorkbookFromFile,
 } = require("./lib/sales");
 const {
+  ACADEMIC_PRIMARY_SHEET,
+  ACADEMIC_TIMETABLE_SHEETS,
+  deriveSchoolTermName,
+  deriveSemesterCode,
+  detectLanguageFromText: detectAcademicLanguageFromText,
+  detectModalityFromText: detectAcademicModalityFromText,
+  normalizeAcademicText,
+  normalizePersonKey,
+  parseAcademicWorkbook,
+  readWorkbookFromFile: readAcademicWorkbookFromFile,
+  sanitizeWorkbookName: sanitizeAcademicWorkbookName,
+  stripTrailingStudentAnnotations,
+  toTitleCase: toAcademicTitleCase,
+} = require("./lib/academic");
+const {
   WORKBOOK_SOURCE: MARKETING_INDICATOR_WORKBOOK_SOURCE,
   MARKETING_INDICATOR_SEEDS,
 } = require("./lib/marketingIndicatorSeed");
@@ -141,6 +156,16 @@ const PEDAGOGICAL_WHATSAPP_GROUP_STATUSES = new Set(["active", "inactive"]);
 const PEDAGOGICAL_WHATSAPP_CAMPAIGN_STATUSES = new Set(["draft", "prepared", "running", "completed", "error", "cancelled"]);
 const PEDAGOGICAL_WHATSAPP_ITEM_STATUSES = new Set(["queued", "sending", "sent", "error", "pending_provider", "cancelled"]);
 const PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS = 30;
+const ACADEMIC_IMPORT_SOURCE_KEY = "academic-home-school";
+const ACADEMIC_TEACHER_TEMP_PASSWORD = String(process.env.ACADEMIC_TEACHER_TEMP_PASSWORD || "Professor#2026!").trim() || "Professor#2026!";
+const ACADEMIC_STUDENT_STATUS_OPTIONS = ["ativo", "inativo", "aguardando", "cancelado", "trancado", "desistente"];
+const ACADEMIC_ENROLLMENT_STATUS_OPTIONS = ["pre-matricula", "matriculado", "aguardando turma", "transferido", "trancado", "cancelado", "concluido", "desistente"];
+const ACADEMIC_CLASS_STATUS_OPTIONS = ["planejada", "ativa", "encerrada", "cancelada"];
+const ACADEMIC_ATTENDANCE_STATUS_OPTIONS = ["presente", "falta", "falta_justificada", "reposicao", "atraso"];
+const ACADEMIC_SESSION_STATUS_OPTIONS = ["planejada", "realizada", "cancelada", "remarcada"];
+const ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS = ["teacher-classes", "teacher-attendance", "teacher-class-students"];
+const ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS = ["academic-students", "academic-enrollments", "academic-classes", "academic-schedules", "academic-teachers", "academic-attendance", "academic-movements"];
+const ACADEMIC_ALL_SUBMENU_VIEW_KEYS = [...ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS, ...ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS];
 const CHAT_PERFORMANCE_SAMPLE_LIMIT = 60;
 const CHAT_HISTORY_CONTEXT_LIMIT = 8;
 const CHAT_HISTORY_CONTEXT_MAX_CHARS = 2200;
@@ -601,6 +626,7 @@ function normalizeAdditionalPermissions(value) {
     allowed_submenu_view_keys: normalizeStringArray(parsed.allowed_submenu_view_keys || []),
     allowed_global_views: normalizeStringArray(parsed.allowed_global_views || []),
     commercial_role: String(parsed.commercial_role || "").trim(),
+    academic_role: String(parsed.academic_role || "").trim(),
     intranet_scope: String(parsed.intranet_scope || "").trim(),
   };
 }
@@ -618,6 +644,12 @@ function buildPostSaleCloserPermissions() {
 function hasRestrictedPostSaleScope(user = {}) {
   return String(user?.additional_permissions?.commercial_role || "").trim() === "post_sale_closer"
     || String(user?.additional_permissions?.intranet_scope || "").trim() === "restricted_post_sale";
+}
+
+function hasAcademicTeacherScope(user = {}) {
+  return String(user?.additional_permissions?.academic_role || "").trim() === "teacher"
+    || String(user?.additional_permissions?.intranet_scope || "").trim() === "teacher_academic"
+    || userHasDepartmentAccess(user, "professor");
 }
 
 function getAllowedDepartmentSlugSet(user = {}) {
@@ -2785,6 +2817,2118 @@ async function buildSalesIntranetPayload(user) {
       status: closer.status,
     })),
   };
+}
+
+function normalizeAcademicOption(value, allowedValues = [], fallback = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return fallback;
+  const normalized = normalizeAcademicText(safe);
+  const matched = (allowedValues || []).find((item) => normalizeAcademicText(item) === normalized);
+  return matched || fallback;
+}
+
+function normalizeStudentStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_STUDENT_STATUS_OPTIONS, "ativo");
+}
+
+function normalizeEnrollmentStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_ENROLLMENT_STATUS_OPTIONS, "aguardando turma");
+}
+
+function normalizeClassStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_CLASS_STATUS_OPTIONS, "planejada");
+}
+
+function normalizeAttendanceStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_ATTENDANCE_STATUS_OPTIONS, "presente");
+}
+
+function normalizeSessionStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_SESSION_STATUS_OPTIONS, "planejada");
+}
+
+function normalizeAcademicDateInput(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(safe)) return safe;
+  const parsed = new Date(safe);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeAcademicDateTimeInput(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return null;
+  const parsed = new Date(safe);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function sanitizeAcademicTextValue(value, options = {}) {
+  return sanitizePersistedText(value, { maxLength: options.maxLength || 4000 });
+}
+
+function sanitizeAcademicIdentifier(value = "", fallback = "academic") {
+  const safe = normalizeAcademicText(value).replace(/\s+/g, ".").replace(/[^a-z0-9.]+/g, ".");
+  return safe.replace(/^\.+|\.+$/g, "") || fallback;
+}
+
+function mergeUniqueStrings(...groups) {
+  const out = [];
+  const seen = new Set();
+  for (const group of groups) {
+    for (const item of Array.isArray(group) ? group : []) {
+      const safe = sanitizeAcademicTextValue(item, { maxLength: 180 });
+      if (!safe) continue;
+      const key = normalizeAcademicText(safe);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(safe);
+    }
+  }
+  return out;
+}
+
+function guessSchoolTermDates(code = "") {
+  const safe = String(code || "").trim();
+  const match = safe.match(/^(\d{4})\.(1|2)$/);
+  if (!match) return { startDate: null, endDate: null };
+  const year = Number(match[1]);
+  const half = Number(match[2]);
+  if (half === 1) {
+    return { startDate: `${year}-01-01`, endDate: `${year}-06-30` };
+  }
+  return { startDate: `${year}-07-01`, endDate: `${year}-12-31` };
+}
+
+function buildAcademicProgramLookupKey(payload = {}) {
+  return [
+    normalizeAcademicText(payload.language || ""),
+    normalizeAcademicText(payload.program_name || ""),
+    normalizeAcademicText(payload.level_name || ""),
+    normalizeAcademicText(payload.stage_name || ""),
+    normalizeAcademicText(payload.semester_label || ""),
+    normalizeAcademicText(payload.modality || ""),
+  ].join("|");
+}
+
+function buildAcademicClassCode(payload = {}) {
+  const raw = [
+    payload.school_term_code || payload.semester_label || "",
+    payload.language || "",
+    payload.modality || "",
+    payload.level_name || "",
+    payload.class_name || payload.name || "",
+    payload.teacher_normalized_name || "",
+    payload.source_block_ref || "",
+  ].join("|");
+  return `CLS-${hashText(raw).slice(0, 10).toUpperCase()}`;
+}
+
+function mergeAcademicMetadata(existingValue, nextValue) {
+  const existing = safeJsonParse(existingValue || "{}") || {};
+  const incoming = nextValue && typeof nextValue === "object"
+    ? nextValue
+    : (safeJsonParse(nextValue || "{}") || {});
+  return repairDeepText({ ...existing, ...incoming });
+}
+
+function mapTeacherProfileRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    aliases: Array.isArray(safeJsonParse(row.aliases_json || "[]")) ? safeJsonParse(row.aliases_json || "[]") : [],
+    specialties: Array.isArray(safeJsonParse(row.specialties_json || "[]")) ? safeJsonParse(row.specialties_json || "[]") : [],
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+    active: coerceDbBoolean(row.active),
+  };
+}
+
+function mapAcademicStudentRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    source_payload: safeJsonParse(row.source_payload_json || "{}") || null,
+  };
+}
+
+function mapAcademicEnrollmentRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    source_payload: safeJsonParse(row.source_payload_json || "{}") || null,
+  };
+}
+
+function mapAcademicClassRow(row) {
+  if (!row) return null;
+  return row;
+}
+
+function buildTeacherInternalEmailBase(displayName = "") {
+  const identifier = sanitizeAcademicIdentifier(displayName, "teacher");
+  return `teacher.${identifier}`.replace(/\.{2,}/g, ".").replace(/\.$/, "");
+}
+
+async function generateAvailableInternalEmail(baseLocalPart = "teacher") {
+  const safeBase = sanitizeAcademicIdentifier(baseLocalPart, "teacher");
+  let attempt = 1;
+  while (attempt < 500) {
+    const localPart = attempt === 1 ? safeBase : `${safeBase}.${attempt}`;
+    const email = `${localPart}@internal.local`;
+    const existing = await get("SELECT id FROM users WHERE lower(email)=lower(?) LIMIT 1", [email]);
+    if (!existing?.id) return email;
+    attempt += 1;
+  }
+  return `${safeBase}.${Date.now()}@internal.local`;
+}
+
+async function getTeacherProfileByUserId(userId) {
+  const row = await get(
+    "SELECT id, user_id, display_name, normalized_name, aliases_json, specialties_json, metadata_json, active, created_at, updated_at FROM teacher_profiles WHERE user_id=? LIMIT 1",
+    [userId]
+  );
+  return mapTeacherProfileRow(row);
+}
+
+async function getTeacherProfileByNormalizedName(normalizedName = "") {
+  const safe = normalizeAcademicText(normalizedName);
+  if (!safe) return null;
+  const row = await get(
+    "SELECT id, user_id, display_name, normalized_name, aliases_json, specialties_json, metadata_json, active, created_at, updated_at FROM teacher_profiles WHERE normalized_name=? LIMIT 1",
+    [safe]
+  );
+  return mapTeacherProfileRow(row);
+}
+
+async function resolveAcademicScope(user) {
+  if (!user) throw new Error("academic_access_denied");
+  if (user.role === "admin") {
+    return {
+      enabled: true,
+      kind: "admin",
+      canViewAll: true,
+      canManageAll: true,
+      canImport: true,
+      teacherProfile: await getTeacherProfileByUserId(user.id || user.sub).catch(() => null),
+      teacherUserId: Number(user.id || user.sub || 0) || null,
+    };
+  }
+
+  if (userHasDepartmentAccess(user, "pedagogico")) {
+    return {
+      enabled: true,
+      kind: "pedagogico",
+      canViewAll: true,
+      canManageAll: true,
+      canImport: true,
+      teacherProfile: await getTeacherProfileByUserId(user.id || user.sub).catch(() => null),
+      teacherUserId: Number(user.id || user.sub || 0) || null,
+    };
+  }
+
+  if (hasAcademicTeacherScope(user)) {
+    return {
+      enabled: true,
+      kind: "teacher",
+      canViewAll: false,
+      canManageAll: false,
+      canImport: false,
+      teacherProfile: await getTeacherProfileByUserId(user.id || user.sub).catch(() => null),
+      teacherUserId: Number(user.id || user.sub || 0) || null,
+    };
+  }
+
+  throw new Error("academic_access_denied");
+}
+
+function buildAcademicScopeExistsSql(scope, enrollmentAlias = "e") {
+  if (scope.canViewAll) return { sql: "", params: [] };
+  return {
+    sql: `EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+       WHERE ct.class_id=${enrollmentAlias}.class_id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`,
+    params: [scope.teacherUserId],
+  };
+}
+
+async function listClassSchedulesByClassId(classId) {
+  const rows = await all(
+    "SELECT id, class_id, weekday, start_time, end_time, timezone, is_primary, notes, created_at, updated_at FROM class_schedules WHERE class_id=? ORDER BY is_primary DESC, weekday ASC, start_time ASC, id ASC",
+    [classId]
+  );
+  return rows.map((row) => ({ ...row, is_primary: coerceDbBoolean(row.is_primary) }));
+}
+
+async function listClassTeachersByClassId(classId) {
+  const rows = await all(
+    `SELECT ct.id, ct.class_id, ct.user_id, ct.role_in_class, ct.start_date, ct.end_date, ct.is_active, ct.created_at, ct.updated_at,
+            u.name AS user_name, u.email AS user_email, tp.display_name AS profile_name, tp.aliases_json, tp.specialties_json
+       FROM class_teachers ct
+       LEFT JOIN users u ON u.id = ct.user_id
+       LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+      WHERE ct.class_id=?
+      ORDER BY ${buildDbTruthySql("is_active", "ct")} DESC, lower(coalesce(tp.display_name, u.name, '')) ASC, ct.id ASC`,
+    [classId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    is_active: coerceDbBoolean(row.is_active),
+    display_name: row.profile_name || row.user_name || "",
+    aliases: Array.isArray(safeJsonParse(row.aliases_json || "[]")) ? safeJsonParse(row.aliases_json || "[]") : [],
+    specialties: Array.isArray(safeJsonParse(row.specialties_json || "[]")) ? safeJsonParse(row.specialties_json || "[]") : [],
+  }));
+}
+
+async function getClassBasicById(classId) {
+  const row = await get(
+    `SELECT c.id, c.code, c.name, c.school_term_id, c.academic_program_id, c.language, c.modality, c.level_name, c.semester_label,
+            c.age_group, c.capacity, c.min_students, c.status, c.room_name, c.unit_name, c.notes, c.source_sheet, c.source_block_ref,
+            c.created_at, c.updated_at, st.name AS school_term_name, st.code AS school_term_code, ap.program_name, ap.material_name
+       FROM classes c
+       LEFT JOIN school_terms st ON st.id = c.school_term_id
+       LEFT JOIN academic_programs ap ON ap.id = c.academic_program_id
+      WHERE c.id=?`,
+    [classId]
+  );
+  return mapAcademicClassRow(row);
+}
+
+async function canAccessAcademicClass(scope, classId) {
+  if (scope.canViewAll) return true;
+  const row = await get(
+    `SELECT id
+       FROM class_teachers
+      WHERE class_id=? AND user_id=? AND ${buildDbTruthySql("is_active")}
+      LIMIT 1`,
+    [classId, scope.teacherUserId]
+  );
+  return Boolean(row?.id);
+}
+
+async function findAcademicStudentMatch({ fullName = "", normalizedName = "", phone = "" } = {}) {
+  const safeNormalized = normalizeAcademicText(normalizedName || fullName);
+  const safePhone = sanitizeAcademicTextValue(phone, { maxLength: 40 });
+  if (!safeNormalized) return null;
+  if (safePhone) {
+    const row = await get(
+      `SELECT *
+         FROM students
+        WHERE normalized_name=?
+          AND (phone=? OR whatsapp=?)
+        ORDER BY datetime(updated_at) DESC, id DESC
+        LIMIT 1`,
+      [safeNormalized, safePhone, safePhone]
+    );
+    if (row) return mapAcademicStudentRow(row);
+  }
+  const row = await get(
+    `SELECT *
+       FROM students
+      WHERE normalized_name=?
+      ORDER BY datetime(updated_at) DESC, id DESC
+      LIMIT 1`,
+    [safeNormalized]
+  );
+  return mapAcademicStudentRow(row);
+}
+
+async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
+  const studentId = Number(payload.id || 0) || null;
+  const fullName = sanitizeAcademicTextValue(payload.full_name, { maxLength: 180 });
+  if (!fullName) throw new Error("missing_student_name");
+  const normalizedName = normalizeAcademicText(fullName);
+  const preferredName = sanitizeAcademicTextValue(payload.preferred_name, { maxLength: 120 }) || null;
+  const birthDate = normalizeAcademicDateInput(payload.birth_date);
+  const age = Number.isFinite(Number(payload.age)) ? Math.max(0, Math.round(Number(payload.age))) : null;
+  const status = normalizeStudentStatus(payload.status || "ativo");
+  const persisted = {
+    full_name: fullName,
+    normalized_name: normalizedName,
+    preferred_name: preferredName,
+    birth_date: birthDate,
+    age,
+    gender: sanitizeAcademicTextValue(payload.gender, { maxLength: 40 }) || null,
+    cpf: sanitizeAcademicTextValue(payload.cpf, { maxLength: 32 }) || null,
+    rg: sanitizeAcademicTextValue(payload.rg, { maxLength: 32 }) || null,
+    email: sanitizeAcademicTextValue(payload.email, { maxLength: 180 }) || null,
+    phone: sanitizeAcademicTextValue(payload.phone, { maxLength: 40 }) || null,
+    whatsapp: sanitizeAcademicTextValue(payload.whatsapp, { maxLength: 40 }) || null,
+    emergency_contact_name: sanitizeAcademicTextValue(payload.emergency_contact_name, { maxLength: 180 }) || null,
+    emergency_contact_phone: sanitizeAcademicTextValue(payload.emergency_contact_phone, { maxLength: 40 }) || null,
+    address_zipcode: sanitizeAcademicTextValue(payload.address_zipcode, { maxLength: 32 }) || null,
+    address_street: sanitizeAcademicTextValue(payload.address_street, { maxLength: 180 }) || null,
+    address_number: sanitizeAcademicTextValue(payload.address_number, { maxLength: 32 }) || null,
+    address_complement: sanitizeAcademicTextValue(payload.address_complement, { maxLength: 120 }) || null,
+    address_neighborhood: sanitizeAcademicTextValue(payload.address_neighborhood, { maxLength: 120 }) || null,
+    address_city: sanitizeAcademicTextValue(payload.address_city, { maxLength: 120 }) || null,
+    address_state: sanitizeAcademicTextValue(payload.address_state, { maxLength: 80 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    allergies: sanitizeAcademicTextValue(payload.allergies, { maxLength: 2000 }) || null,
+    medical_notes: sanitizeAcademicTextValue(payload.medical_notes, { maxLength: 3000 }) || null,
+    school_name: sanitizeAcademicTextValue(payload.school_name, { maxLength: 180 }) || null,
+    school_grade: sanitizeAcademicTextValue(payload.school_grade, { maxLength: 80 }) || null,
+    status,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
+    source_payload_json: safeJsonStringify(payload.source_payload || payload.source_payload_json || {}, "{}"),
+  };
+
+  if (studentId) {
+    const existing = await get("SELECT * FROM students WHERE id=? LIMIT 1", [studentId]);
+    if (!existing) throw new Error("student_not_found");
+    await run(
+      `UPDATE students
+          SET full_name=?, normalized_name=?, preferred_name=?, birth_date=?, age=?, gender=?, cpf=?, rg=?, email=?, phone=?, whatsapp=?,
+              emergency_contact_name=?, emergency_contact_phone=?, address_zipcode=?, address_street=?, address_number=?, address_complement=?,
+              address_neighborhood=?, address_city=?, address_state=?, notes=?, allergies=?, medical_notes=?, school_name=?, school_grade=?,
+              status=?, source_sheet=?, source_row_identifier=?, source_payload_json=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        persisted.full_name,
+        persisted.normalized_name,
+        persisted.preferred_name,
+        persisted.birth_date,
+        persisted.age,
+        persisted.gender,
+        persisted.cpf,
+        persisted.rg,
+        persisted.email,
+        persisted.phone,
+        persisted.whatsapp,
+        persisted.emergency_contact_name,
+        persisted.emergency_contact_phone,
+        persisted.address_zipcode,
+        persisted.address_street,
+        persisted.address_number,
+        persisted.address_complement,
+        persisted.address_neighborhood,
+        persisted.address_city,
+        persisted.address_state,
+        persisted.notes,
+        persisted.allergies,
+        persisted.medical_notes,
+        persisted.school_name,
+        persisted.school_grade,
+        persisted.status,
+        persisted.source_sheet,
+        persisted.source_row_identifier,
+        persisted.source_payload_json,
+        studentId,
+      ]
+    );
+    if (actorUserId) {
+      await logEntityChange({
+        entityType: "academic_student",
+        entityId: studentId,
+        action: "updated",
+        actorUserId,
+        origin: "manual_edit",
+        detail: { source: "academic_student_form" },
+      });
+    }
+    return mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [studentId]));
+  }
+
+  const created = await run(
+    `INSERT INTO students
+       (full_name, normalized_name, preferred_name, birth_date, age, gender, cpf, rg, email, phone, whatsapp, emergency_contact_name,
+        emergency_contact_phone, address_zipcode, address_street, address_number, address_complement, address_neighborhood, address_city,
+        address_state, notes, allergies, medical_notes, school_name, school_grade, status, source_sheet, source_row_identifier, source_payload_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      persisted.full_name,
+      persisted.normalized_name,
+      persisted.preferred_name,
+      persisted.birth_date,
+      persisted.age,
+      persisted.gender,
+      persisted.cpf,
+      persisted.rg,
+      persisted.email,
+      persisted.phone,
+      persisted.whatsapp,
+      persisted.emergency_contact_name,
+      persisted.emergency_contact_phone,
+      persisted.address_zipcode,
+      persisted.address_street,
+      persisted.address_number,
+      persisted.address_complement,
+      persisted.address_neighborhood,
+      persisted.address_city,
+      persisted.address_state,
+      persisted.notes,
+      persisted.allergies,
+      persisted.medical_notes,
+      persisted.school_name,
+      persisted.school_grade,
+      persisted.status,
+      persisted.source_sheet,
+      persisted.source_row_identifier,
+      persisted.source_payload_json,
+    ]
+  );
+  if (actorUserId) {
+    await logEntityChange({
+      entityType: "academic_student",
+      entityId: created.lastID,
+      action: "created",
+      actorUserId,
+      origin: "manual_create",
+      detail: { source: "academic_student_form" },
+    });
+  }
+  return mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [created.lastID]));
+}
+
+async function replaceStudentGuardians(studentId, guardians = [], actorUserId = null) {
+  await run("DELETE FROM student_guardians WHERE student_id=?", [studentId]);
+  const persisted = [];
+  for (const item of Array.isArray(guardians) ? guardians : []) {
+    const name = sanitizeAcademicTextValue(item.name, { maxLength: 180 });
+    if (!name) continue;
+    const created = await run(
+      `INSERT INTO student_guardians
+         (student_id, name, relation_type, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        studentId,
+        name,
+        sanitizeAcademicTextValue(item.relation_type, { maxLength: 60 }) || null,
+        sanitizeAcademicTextValue(item.phone, { maxLength: 40 }) || null,
+        sanitizeAcademicTextValue(item.whatsapp, { maxLength: 40 }) || null,
+        sanitizeAcademicTextValue(item.email, { maxLength: 180 }) || null,
+        Boolean(item.financial_responsible),
+        Boolean(item.pedagogical_responsible),
+        item.receives_notifications !== false,
+        sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || null,
+      ]
+    );
+    persisted.push(created.lastID);
+  }
+  if (actorUserId) {
+    await logEntityChange({
+      entityType: "academic_student",
+      entityId: studentId,
+      action: "guardians_updated",
+      actorUserId,
+      origin: "manual_edit",
+      detail: { total_guardians: persisted.length },
+    });
+  }
+}
+
+async function ensureSchoolTermRecord(payload = {}) {
+  const code = sanitizeAcademicTextValue(payload.code || deriveSemesterCode(payload.name || ""), { maxLength: 32 });
+  const name = sanitizeAcademicTextValue(payload.name || deriveSchoolTermName(code), { maxLength: 120 });
+  if (!code && !name) return null;
+  const existing = code
+    ? await get("SELECT * FROM school_terms WHERE lower(code)=lower(?) LIMIT 1", [code])
+    : await get("SELECT * FROM school_terms WHERE lower(name)=lower(?) LIMIT 1", [name]);
+  if (existing) {
+    await run(
+      "UPDATE school_terms SET name=?, start_date=COALESCE(?, start_date), end_date=COALESCE(?, end_date), status=?, updated_at=datetime('now') WHERE id=?",
+      [
+        name || existing.name,
+        normalizeAcademicDateInput(payload.start_date),
+        normalizeAcademicDateInput(payload.end_date),
+        normalizeAcademicOption(payload.status, ["active", "inactive", "planned", "closed"], existing.status || "active"),
+        existing.id,
+      ]
+    );
+    return get("SELECT * FROM school_terms WHERE id=?", [existing.id]);
+  }
+  const guessedDates = guessSchoolTermDates(code);
+  const created = await run(
+    "INSERT INTO school_terms (name, code, start_date, end_date, status, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+    [
+      name || code,
+      code || sanitizeAcademicIdentifier(name, "term"),
+      normalizeAcademicDateInput(payload.start_date) || guessedDates.startDate,
+      normalizeAcademicDateInput(payload.end_date) || guessedDates.endDate,
+      normalizeAcademicOption(payload.status, ["active", "inactive", "planned", "closed"], "active"),
+    ]
+  );
+  return get("SELECT * FROM school_terms WHERE id=?", [created.lastID]);
+}
+
+async function ensureAcademicProgramRecord(payload = {}) {
+  const prepared = {
+    language: sanitizeAcademicTextValue(payload.language, { maxLength: 80 }) || null,
+    program_name: sanitizeAcademicTextValue(payload.program_name || payload.level_name || payload.language, { maxLength: 160 }),
+    level_name: sanitizeAcademicTextValue(payload.level_name, { maxLength: 120 }) || null,
+    stage_name: sanitizeAcademicTextValue(payload.stage_name, { maxLength: 120 }) || null,
+    semester_label: sanitizeAcademicTextValue(payload.semester_label || payload.school_term_code, { maxLength: 32 }) || null,
+    modality: sanitizeAcademicTextValue(payload.modality, { maxLength: 80 }) || null,
+    material_name: sanitizeAcademicTextValue(payload.material_name, { maxLength: 120 }) || null,
+    workload_hours: Number.isFinite(Number(payload.workload_hours)) ? Number(payload.workload_hours) : null,
+    status: normalizeAcademicOption(payload.status, ["active", "inactive"], "active"),
+  };
+  if (!prepared.program_name) return null;
+  const existing = await get(
+    `SELECT *
+       FROM academic_programs
+      WHERE lower(coalesce(language, ''))=lower(?)
+        AND lower(program_name)=lower(?)
+        AND lower(coalesce(level_name, ''))=lower(?)
+        AND lower(coalesce(stage_name, ''))=lower(?)
+        AND lower(coalesce(semester_label, ''))=lower(?)
+        AND lower(coalesce(modality, ''))=lower(?)
+      LIMIT 1`,
+    [
+      prepared.language || "",
+      prepared.program_name,
+      prepared.level_name || "",
+      prepared.stage_name || "",
+      prepared.semester_label || "",
+      prepared.modality || "",
+    ]
+  );
+  if (existing) return existing;
+  const created = await run(
+    `INSERT INTO academic_programs
+       (language, program_name, level_name, stage_name, semester_label, modality, material_name, workload_hours, status, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      prepared.language,
+      prepared.program_name,
+      prepared.level_name,
+      prepared.stage_name,
+      prepared.semester_label,
+      prepared.modality,
+      prepared.material_name,
+      prepared.workload_hours,
+      prepared.status,
+    ]
+  );
+  return get("SELECT * FROM academic_programs WHERE id=?", [created.lastID]);
+}
+
+async function ensureAcademicClassRecord(payload = {}) {
+  const prepared = {
+    code: sanitizeAcademicTextValue(payload.code || buildAcademicClassCode(payload), { maxLength: 40 }),
+    name: sanitizeAcademicTextValue(payload.name || payload.class_name, { maxLength: 180 }),
+    school_term_id: Number(payload.school_term_id || 0) || null,
+    academic_program_id: Number(payload.academic_program_id || 0) || null,
+    language: sanitizeAcademicTextValue(payload.language, { maxLength: 80 }) || null,
+    modality: sanitizeAcademicTextValue(payload.modality, { maxLength: 80 }) || null,
+    level_name: sanitizeAcademicTextValue(payload.level_name, { maxLength: 120 }) || null,
+    semester_label: sanitizeAcademicTextValue(payload.semester_label || payload.school_term_code, { maxLength: 32 }) || null,
+    age_group: sanitizeAcademicTextValue(payload.age_group, { maxLength: 80 }) || null,
+    capacity: Number.isFinite(Number(payload.capacity)) ? Math.max(0, Math.round(Number(payload.capacity))) : null,
+    min_students: Number.isFinite(Number(payload.min_students)) ? Math.max(0, Math.round(Number(payload.min_students))) : null,
+    status: normalizeClassStatus(payload.status || "ativa"),
+    room_name: sanitizeAcademicTextValue(payload.room_name, { maxLength: 120 }) || null,
+    unit_name: sanitizeAcademicTextValue(payload.unit_name, { maxLength: 120 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_block_ref: sanitizeAcademicTextValue(payload.source_block_ref, { maxLength: 180 }) || null,
+  };
+  if (!prepared.name) throw new Error("missing_class_name");
+  let existing = null;
+  if (prepared.source_block_ref) {
+    existing = await get("SELECT * FROM classes WHERE source_block_ref=? LIMIT 1", [prepared.source_block_ref]);
+  }
+  if (!existing && prepared.code) {
+    existing = await get("SELECT * FROM classes WHERE code=? LIMIT 1", [prepared.code]);
+  }
+  if (!existing) {
+    existing = await get(
+      `SELECT *
+         FROM classes
+        WHERE lower(name)=lower(?)
+          AND coalesce(school_term_id, 0)=coalesce(?, 0)
+          AND coalesce(academic_program_id, 0)=coalesce(?, 0)
+          AND lower(coalesce(language, ''))=lower(?)
+        LIMIT 1`,
+      [prepared.name, prepared.school_term_id, prepared.academic_program_id, prepared.language || ""]
+    );
+  }
+  if (existing) {
+    await run(
+      `UPDATE classes
+          SET code=?, name=?, school_term_id=?, academic_program_id=?, language=?, modality=?, level_name=?, semester_label=?, age_group=?,
+              capacity=COALESCE(?, capacity), min_students=COALESCE(?, min_students), status=?, room_name=?, unit_name=?, notes=COALESCE(?, notes),
+              source_sheet=COALESCE(?, source_sheet), source_block_ref=COALESCE(?, source_block_ref), updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        prepared.code || existing.code,
+        prepared.name,
+        prepared.school_term_id,
+        prepared.academic_program_id,
+        prepared.language,
+        prepared.modality,
+        prepared.level_name,
+        prepared.semester_label,
+        prepared.age_group,
+        prepared.capacity,
+        prepared.min_students,
+        prepared.status,
+        prepared.room_name,
+        prepared.unit_name,
+        prepared.notes,
+        prepared.source_sheet,
+        prepared.source_block_ref,
+        existing.id,
+      ]
+    );
+    return getClassBasicById(existing.id);
+  }
+  const created = await run(
+    `INSERT INTO classes
+       (code, name, school_term_id, academic_program_id, language, modality, level_name, semester_label, age_group, capacity, min_students, status, room_name, unit_name, notes, source_sheet, source_block_ref, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      prepared.code,
+      prepared.name,
+      prepared.school_term_id,
+      prepared.academic_program_id,
+      prepared.language,
+      prepared.modality,
+      prepared.level_name,
+      prepared.semester_label,
+      prepared.age_group,
+      prepared.capacity,
+      prepared.min_students,
+      prepared.status,
+      prepared.room_name,
+      prepared.unit_name,
+      prepared.notes,
+      prepared.source_sheet,
+      prepared.source_block_ref,
+    ]
+  );
+  return getClassBasicById(created.lastID);
+}
+
+async function syncAcademicClassSchedules(classId, schedules = []) {
+  const existing = await listClassSchedulesByClassId(classId);
+  const existingKeys = new Set(existing.map((row) => [row.weekday, row.start_time, row.end_time, row.notes || ""].join("|")));
+  let inserted = 0;
+  for (let index = 0; index < schedules.length; index += 1) {
+    const item = schedules[index] || {};
+    const weekday = sanitizeAcademicTextValue(item.weekday, { maxLength: 40 }) || null;
+    const startTime = sanitizeAcademicTextValue(item.start_time, { maxLength: 16 }) || null;
+    const endTime = sanitizeAcademicTextValue(item.end_time, { maxLength: 16 }) || null;
+    const notes = sanitizeAcademicTextValue(item.notes, { maxLength: 500 }) || null;
+    const key = [weekday, startTime, endTime, notes || ""].join("|");
+    if (existingKeys.has(key)) continue;
+    await run(
+      `INSERT INTO class_schedules
+         (class_id, weekday, start_time, end_time, timezone, is_primary, notes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [classId, weekday, startTime, endTime, sanitizeAcademicTextValue(item.timezone, { maxLength: 80 }) || "America/Sao_Paulo", inserted === 0 && !existing.length && index === 0, notes]
+    );
+    existingKeys.add(key);
+    inserted += 1;
+  }
+  return listClassSchedulesByClassId(classId);
+}
+
+async function ensureClassTeacherLink(classId, userId, payload = {}) {
+  const roleInClass = sanitizeAcademicTextValue(payload.role_in_class || "teacher", { maxLength: 40 }) || "teacher";
+  const startDate = normalizeAcademicDateInput(payload.start_date) || null;
+  const existing = await get(
+    "SELECT id FROM class_teachers WHERE class_id=? AND user_id=? AND role_in_class=? AND coalesce(start_date, '')=coalesce(?, '') LIMIT 1",
+    [classId, userId, roleInClass, startDate]
+  );
+  if (existing?.id) {
+    await run(
+      "UPDATE class_teachers SET end_date=?, is_active=?, updated_at=datetime('now') WHERE id=?",
+      [normalizeAcademicDateInput(payload.end_date), payload.is_active !== false, existing.id]
+    );
+    return existing.id;
+  }
+  const created = await run(
+    "INSERT INTO class_teachers (class_id, user_id, role_in_class, start_date, end_date, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+    [classId, userId, roleInClass, startDate, normalizeAcademicDateInput(payload.end_date), payload.is_active !== false]
+  );
+  return created.lastID;
+}
+
+async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
+  const displayName = sanitizeAcademicTextValue(teacher.display_name || teacher.normalized_name, { maxLength: 180 });
+  const normalizedName = normalizeAcademicText(teacher.normalized_name || displayName);
+  if (!displayName || !normalizedName) return null;
+
+  let profile = await getTeacherProfileByNormalizedName(normalizedName);
+  let user = profile?.user_id ? await getUserById(profile.user_id).catch(() => null) : null;
+
+  if (!user) {
+    const existingTeacherUser = await get(
+      `SELECT id
+         FROM users
+        WHERE lower(name)=lower(?)
+          AND (lower(coalesce(job_title, '')) LIKE lower(?) OR lower(coalesce(department, ''))=lower(?))
+        LIMIT 1`,
+      [displayName, "%prof%", "Professor"]
+    );
+    if (existingTeacherUser?.id) {
+      user = await getUserById(existingTeacherUser.id).catch(() => null);
+    }
+  }
+
+  if (!user) {
+    const email = await generateAvailableInternalEmail(buildTeacherInternalEmailBase(displayName));
+    const passwordHash = await bcrypt.hash(ACADEMIC_TEACHER_TEMP_PASSWORD, 10);
+    const created = await run(
+      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?, ?)",
+      [
+        email,
+        displayName,
+        passwordHash,
+        "Professor",
+        true,
+        DEFAULT_LOCALE,
+        "Professor",
+        "Acadêmico",
+        safeJsonStringify({
+          academic_role: "teacher",
+          intranet_scope: "teacher_academic",
+          allowed_department_slugs: ["professor"],
+          allowed_submenu_view_keys: ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS,
+        }, "{}"),
+      ]
+    );
+    user = await getUserById(created.lastID);
+    if (actorUserId) {
+      await logEvent(actorUserId, "academic_teacher_user_created", {
+        teacher_name: displayName,
+        user_id: created.lastID,
+      });
+    }
+  }
+
+  await syncUserDepartments(user.id || user.sub, ["Professor"]);
+  const mergedPermissions = normalizeAdditionalPermissions(user.additional_permissions_json || user.additional_permissions || {});
+  mergedPermissions.academic_role = "teacher";
+  mergedPermissions.intranet_scope = "teacher_academic";
+  mergedPermissions.allowed_department_slugs = ["professor"];
+  mergedPermissions.allowed_submenu_view_keys = ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS.slice();
+  await run(
+    "UPDATE users SET role=?, department=?, can_access_intranet=?, job_title=?, unit_name=?, additional_permissions_json=? WHERE id=?",
+    [
+      String(user.role || "").trim() === "admin" ? "admin" : "user",
+      "Professor",
+      true,
+      normalizeSqlTextValue(user.job_title) || "Professor",
+      normalizeSqlTextValue(user.unit_name) || "Acadêmico",
+      safeJsonStringify(mergedPermissions, "{}"),
+      user.id || user.sub,
+    ]
+  );
+
+  const aliases = mergeUniqueStrings(teacher.aliases || [], [displayName]);
+  const specialties = mergeUniqueStrings(teacher.specialties || []);
+  const metadata = mergeAcademicMetadata(profile?.metadata, {
+    imported_from: "academic_workbook",
+    alias_count: aliases.length,
+    specialties_count: specialties.length,
+  });
+  if (profile?.id) {
+    await run(
+      `UPDATE teacher_profiles
+          SET user_id=?, display_name=?, aliases_json=?, specialties_json=?, metadata_json=?, active=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        user.id || user.sub,
+        displayName,
+        safeJsonStringify(aliases, "[]"),
+        safeJsonStringify(specialties, "[]"),
+        safeJsonStringify(metadata, "{}"),
+        true,
+        profile.id,
+      ]
+    );
+  } else {
+    const createdProfile = await run(
+      `INSERT INTO teacher_profiles
+         (user_id, display_name, normalized_name, aliases_json, specialties_json, metadata_json, active, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        user.id || user.sub,
+        displayName,
+        normalizedName,
+        safeJsonStringify(aliases, "[]"),
+        safeJsonStringify(specialties, "[]"),
+        safeJsonStringify(metadata, "{}"),
+        true,
+      ]
+    );
+    profile = await getTeacherProfileByNormalizedName(normalizedName);
+    if (!profile?.id && createdProfile?.lastID) {
+      profile = await getTeacherProfileByUserId(user.id || user.sub);
+    }
+  }
+
+  return {
+    user: await getUserById(user.id || user.sub),
+    profile: await getTeacherProfileByNormalizedName(normalizedName),
+  };
+}
+
+async function upsertAcademicStudentFromImport(record = {}, actorUserId = null) {
+  const fullName = sanitizeAcademicTextValue(record.full_name || record.student_name, { maxLength: 180 });
+  const normalizedName = normalizePersonKey(fullName);
+  if (!fullName || !normalizedName) return null;
+  const existing = await findAcademicStudentMatch({
+    fullName,
+    normalizedName,
+    phone: record.phone,
+  });
+  const importedNotes = sanitizeAcademicTextValue(record.notes || record.source_notes || "", { maxLength: 4000 }) || null;
+  const payload = {
+    id: existing?.id || null,
+    full_name: fullName,
+    preferred_name: existing?.preferred_name || null,
+    phone: sanitizeAcademicTextValue(record.phone, { maxLength: 40 }) || existing?.phone || null,
+    whatsapp: sanitizeAcademicTextValue(record.whatsapp || record.phone, { maxLength: 40 }) || existing?.whatsapp || null,
+    notes: existing?.notes || importedNotes,
+    school_name: existing?.school_name || null,
+    school_grade: existing?.school_grade || null,
+    status: normalizeStudentStatus(record.status || existing?.status || "ativo"),
+    source_sheet: record.source_sheet,
+    source_row_identifier: record.source_row_identifier,
+    source_payload: record.source_payload || {},
+  };
+  const saved = await saveAcademicStudentRecord(payload, actorUserId);
+  if (actorUserId && existing?.id) {
+    await logEntityChange({
+      entityType: "academic_student",
+      entityId: saved.id,
+      action: "import_sync",
+      actorUserId,
+      origin: "academic_import",
+      detail: {
+        source_sheet: record.source_sheet,
+        source_row_identifier: record.source_row_identifier,
+      },
+    });
+  }
+  return saved;
+}
+
+function shouldPreserveEnrollmentStatus(currentStatus = "") {
+  const safe = normalizeAcademicText(currentStatus);
+  return ["trancado", "cancelado", "concluido", "desistente"].includes(safe);
+}
+
+async function findAcademicEnrollmentMatch(studentId, payload = {}) {
+  if (!studentId) return null;
+  const sourceSheet = sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 });
+  const sourceRowIdentifier = sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 });
+  if (sourceSheet && sourceRowIdentifier) {
+    const bySource = await get(
+      "SELECT * FROM enrollments WHERE student_id=? AND source_sheet=? AND source_row_identifier=? LIMIT 1",
+      [studentId, sourceSheet, sourceRowIdentifier]
+    );
+    if (bySource) return mapAcademicEnrollmentRow(bySource);
+  }
+  const byContext = await get(
+    `SELECT *
+       FROM enrollments
+      WHERE student_id=?
+        AND coalesce(academic_program_id, 0)=coalesce(?, 0)
+        AND coalesce(school_term_id, 0)=coalesce(?, 0)
+      ORDER BY datetime(updated_at) DESC, id DESC
+      LIMIT 1`,
+    [studentId, Number(payload.academic_program_id || 0) || null, Number(payload.school_term_id || 0) || null]
+  );
+  return mapAcademicEnrollmentRow(byContext);
+}
+
+async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
+  const actorUserId = actorUser?.id || actorUser?.sub || null;
+  const enrollmentId = Number(payload.id || 0) || null;
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) throw new Error("missing_student_id");
+  const prepared = {
+    student_id: studentId,
+    academic_program_id: Number(payload.academic_program_id || 0) || null,
+    school_term_id: Number(payload.school_term_id || 0) || null,
+    class_id: Number(payload.class_id || 0) || null,
+    enrollment_number: sanitizeAcademicTextValue(payload.enrollment_number, { maxLength: 80 }) || null,
+    enrollment_date: normalizeAcademicDateInput(payload.enrollment_date),
+    start_date: normalizeAcademicDateInput(payload.start_date),
+    end_date: normalizeAcademicDateInput(payload.end_date),
+    enrollment_status: normalizeEnrollmentStatus(payload.enrollment_status || "aguardando turma"),
+    contract_status: sanitizeAcademicTextValue(payload.contract_status, { maxLength: 80 }) || null,
+    payment_status: sanitizeAcademicTextValue(payload.payment_status, { maxLength: 80 }) || null,
+    pedagogical_status: sanitizeAcademicTextValue(payload.pedagogical_status, { maxLength: 120 }) || null,
+    source_channel: sanitizeAcademicTextValue(payload.source_channel, { maxLength: 120 }) || null,
+    source_notes: sanitizeAcademicTextValue(payload.source_notes, { maxLength: 2000 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
+    source_payload_json: safeJsonStringify(payload.source_payload || payload.source_payload_json || {}, "{}"),
+  };
+
+  if (enrollmentId) {
+    const existing = await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [enrollmentId]);
+    if (!existing) throw new Error("enrollment_not_found");
+    await run(
+      `UPDATE enrollments
+          SET student_id=?, academic_program_id=?, school_term_id=?, class_id=?, enrollment_number=?, enrollment_date=?, start_date=?, end_date=?,
+              enrollment_status=?, contract_status=?, payment_status=?, pedagogical_status=?, source_channel=?, source_notes=?, notes=?,
+              source_sheet=?, source_row_identifier=?, source_payload_json=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        prepared.student_id,
+        prepared.academic_program_id,
+        prepared.school_term_id,
+        prepared.class_id,
+        prepared.enrollment_number,
+        prepared.enrollment_date,
+        prepared.start_date,
+        prepared.end_date,
+        prepared.enrollment_status,
+        prepared.contract_status,
+        prepared.payment_status,
+        prepared.pedagogical_status,
+        prepared.source_channel,
+        prepared.source_notes,
+        prepared.notes,
+        prepared.source_sheet,
+        prepared.source_row_identifier,
+        prepared.source_payload_json,
+        enrollmentId,
+      ]
+    );
+    if (actorUserId) {
+      await logEntityChange({
+        entityType: "academic_enrollment",
+        entityId: enrollmentId,
+        action: "updated",
+        actorUserId,
+        origin: "manual_edit",
+      });
+    }
+    return mapAcademicEnrollmentRow(await get("SELECT * FROM enrollments WHERE id=?", [enrollmentId]));
+  }
+
+  const created = await run(
+    `INSERT INTO enrollments
+       (student_id, academic_program_id, school_term_id, class_id, enrollment_number, enrollment_date, start_date, end_date, enrollment_status,
+        contract_status, payment_status, pedagogical_status, source_channel, source_notes, notes, source_sheet, source_row_identifier, source_payload_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      prepared.student_id,
+      prepared.academic_program_id,
+      prepared.school_term_id,
+      prepared.class_id,
+      prepared.enrollment_number,
+      prepared.enrollment_date,
+      prepared.start_date,
+      prepared.end_date,
+      prepared.enrollment_status,
+      prepared.contract_status,
+      prepared.payment_status,
+      prepared.pedagogical_status,
+      prepared.source_channel,
+      prepared.source_notes,
+      prepared.notes,
+      prepared.source_sheet,
+      prepared.source_row_identifier,
+      prepared.source_payload_json,
+    ]
+  );
+  if (actorUserId) {
+    await logEntityChange({
+      entityType: "academic_enrollment",
+      entityId: created.lastID,
+      action: "created",
+      actorUserId,
+      origin: "manual_create",
+    });
+  }
+  return mapAcademicEnrollmentRow(await get("SELECT * FROM enrollments WHERE id=?", [created.lastID]));
+}
+
+async function upsertAcademicEnrollmentFromImport(student, payload = {}, actorUserId = null) {
+  if (!student?.id) return null;
+  const existing = await findAcademicEnrollmentMatch(student.id, payload);
+  const nextStatus = normalizeEnrollmentStatus(payload.enrollment_status || (payload.class_id ? "matriculado" : "aguardando turma"));
+  const finalStatus = existing?.enrollment_status && shouldPreserveEnrollmentStatus(existing.enrollment_status)
+    ? existing.enrollment_status
+    : nextStatus;
+  const mergedPayload = {
+    ...payload,
+    id: existing?.id || null,
+    student_id: student.id,
+    enrollment_status: finalStatus,
+    notes: existing?.notes || payload.notes || null,
+  };
+  const saved = await saveAcademicEnrollmentRecord(mergedPayload, actorUserId ? { id: actorUserId } : null);
+  if (existing?.id && Number(existing.class_id || 0) !== Number(saved.class_id || 0) && Number(saved.class_id || 0)) {
+    await run(
+      `INSERT INTO enrollment_class_history
+         (enrollment_id, old_class_id, new_class_id, reason, changed_by_user_id, changed_at, notes)
+       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
+      [
+        saved.id,
+        existing.class_id || null,
+        saved.class_id || null,
+        "Sincronização da planilha acadêmica",
+        actorUserId || null,
+        "Atualização automática a partir da grade importada",
+      ]
+    );
+  }
+  return saved;
+}
+
+async function importAcademicWorkbookBatch({ workbookPath, workbookName = "", actorUserId = null }) {
+  if (!workbookPath || !fs.existsSync(workbookPath)) {
+    throw new Error("missing_academic_workbook");
+  }
+
+  const workbook = readAcademicWorkbookFromFile(workbookPath);
+  const parsed = parseAcademicWorkbook(workbook, {
+    workbookName: workbookName || path.basename(workbookPath),
+  });
+
+  const teacherProvisioned = [];
+  for (const teacher of parsed.teachers || []) {
+    const provisioned = await ensureAcademicTeacherUser(teacher, actorUserId);
+    if (provisioned?.user?.id) {
+      teacherProvisioned.push({
+        teacher_name: provisioned.profile?.display_name || provisioned.user.name,
+        user_id: provisioned.user.id,
+        email: provisioned.user.email,
+      });
+    }
+  }
+
+  let studentsInserted = 0;
+  let studentsUpdated = 0;
+  let enrollmentsInserted = 0;
+  let enrollmentsUpdated = 0;
+  let classesUpserted = 0;
+  let schedulesInserted = 0;
+  let statusesUpdated = 0;
+  const classIdsTouched = new Set();
+
+  for (const row of parsed.matriculas || []) {
+    const student = await upsertAcademicStudentFromImport({
+      full_name: row.full_name,
+      phone: row.phone,
+      notes: row.source_notes || row.notes,
+      source_sheet: row.source_sheet,
+      source_row_identifier: row.source_row_identifier,
+      source_payload: row.source_payload,
+      status: "ativo",
+    }, actorUserId);
+    if (!student?.id) continue;
+    const existedEnrollment = await findAcademicEnrollmentMatch(student.id, row);
+    const schoolTerm = await ensureSchoolTermRecord({
+      code: row.school_term_code || row.semester_label,
+      name: deriveSchoolTermName(row.school_term_code || row.semester_label),
+      status: "active",
+    });
+    const program = await ensureAcademicProgramRecord({
+      language: row.language || detectAcademicLanguageFromText(`${row.program_name || ""} ${row.level_name || ""}`),
+      program_name: row.program_name,
+      level_name: row.level_name,
+      semester_label: row.semester_label || row.school_term_code,
+      modality: row.modality || detectAcademicModalityFromText(row.requested_class_label || ""),
+      material_name: row.material_name,
+      status: "active",
+    });
+    const enrollment = await upsertAcademicEnrollmentFromImport(student, {
+      academic_program_id: program?.id || null,
+      school_term_id: schoolTerm?.id || null,
+      class_id: null,
+      enrollment_number: row.enrollment_number || null,
+      enrollment_date: row.enrollment_date,
+      start_date: row.start_date || row.enrollment_date,
+      enrollment_status: "aguardando turma",
+      contract_status: row.contract_status,
+      source_channel: row.source_channel,
+      source_notes: row.source_notes,
+      notes: row.notes,
+      source_sheet: row.source_sheet,
+      source_row_identifier: row.source_row_identifier,
+      source_payload: row.source_payload,
+    }, actorUserId);
+    if (existedEnrollment?.id) enrollmentsUpdated += 1;
+    else enrollmentsInserted += 1;
+    if (student.created_at === student.updated_at) studentsInserted += 1;
+    else studentsUpdated += 1;
+  }
+
+  for (const block of parsed.class_blocks || []) {
+    const teacher = await ensureAcademicTeacherUser({
+      display_name: block.teacher_display_name,
+      normalized_name: block.teacher_normalized_name,
+      aliases: block.teacher_aliases,
+      specialties: block.teacher_specialties,
+    }, actorUserId);
+    const schoolTerm = await ensureSchoolTermRecord({
+      code: block.school_term_code || block.semester_label,
+      name: deriveSchoolTermName(block.school_term_code || block.semester_label),
+      status: "active",
+    });
+    const program = await ensureAcademicProgramRecord({
+      language: block.language || detectAcademicLanguageFromText(`${block.class_name || ""} ${(block.teacher_specialties || []).join(" ")}`),
+      program_name: block.class_name,
+      level_name: block.level_name,
+      semester_label: block.semester_label || block.school_term_code,
+      modality: block.modality || "online",
+      status: "active",
+    });
+    const classRow = await ensureAcademicClassRecord({
+      name: block.class_name,
+      class_name: block.class_name,
+      school_term_id: schoolTerm?.id || null,
+      academic_program_id: program?.id || null,
+      language: block.language,
+      modality: block.modality || "online",
+      level_name: block.level_name,
+      semester_label: block.semester_label || block.school_term_code,
+      status: "ativa",
+      source_sheet: block.source_sheet,
+      source_block_ref: block.source_block_ref,
+      notes: mergeUniqueStrings(block.descriptor_lines || [], block.notes_lines || []).join(" | "),
+      unit_name: "Home School",
+    });
+    classesUpserted += 1;
+    classIdsTouched.add(Number(classRow.id));
+    const schedules = await syncAcademicClassSchedules(classRow.id, block.schedules || []);
+    schedulesInserted += Math.max(0, (schedules || []).length);
+    if (teacher?.user?.id) {
+      await ensureClassTeacherLink(classRow.id, teacher.user.id, {
+        role_in_class: "teacher",
+        is_active: true,
+      });
+    }
+
+    for (const studentEntry of block.students || []) {
+      const student = await upsertAcademicStudentFromImport({
+        full_name: studentEntry.full_name,
+        notes: studentEntry.raw_value,
+        source_sheet: studentEntry.source_sheet,
+        source_row_identifier: studentEntry.source_row_identifier,
+        source_payload: studentEntry,
+        status: "ativo",
+      }, actorUserId);
+      if (!student?.id) continue;
+      const existingEnrollment = await findAcademicEnrollmentMatch(student.id, {
+        academic_program_id: program?.id || null,
+        school_term_id: schoolTerm?.id || null,
+      });
+      const enrollment = await upsertAcademicEnrollmentFromImport(student, {
+        id: existingEnrollment?.id || null,
+        academic_program_id: program?.id || null,
+        school_term_id: schoolTerm?.id || null,
+        class_id: classRow.id,
+        enrollment_status: "matriculado",
+        source_channel: "academic_workbook",
+        source_notes: mergeUniqueStrings(block.descriptor_lines || [], [studentEntry.raw_value || ""]).join(" | "),
+        source_sheet: block.source_sheet,
+        source_row_identifier: studentEntry.source_row_identifier || `${block.source_sheet}:${student.id}`,
+        source_payload: {
+          block,
+          student: studentEntry,
+        },
+      }, actorUserId);
+      if (!existingEnrollment?.id) enrollmentsInserted += 1;
+      else if (Number(existingEnrollment.class_id || 0) !== Number(enrollment.class_id || 0)) enrollmentsUpdated += 1;
+    }
+  }
+
+  for (const item of parsed.trancados || []) {
+    const student = await findAcademicStudentMatch({
+      fullName: item.full_name,
+      normalizedName: item.normalized_name,
+      phone: item.phone,
+    });
+    if (!student?.id) continue;
+    const enrollment = await get(
+      "SELECT * FROM enrollments WHERE student_id=? ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1",
+      [student.id]
+    );
+    if (!enrollment?.id) continue;
+    await run(
+      "UPDATE enrollments SET enrollment_status='trancado', pedagogical_status=?, source_notes=COALESCE(?, source_notes), updated_at=datetime('now') WHERE id=?",
+      [item.notes || "Trancado importado da planilha", item.notes || null, enrollment.id]
+    );
+    await run("UPDATE students SET status='trancado', updated_at=datetime('now') WHERE id=?", [student.id]);
+    statusesUpdated += 1;
+  }
+
+  for (const item of parsed.desistentes || []) {
+    const student = await findAcademicStudentMatch({
+      fullName: item.full_name,
+      normalizedName: item.normalized_name,
+      phone: item.phone,
+    });
+    if (!student?.id) continue;
+    const enrollment = await get(
+      "SELECT * FROM enrollments WHERE student_id=? ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1",
+      [student.id]
+    );
+    if (!enrollment?.id) continue;
+    await run(
+      "UPDATE enrollments SET enrollment_status='desistente', pedagogical_status=?, source_notes=COALESCE(?, source_notes), updated_at=datetime('now') WHERE id=?",
+      [item.notes || "Desistente importado da planilha", item.notes || null, enrollment.id]
+    );
+    await run("UPDATE students SET status='desistente', updated_at=datetime('now') WHERE id=?", [student.id]);
+    statusesUpdated += 1;
+  }
+
+  if (actorUserId) {
+    await logEvent(actorUserId, "academic_import_completed", {
+      workbook: sanitizeAcademicWorkbookName(workbookName || workbookPath),
+      sheets: parsed.relevant_sheets,
+      ignored_sheets: parsed.ignored_sheets,
+      teachers: teacherProvisioned,
+      students_inserted: studentsInserted,
+      students_updated: studentsUpdated,
+      enrollments_inserted: enrollmentsInserted,
+      enrollments_updated: enrollmentsUpdated,
+      classes_upserted: classesUpserted,
+      statuses_updated: statusesUpdated,
+    });
+  }
+
+  return {
+    workbook_name: parsed.workbook_name,
+    imported_sheets: parsed.relevant_sheets,
+    ignored_sheets: parsed.ignored_sheets,
+    teachers_found: parsed.teachers.map((item) => item.display_name),
+    provisioned_teachers: teacherProvisioned,
+    totals: {
+      matriculas_rows: parsed.matriculas.length,
+      class_blocks: parsed.class_blocks.length,
+      trancados_rows: parsed.trancados.length,
+      desistentes_rows: parsed.desistentes.length,
+      students_inserted: studentsInserted,
+      students_updated: studentsUpdated,
+      enrollments_inserted: enrollmentsInserted,
+      enrollments_updated: enrollmentsUpdated,
+      classes_upserted: classesUpserted,
+      schedules_synced: schedulesInserted,
+      statuses_updated: statusesUpdated,
+    },
+    touched_class_ids: Array.from(classIdsTouched),
+  };
+}
+
+function buildAcademicSearchLike(value = "") {
+  const safe = String(value || "").trim();
+  return safe ? `%${safe}%` : "";
+}
+
+async function listAcademicFilterOptions(scope) {
+  const teacherRestriction = buildAcademicScopeExistsSql(scope, "e");
+  const where = [];
+  const params = [];
+  if (teacherRestriction.sql) {
+    where.push(teacherRestriction.sql);
+    params.push(...teacherRestriction.params);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const [languages, modalities, terms, teachers] = await Promise.all([
+    all(
+      `SELECT DISTINCT coalesce(ap.language, c.language, '') AS value
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN classes c ON c.id = e.class_id
+         ${whereSql}
+        ORDER BY value ASC`,
+      params
+    ),
+    all(
+      `SELECT DISTINCT coalesce(ap.modality, c.modality, '') AS value
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN classes c ON c.id = e.class_id
+         ${whereSql}
+        ORDER BY value ASC`,
+      params
+    ),
+    all(
+      `SELECT DISTINCT coalesce(st.code, st.name, '') AS value
+         FROM enrollments e
+         LEFT JOIN school_terms st ON st.id = e.school_term_id
+         ${whereSql}
+        ORDER BY value ASC`,
+      params
+    ),
+    all(
+      `SELECT DISTINCT coalesce(tp.display_name, u.name, '') AS value
+         FROM class_teachers ct
+         LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+         LEFT JOIN users u ON u.id = ct.user_id
+        WHERE ${scope.canViewAll ? "1=1" : `ct.user_id=? AND ${buildDbTruthySql("is_active", "ct")}`}
+        ORDER BY value ASC`,
+      scope.canViewAll ? [] : [scope.teacherUserId]
+    ),
+  ]);
+  return {
+    languages: languages.map((row) => row.value).filter(Boolean),
+    modalities: modalities.map((row) => row.value).filter(Boolean),
+    terms: terms.map((row) => row.value).filter(Boolean),
+    teachers: teachers.map((row) => row.value).filter(Boolean),
+    student_statuses: ACADEMIC_STUDENT_STATUS_OPTIONS.slice(),
+    enrollment_statuses: ACADEMIC_ENROLLMENT_STATUS_OPTIONS.slice(),
+    class_statuses: ACADEMIC_CLASS_STATUS_OPTIONS.slice(),
+    attendance_statuses: ACADEMIC_ATTENDANCE_STATUS_OPTIONS.slice(),
+  };
+}
+
+async function listAcademicStudents(scope, filters = {}) {
+  const where = [];
+  const params = [];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        JOIN class_teachers ct ON ct.class_id = e.class_id
+       WHERE e.student_id = s.id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    where.push("(lower(coalesce(s.full_name, '')) LIKE lower(?) OR lower(coalesce(s.preferred_name, '')) LIKE lower(?) OR lower(coalesce(s.phone, '')) LIKE lower(?) OR lower(coalesce(s.whatsapp, '')) LIKE lower(?))");
+    params.push(like, like, like, like);
+  }
+  if (filters.status) {
+    where.push("lower(coalesce(s.status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  if (filters.language) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       WHERE e.student_id = s.id
+         AND lower(coalesce(ap.language, ''))=lower(?)
+    )`);
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       WHERE e.student_id = s.id
+         AND lower(coalesce(ap.modality, ''))=lower(?)
+    )`);
+    params.push(String(filters.modality).trim());
+  }
+  if (filters.termCode) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        LEFT JOIN school_terms st ON st.id = e.school_term_id
+       WHERE e.student_id = s.id
+         AND lower(coalesce(st.code, ''))=lower(?)
+    )`);
+    params.push(String(filters.termCode).trim());
+  }
+  const limit = Math.min(180, Math.max(1, Number(filters.limit || 80)));
+  params.push(limit);
+  const rows = await all(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.student_id=s.id) AS enrollments_total,
+            (SELECT enrollment_status FROM enrollments e WHERE e.student_id=s.id ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1) AS latest_enrollment_status,
+            (SELECT c.name
+               FROM enrollments e
+               LEFT JOIN classes c ON c.id = e.class_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_class_name,
+            (SELECT coalesce(ap.language, '')
+               FROM enrollments e
+               LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_language
+       FROM students s
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY datetime(s.updated_at) DESC, lower(s.full_name) ASC
+      LIMIT ?`,
+    params
+  );
+  return rows.map(mapAcademicStudentRow);
+}
+
+async function getAcademicStudentDetail(studentId, scope) {
+  const rows = await listAcademicStudents(scope, { limit: 500, search: "" });
+  const student = rows.find((item) => Number(item.id) === Number(studentId));
+  if (!student) return null;
+  const [guardians, enrollments, attendanceSummary] = await Promise.all([
+    all(
+      "SELECT id, student_id, name, relation_type, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, created_at, updated_at FROM student_guardians WHERE student_id=? ORDER BY financial_responsible DESC, pedagogical_responsible DESC, lower(name) ASC",
+      [studentId]
+    ),
+    all(
+      `SELECT e.*, ap.program_name, ap.level_name, ap.language, ap.modality, st.name AS school_term_name, st.code AS school_term_code,
+              c.name AS class_name, c.status AS class_status
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN school_terms st ON st.id = e.school_term_id
+         LEFT JOIN classes c ON c.id = e.class_id
+        WHERE e.student_id=?
+        ORDER BY datetime(e.updated_at) DESC, e.id DESC`,
+      [studentId]
+    ),
+    get(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='presente' THEN 1 ELSE 0 END) AS present_total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='falta' THEN 1 ELSE 0 END) AS absent_total
+         FROM attendance_records ar
+         JOIN enrollments e ON e.id = ar.enrollment_id
+        WHERE e.student_id=?`,
+      [studentId]
+    ),
+  ]);
+  return {
+    student,
+    guardians: guardians.map((row) => ({
+      ...row,
+      financial_responsible: coerceDbBoolean(row.financial_responsible),
+      pedagogical_responsible: coerceDbBoolean(row.pedagogical_responsible),
+      receives_notifications: coerceDbBoolean(row.receives_notifications),
+    })),
+    enrollments: enrollments.map(mapAcademicEnrollmentRow),
+    attendance_summary: {
+      total: Number(attendanceSummary?.total || 0),
+      present_total: Number(attendanceSummary?.present_total || 0),
+      absent_total: Number(attendanceSummary?.absent_total || 0),
+    },
+  };
+}
+
+async function listAcademicEnrollments(scope, filters = {}) {
+  const where = [];
+  const params = [];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+       WHERE ct.class_id=e.class_id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    where.push("(lower(coalesce(s.full_name, '')) LIKE lower(?) OR lower(coalesce(c.name, '')) LIKE lower(?) OR lower(coalesce(ap.language, '')) LIKE lower(?))");
+    params.push(like, like, like);
+  }
+  if (filters.status) {
+    where.push("lower(coalesce(e.enrollment_status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  if (filters.classId) {
+    where.push("e.class_id=?");
+    params.push(Number(filters.classId));
+  }
+  if (filters.termCode) {
+    where.push("lower(coalesce(st.code, ''))=lower(?)");
+    params.push(String(filters.termCode).trim());
+  }
+  if (filters.language) {
+    where.push("lower(coalesce(ap.language, ''))=lower(?)");
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    where.push("lower(coalesce(ap.modality, ''))=lower(?)");
+    params.push(String(filters.modality).trim());
+  }
+  if (filters.teacherName) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+        LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+        LEFT JOIN users tu ON tu.id = ct.user_id
+       WHERE ct.class_id=e.class_id
+         AND lower(coalesce(tp.display_name, tu.name, ''))=lower(?)
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(String(filters.teacherName).trim());
+  }
+  const limit = Math.min(240, Math.max(1, Number(filters.limit || 120)));
+  params.push(limit);
+  const rows = await all(
+    `SELECT e.*, s.full_name AS student_name, s.phone AS student_phone, s.whatsapp AS student_whatsapp, s.status AS student_status,
+            ap.program_name, ap.level_name, ap.language, ap.modality, st.name AS school_term_name, st.code AS school_term_code,
+            c.name AS class_name, c.status AS class_status,
+            (SELECT COUNT(*) FROM attendance_records ar WHERE ar.enrollment_id=e.id) AS attendance_total
+       FROM enrollments e
+       JOIN students s ON s.id = e.student_id
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+       LEFT JOIN classes c ON c.id = e.class_id
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY datetime(e.updated_at) DESC, e.id DESC
+      LIMIT ?`,
+    params
+  );
+  return rows.map(mapAcademicEnrollmentRow);
+}
+
+async function getAcademicEnrollmentDetail(enrollmentId, scope) {
+  const rows = await listAcademicEnrollments(scope, { limit: 400 });
+  const enrollment = rows.find((item) => Number(item.id) === Number(enrollmentId));
+  if (!enrollment) return null;
+  const [classHistory, scheduleHistory] = await Promise.all([
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_class_history h
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE h.enrollment_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC`,
+      [enrollmentId]
+    ),
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_schedule_history h
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE h.enrollment_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC`,
+      [enrollmentId]
+    ),
+  ]);
+  return {
+    enrollment,
+    class_history: classHistory.map((row) => ({
+      ...row,
+      old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+      new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+    })),
+    schedule_history: scheduleHistory.map((row) => ({
+      ...row,
+      old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+      new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+    })),
+  };
+}
+
+async function listAcademicClasses(scope, filters = {}) {
+  const where = [];
+  const params = [];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+       WHERE ct.class_id = c.id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    where.push("(lower(coalesce(c.name, '')) LIKE lower(?) OR lower(coalesce(c.language, '')) LIKE lower(?) OR lower(coalesce(c.level_name, '')) LIKE lower(?) OR lower(coalesce(c.modality, '')) LIKE lower(?))");
+    params.push(like, like, like, like);
+  }
+  if (filters.status) {
+    where.push("lower(coalesce(c.status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  if (filters.language) {
+    where.push("lower(coalesce(c.language, ''))=lower(?)");
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    where.push("lower(coalesce(c.modality, ''))=lower(?)");
+    params.push(String(filters.modality).trim());
+  }
+  if (filters.termCode) {
+    where.push("lower(coalesce(st.code, ''))=lower(?)");
+    params.push(String(filters.termCode).trim());
+  }
+  if (filters.teacherName) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+        LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+        LEFT JOIN users tu ON tu.id = ct.user_id
+       WHERE ct.class_id=c.id
+         AND lower(coalesce(tp.display_name, tu.name, ''))=lower(?)
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(String(filters.teacherName).trim());
+  }
+  const limit = Math.min(160, Math.max(1, Number(filters.limit || 80)));
+  params.push(limit);
+  const rows = await all(
+    `SELECT c.*, st.name AS school_term_name, st.code AS school_term_code, ap.program_name,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id AND lower(coalesce(e.enrollment_status, '')) NOT IN ('cancelado', 'desistente')) AS enrolled_total
+       FROM classes c
+       LEFT JOIN school_terms st ON st.id = c.school_term_id
+       LEFT JOIN academic_programs ap ON ap.id = c.academic_program_id
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY datetime(c.updated_at) DESC, lower(c.name) ASC
+      LIMIT ?`,
+    params
+  );
+  return Promise.all(rows.map(async (row) => ({
+    ...mapAcademicClassRow(row),
+    schedules: await listClassSchedulesByClassId(row.id),
+    teachers: await listClassTeachersByClassId(row.id),
+  })));
+}
+
+async function getAcademicClassDetail(classId, scope) {
+  if (!(await canAccessAcademicClass(scope, classId))) return null;
+  const classRow = await getClassBasicById(classId);
+  if (!classRow) return null;
+  const [schedules, teachers, students, sessions, attendanceSummary] = await Promise.all([
+    listClassSchedulesByClassId(classId),
+    listClassTeachersByClassId(classId),
+    all(
+      `SELECT e.id AS enrollment_id, e.enrollment_status, s.id AS student_id, s.full_name, s.preferred_name, s.phone, s.whatsapp, s.status AS student_status,
+              ap.language, ap.modality, ap.level_name
+         FROM enrollments e
+         JOIN students s ON s.id = e.student_id
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+        WHERE e.class_id=?
+        ORDER BY lower(s.full_name) ASC`,
+      [classId]
+    ),
+    all(
+      "SELECT id, class_id, class_schedule_id, class_date, start_time, end_time, session_status, notes, created_at, updated_at FROM class_sessions WHERE class_id=? ORDER BY class_date DESC, id DESC LIMIT 60",
+      [classId]
+    ),
+    get(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='presente' THEN 1 ELSE 0 END) AS present_total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='falta' THEN 1 ELSE 0 END) AS absent_total
+         FROM attendance_records
+        WHERE class_id=?`,
+      [classId]
+    ),
+  ]);
+  return {
+    class: classRow,
+    schedules,
+    teachers,
+    students,
+    sessions,
+    attendance_summary: {
+      total: Number(attendanceSummary?.total || 0),
+      present_total: Number(attendanceSummary?.present_total || 0),
+      absent_total: Number(attendanceSummary?.absent_total || 0),
+    },
+  };
+}
+
+async function buildAcademicDashboard(scope) {
+  const teacherRestriction = buildAcademicScopeExistsSql(scope, "e");
+  const baseWhere = [];
+  const baseParams = [];
+  if (teacherRestriction.sql) {
+    baseWhere.push(teacherRestriction.sql);
+    baseParams.push(...teacherRestriction.params);
+  }
+  const whereSql = baseWhere.length ? `WHERE ${baseWhere.join(" AND ")}` : "";
+  const classMovementsSql = scope.canViewAll
+    ? "SELECT COUNT(*) AS total FROM enrollment_class_history h"
+    : `SELECT COUNT(*) AS total
+         FROM enrollment_class_history h
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=h.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )`;
+  const scheduleMovementsSql = scope.canViewAll
+    ? "SELECT COUNT(*) AS total FROM enrollment_schedule_history h"
+    : `SELECT COUNT(*) AS total
+         FROM enrollment_schedule_history h
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=h.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )`;
+  const todaySessionsWhereSql = scope.canViewAll
+    ? "WHERE cs.class_date=?"
+    : `WHERE EXISTS (
+         SELECT 1 FROM class_teachers ct
+          WHERE ct.class_id=cs.class_id
+            AND ct.user_id=?
+            AND ${buildDbTruthySql("is_active", "ct")}
+       ) AND cs.class_date=?`;
+  const [studentsRow, enrollmentsRow, classesRow, classMovementsRow, scheduleMovementsRow, todaySessionsRow] = await Promise.all([
+    get(
+      `SELECT COUNT(DISTINCT s.id) AS total
+         FROM students s
+         ${scope.canViewAll ? "" : `WHERE EXISTS (
+            SELECT 1
+              FROM enrollments e
+              JOIN class_teachers ct ON ct.class_id=e.class_id
+             WHERE e.student_id=s.id
+               AND ct.user_id=?
+               AND ${buildDbTruthySql("is_active", "ct")}
+          )`}`,
+      scope.canViewAll ? [] : [scope.teacherUserId]
+    ),
+    get(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, ''))='matriculado' THEN 1 ELSE 0 END) AS active_total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, ''))='aguardando turma' THEN 1 ELSE 0 END) AS waiting_total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, ''))='trancado' THEN 1 ELSE 0 END) AS trancado_total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, '')) IN ('desistente', 'cancelado') THEN 1 ELSE 0 END) AS inactive_total
+         FROM enrollments e
+         ${whereSql}`,
+      baseParams
+    ),
+    get(
+      `SELECT COUNT(DISTINCT c.id) AS total,
+              SUM(CASE WHEN lower(coalesce(c.status, ''))='ativa' THEN 1 ELSE 0 END) AS active_total
+         FROM classes c
+         ${scope.canViewAll ? "" : `WHERE EXISTS (
+            SELECT 1 FROM class_teachers ct
+             WHERE ct.class_id=c.id
+               AND ct.user_id=?
+               AND ${buildDbTruthySql("is_active", "ct")}
+          )`}`,
+      scope.canViewAll ? [] : [scope.teacherUserId]
+    ),
+    get(classMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    get(scheduleMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    get(
+      `SELECT COUNT(*) AS total
+         FROM class_sessions cs
+         ${todaySessionsWhereSql}`,
+      scope.canViewAll ? [brazilDateKey()] : [scope.teacherUserId, brazilDateKey()]
+    ),
+  ]);
+
+  let byTeacher = [];
+  if (scope.canViewAll) {
+    byTeacher = await all(
+      `SELECT coalesce(tp.display_name, u.name, 'Sem professor') AS teacher_name,
+              COUNT(DISTINCT ct.class_id) AS classes_total,
+              COUNT(DISTINCT e.student_id) AS students_total
+         FROM class_teachers ct
+         LEFT JOIN users u ON u.id = ct.user_id
+         LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+         LEFT JOIN enrollments e ON e.class_id = ct.class_id
+        WHERE ${buildDbTruthySql("is_active", "ct")}
+        GROUP BY coalesce(tp.display_name, u.name, 'Sem professor')
+        ORDER BY classes_total DESC, teacher_name ASC`
+    );
+  }
+
+  return {
+    scope_kind: scope.kind,
+    total_students: Number(studentsRow?.total || 0),
+    total_enrollments: Number(enrollmentsRow?.total || 0),
+    active_enrollments: Number(enrollmentsRow?.active_total || 0),
+    waiting_for_class: Number(enrollmentsRow?.waiting_total || 0),
+    trancados: Number(enrollmentsRow?.trancado_total || 0),
+    inactive_total: Number(enrollmentsRow?.inactive_total || 0),
+    total_classes: Number(classesRow?.total || 0),
+    active_classes: Number(classesRow?.active_total || 0),
+    recent_movements: Number(classMovementsRow?.total || 0) + Number(scheduleMovementsRow?.total || 0),
+    classes_today: Number(todaySessionsRow?.total || 0),
+    by_teacher: byTeacher.map((row) => ({
+      teacher_name: row.teacher_name,
+      classes_total: Number(row.classes_total || 0),
+      students_total: Number(row.students_total || 0),
+    })),
+  };
+}
+
+async function listAcademicTeacherProfiles(scope) {
+  if (!scope.canViewAll) {
+    const ownProfile = await getTeacherProfileByUserId(scope.teacherUserId).catch(() => null);
+    return ownProfile ? [ownProfile] : [];
+  }
+  const rows = await all(
+    `SELECT tp.id, tp.user_id, tp.display_name, tp.normalized_name, tp.aliases_json, tp.specialties_json, tp.metadata_json, tp.active, tp.created_at, tp.updated_at,
+            u.name AS user_name, u.email AS user_email
+       FROM teacher_profiles tp
+       LEFT JOIN users u ON u.id = tp.user_id
+      WHERE ${buildDbTruthySql("active", "tp")}
+      ORDER BY lower(coalesce(tp.display_name, u.name, '')) ASC, tp.id ASC`,
+    []
+  );
+  return rows.map((row) => ({
+    ...mapTeacherProfileRow(row),
+    user_name: row.user_name || row.display_name || "",
+    user_email: row.user_email || "",
+  }));
+}
+
+async function listAcademicProgramCatalog() {
+  return all(
+    `SELECT id, language, program_name, level_name, stage_name, semester_label, modality, material_name, workload_hours, status, created_at, updated_at
+       FROM academic_programs
+      WHERE lower(coalesce(status, 'active')) <> 'inactive'
+      ORDER BY lower(coalesce(language, '')) ASC, lower(coalesce(program_name, '')) ASC, id ASC`
+  );
+}
+
+async function listSchoolTermCatalog() {
+  return all(
+    `SELECT id, name, code, start_date, end_date, status, created_at, updated_at
+       FROM school_terms
+      WHERE lower(coalesce(status, 'active')) <> 'inactive'
+      ORDER BY lower(coalesce(code, name, '')) DESC, id DESC`
+  );
+}
+
+async function buildAcademicBootstrap(user, query = {}) {
+  const scope = await resolveAcademicScope(user);
+  const classMovementsSql = scope.canViewAll
+    ? `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+         FROM enrollment_class_history h
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`
+    : `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+         FROM enrollment_class_history h
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=h.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`;
+  const scheduleMovementsSql = scope.canViewAll
+    ? `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+         FROM enrollment_schedule_history h
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`
+    : `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+         FROM enrollment_schedule_history h
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=h.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`;
+  const [dashboard, students, enrollments, classes, filters, classMovements, scheduleMovements, teacherProfiles, programs, schoolTerms] = await Promise.all([
+    buildAcademicDashboard(scope),
+    listAcademicStudents(scope, { search: query.search, status: query.student_status, language: query.language, modality: query.modality, termCode: query.term_code, limit: 30 }),
+    listAcademicEnrollments(scope, { search: query.search, status: query.enrollment_status, language: query.language, modality: query.modality, teacherName: query.teacher, termCode: query.term_code, limit: 30 }),
+    listAcademicClasses(scope, { search: query.search, status: query.class_status, language: query.language, modality: query.modality, teacherName: query.teacher, termCode: query.term_code, limit: 24 }),
+    listAcademicFilterOptions(scope),
+    all(classMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    all(scheduleMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    listAcademicTeacherProfiles(scope),
+    listAcademicProgramCatalog(),
+    listSchoolTermCatalog(),
+  ]);
+  const movements = [...(classMovements || []), ...(scheduleMovements || [])]
+    .sort((left, right) => String(right?.changed_at || "").localeCompare(String(left?.changed_at || "")))
+    .slice(0, 30);
+  return {
+    enabled: true,
+    scope_kind: scope.kind,
+    can_manage: scope.canManageAll,
+    can_import: scope.canImport,
+    teacher_profile: scope.teacherProfile,
+    teacher_profiles: teacherProfiles,
+    dashboard,
+    filters,
+    programs,
+    school_terms: schoolTerms,
+    students,
+    enrollments,
+    classes,
+    movements,
+    submenu_view_keys: {
+      pedagogical: ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS.slice(),
+      teacher: ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS.slice(),
+    },
+  };
+}
+
+async function transferAcademicEnrollmentClass(enrollmentId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll) throw new Error("forbidden");
+  const enrollment = await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [enrollmentId]);
+  if (!enrollment) throw new Error("enrollment_not_found");
+  const newClassId = Number(payload.new_class_id || 0) || null;
+  if (!newClassId) throw new Error("missing_new_class_id");
+  const reason = sanitizeAcademicTextValue(payload.reason, { maxLength: 800 }) || "Troca de turma";
+  const notes = sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null;
+  await run(
+    "UPDATE enrollments SET class_id=?, enrollment_status=?, updated_at=datetime('now') WHERE id=?",
+    [newClassId, normalizeEnrollmentStatus(payload.enrollment_status || "transferido"), enrollmentId]
+  );
+  await run(
+    `INSERT INTO enrollment_class_history
+       (enrollment_id, old_class_id, new_class_id, reason, changed_by_user_id, changed_at, notes)
+     VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
+    [enrollmentId, enrollment.class_id || null, newClassId, reason, actorUser.id || actorUser.sub, notes]
+  );
+  await logEntityChange({
+    entityType: "academic_enrollment",
+    entityId: enrollmentId,
+    action: "class_transfer",
+    actorUserId: actorUser.id || actorUser.sub,
+    origin: "manual_edit",
+    detail: { old_class_id: enrollment.class_id || null, new_class_id: newClassId, reason },
+  });
+  return getAcademicEnrollmentDetail(enrollmentId, scope);
+}
+
+async function changeAcademicEnrollmentSchedule(enrollmentId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll) throw new Error("forbidden");
+  const enrollment = await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [enrollmentId]);
+  if (!enrollment) throw new Error("enrollment_not_found");
+  const newClassId = Number(payload.new_class_id || enrollment.class_id || 0) || null;
+  const oldSchedules = enrollment.class_id ? await listClassSchedulesByClassId(enrollment.class_id) : [];
+  const newSchedules = newClassId ? await listClassSchedulesByClassId(newClassId) : [];
+  if (newClassId && Number(newClassId) !== Number(enrollment.class_id || 0)) {
+    await run(
+      "UPDATE enrollments SET class_id=?, updated_at=datetime('now') WHERE id=?",
+      [newClassId, enrollmentId]
+    );
+  }
+  const reason = sanitizeAcademicTextValue(payload.reason, { maxLength: 800 }) || "Ajuste de horário";
+  const notes = sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null;
+  await run(
+    `INSERT INTO enrollment_schedule_history
+       (enrollment_id, old_class_id, new_class_id, old_schedule_snapshot_json, new_schedule_snapshot_json, reason, changed_by_user_id, changed_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
+    [
+      enrollmentId,
+      enrollment.class_id || null,
+      newClassId,
+      safeJsonStringify(oldSchedules, "[]"),
+      safeJsonStringify(newSchedules, "[]"),
+      reason,
+      actorUser.id || actorUser.sub,
+      notes,
+    ]
+  );
+  await logEntityChange({
+    entityType: "academic_enrollment",
+    entityId: enrollmentId,
+    action: "schedule_change",
+    actorUserId: actorUser.id || actorUser.sub,
+    origin: "manual_edit",
+    detail: { old_class_id: enrollment.class_id || null, new_class_id: newClassId, reason },
+  });
+  return getAcademicEnrollmentDetail(enrollmentId, scope);
+}
+
+async function saveAcademicClassSession(classId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll && !(await canAccessAcademicClass(scope, classId))) throw new Error("forbidden");
+  const classDate = normalizeAcademicDateInput(payload.class_date);
+  if (!classDate) throw new Error("missing_class_date");
+  const classScheduleId = Number(payload.class_schedule_id || 0) || null;
+  const existing = await get(
+    "SELECT * FROM class_sessions WHERE class_id=? AND coalesce(class_schedule_id, 0)=coalesce(?, 0) AND class_date=? LIMIT 1",
+    [classId, classScheduleId, classDate]
+  );
+  const persisted = {
+    class_id: classId,
+    class_schedule_id: classScheduleId,
+    class_date: classDate,
+    start_time: sanitizeAcademicTextValue(payload.start_time, { maxLength: 16 }) || null,
+    end_time: sanitizeAcademicTextValue(payload.end_time, { maxLength: 16 }) || null,
+    session_status: normalizeSessionStatus(payload.session_status || "planejada"),
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null,
+  };
+  if (existing?.id) {
+    await run(
+      "UPDATE class_sessions SET start_time=?, end_time=?, session_status=?, notes=?, updated_at=datetime('now') WHERE id=?",
+      [persisted.start_time, persisted.end_time, persisted.session_status, persisted.notes, existing.id]
+    );
+    return get("SELECT * FROM class_sessions WHERE id=?", [existing.id]);
+  }
+  const created = await run(
+    "INSERT INTO class_sessions (class_id, class_schedule_id, class_date, start_time, end_time, session_status, notes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+    [persisted.class_id, persisted.class_schedule_id, persisted.class_date, persisted.start_time, persisted.end_time, persisted.session_status, persisted.notes]
+  );
+  return get("SELECT * FROM class_sessions WHERE id=?", [created.lastID]);
+}
+
+async function saveAcademicAttendance(classId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll && !(await canAccessAcademicClass(scope, classId))) throw new Error("forbidden");
+  const classDate = normalizeAcademicDateInput(payload.class_date);
+  if (!classDate) throw new Error("missing_class_date");
+  const classScheduleId = Number(payload.class_schedule_id || 0) || null;
+  await saveAcademicClassSession(classId, {
+    class_schedule_id: classScheduleId,
+    class_date: classDate,
+    session_status: payload.session_status || "realizada",
+    start_time: payload.start_time,
+    end_time: payload.end_time,
+    notes: payload.session_notes,
+  }, actorUser);
+
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const allowedEnrollmentIds = new Set(
+    (await all("SELECT id FROM enrollments WHERE class_id=?", [classId])).map((row) => Number(row.id || 0))
+  );
+  const savedItems = [];
+  for (const item of items) {
+    const enrollmentId = Number(item.enrollment_id || 0) || null;
+    if (!enrollmentId || !allowedEnrollmentIds.has(enrollmentId)) continue;
+    const attendanceStatus = normalizeAttendanceStatus(item.attendance_status || "presente");
+    const notes = sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || null;
+    const existing = await get(
+      "SELECT id FROM attendance_records WHERE enrollment_id=? AND class_id=? AND coalesce(class_schedule_id, 0)=coalesce(?, 0) AND class_date=? LIMIT 1",
+      [enrollmentId, classId, classScheduleId, classDate]
+    );
+    if (existing?.id) {
+      await run(
+        "UPDATE attendance_records SET attendance_status=?, notes=?, recorded_by_user_id=?, updated_at=datetime('now') WHERE id=?",
+        [attendanceStatus, notes, actorUser.id || actorUser.sub, existing.id]
+      );
+      savedItems.push(existing.id);
+      continue;
+    }
+    const created = await run(
+      "INSERT INTO attendance_records (enrollment_id, class_id, class_schedule_id, class_date, attendance_status, notes, recorded_by_user_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+      [enrollmentId, classId, classScheduleId, classDate, attendanceStatus, notes, actorUser.id || actorUser.sub]
+    );
+    savedItems.push(created.lastID);
+  }
+  await logEvent(actorUser.id || actorUser.sub, "academic_attendance_saved", {
+    class_id: classId,
+    class_date: classDate,
+    total_items: savedItems.length,
+  });
+  return all(
+    `SELECT ar.*, s.full_name AS student_name
+       FROM attendance_records ar
+       JOIN enrollments e ON e.id = ar.enrollment_id
+       JOIN students s ON s.id = e.student_id
+      WHERE ar.class_id=? AND ar.class_date=?
+      ORDER BY lower(s.full_name) ASC`,
+    [classId, classDate]
+  );
 }
 
 function normalizeCalendarUrl(value = "") {
@@ -8874,6 +11018,11 @@ const salesImportUpload = upload.fields([
   { name: "sales_workbook", maxCount: 1 },
   { name: "post_sale_workbook", maxCount: 1 },
 ]);
+const academicImportUpload = upload.fields([
+  { name: "academic_workbook", maxCount: 1 },
+  { name: "workbook", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+]);
 
 function ragUploadMiddleware(req, res, next) {
   ragUpload(req, res, (err) => {
@@ -8885,6 +11034,16 @@ function ragUploadMiddleware(req, res, next) {
       return res.status(400).json({ error: "rag_batch_too_large" });
     }
     return res.status(400).json({ error: err?.message || "rag_upload_failed" });
+  });
+}
+
+function academicImportUploadMiddleware(req, res, next) {
+  academicImportUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "file_too_large" });
+    }
+    return res.status(400).json({ error: err?.message || "academic_upload_failed" });
   });
 }
 
@@ -10140,6 +12299,486 @@ app.patch('/api/intranet/sales/records/:id', requireAuth(JWT_SECRET), requireInt
       return res.status(400).json({ error: err.message });
     }
     res.status(400).json({ error: err?.message || 'sales_record_update_failed' });
+  }
+});
+
+function sendAcademicRouteError(res, err, fallback = "academic_request_failed") {
+  const message = err?.message || fallback;
+  if (message === "academic_access_denied" || message === "forbidden") {
+    return res.status(403).json({ error: message });
+  }
+  if (
+    message === "not_found"
+    || message === "student_not_found"
+    || message === "enrollment_not_found"
+    || message === "class_not_found"
+    || message === "teacher_profile_not_found"
+  ) {
+    return res.status(404).json({ error: message === "not_found" ? "not_found" : message });
+  }
+  return res.status(400).json({ error: message || fallback });
+}
+
+function parseAcademicLimit(value, fallback = 60, max = 180) {
+  return Math.min(max, Math.max(1, Number(value || fallback)));
+}
+
+app.get("/api/intranet/academic/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const academic = await buildAcademicBootstrap(user, req.query || {});
+    res.json({ academic });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_bootstrap_failed");
+  }
+});
+
+app.post("/api/intranet/academic/import", requireAuth(JWT_SECRET), requireIntranetAccess, academicImportUploadMiddleware, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canImport) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const uploaded = req.files?.academic_workbook?.[0] || req.files?.workbook?.[0] || req.files?.file?.[0] || null;
+    if (!uploaded?.path) {
+      return res.status(400).json({ error: "missing_academic_workbook" });
+    }
+    const result = await importAcademicWorkbookBatch({
+      workbookPath: uploaded.path,
+      workbookName: uploaded.originalname || path.basename(uploaded.path),
+      actorUserId: user.id || user.sub || null,
+    });
+    const academic = await buildAcademicBootstrap(user, {});
+    res.json({ ok: true, result, academic });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_import_failed");
+  }
+});
+
+app.get("/api/intranet/academic/students", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const students = await listAcademicStudents(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      termCode: req.query?.term_code,
+      limit: parseAcademicLimit(req.query?.limit, 80, 240),
+    });
+    res.json({ students });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_students_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/students", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const student = await saveAcademicStudentRecord(req.body || {}, user.id || user.sub || null);
+    await replaceStudentGuardians(student.id, req.body?.guardians || [], user.id || user.sub || null);
+    const detail = await getAcademicStudentDetail(student.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_create_failed");
+  }
+});
+
+app.get("/api/intranet/academic/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicStudentDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "student_not_found" });
+    }
+    res.json(detail);
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/academic/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const student = await saveAcademicStudentRecord({
+      ...(req.body || {}),
+      id: Number(req.params.id),
+    }, user.id || user.sub || null);
+    if (Array.isArray(req.body?.guardians)) {
+      await replaceStudentGuardians(student.id, req.body.guardians, user.id || user.sub || null);
+    }
+    const detail = await getAcademicStudentDetail(student.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_update_failed");
+  }
+});
+
+app.get("/api/intranet/academic/students/:id/attendance", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicStudentDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "student_not_found" });
+    }
+    const items = await all(
+      `SELECT ar.*, c.name AS class_name
+         FROM attendance_records ar
+         JOIN enrollments e ON e.id = ar.enrollment_id
+         LEFT JOIN classes c ON c.id = ar.class_id
+        WHERE e.student_id=?
+        ORDER BY ar.class_date DESC, ar.id DESC
+        LIMIT ?`,
+      [Number(req.params.id), parseAcademicLimit(req.query?.limit, 120, 400)]
+    );
+    res.json({ student: detail.student, attendance: items });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_attendance_failed");
+  }
+});
+
+app.get("/api/intranet/academic/enrollments", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const enrollments = await listAcademicEnrollments(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      classId: req.query?.class_id,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      teacherName: req.query?.teacher,
+      termCode: req.query?.term_code,
+      limit: parseAcademicLimit(req.query?.limit, 100, 260),
+    });
+    res.json({ enrollments });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollments_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/enrollments", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const enrollment = await saveAcademicEnrollmentRecord(req.body || {}, user);
+    const detail = await getAcademicEnrollmentDetail(enrollment.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollment_create_failed");
+  }
+});
+
+app.get("/api/intranet/academic/enrollments/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicEnrollmentDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "enrollment_not_found" });
+    }
+    res.json(detail);
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollment_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/academic/enrollments/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const enrollment = await saveAcademicEnrollmentRecord({
+      ...(req.body || {}),
+      id: Number(req.params.id),
+    }, user);
+    const detail = await getAcademicEnrollmentDetail(enrollment.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollment_update_failed");
+  }
+});
+
+app.post("/api/intranet/academic/enrollments/:id/transfer-class", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const detail = await transferAcademicEnrollmentClass(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_transfer_failed");
+  }
+});
+
+app.post("/api/intranet/academic/enrollments/:id/change-schedule", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const detail = await changeAcademicEnrollmentSchedule(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_schedule_change_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const classes = await listAcademicClasses(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      teacherName: req.query?.teacher,
+      termCode: req.query?.term_code,
+      limit: parseAcademicLimit(req.query?.limit, 80, 200),
+    });
+    res.json({ classes });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_classes_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classRow = await ensureAcademicClassRecord(req.body || {});
+    await syncAcademicClassSchedules(classRow.id, Array.isArray(req.body?.schedules) ? req.body.schedules : []);
+    const teacherUserIds = [
+      ...(Array.isArray(req.body?.teacher_user_ids) ? req.body.teacher_user_ids : []),
+      req.body?.teacher_user_id,
+    ].map((item) => Number(item || 0)).filter(Boolean);
+    for (const teacherUserId of [...new Set(teacherUserIds)]) {
+      await ensureClassTeacherLink(classRow.id, teacherUserId, {
+        role_in_class: req.body?.role_in_class || "teacher",
+        start_date: req.body?.teacher_start_date,
+        end_date: req.body?.teacher_end_date,
+        is_active: req.body?.teacher_is_active !== false,
+      });
+    }
+    const detail = await getAcademicClassDetail(classRow.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_create_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicClassDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "class_not_found" });
+    }
+    res.json(detail);
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/academic/classes/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classRow = await ensureAcademicClassRecord({
+      ...(req.body || {}),
+      id: Number(req.params.id),
+    });
+    if (Array.isArray(req.body?.schedules)) {
+      await syncAcademicClassSchedules(classRow.id, req.body.schedules);
+    }
+    const detail = await getAcademicClassDetail(classRow.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_update_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/schedules", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!(await canAccessAcademicClass(scope, Number(req.params.id)))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const schedules = await listClassSchedulesByClassId(Number(req.params.id));
+    res.json({ schedules });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_schedules_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes/:id/teachers", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classId = Number(req.params.id);
+    let teacherUserId = Number(req.body?.user_id || 0) || null;
+    if (!teacherUserId && Number(req.body?.teacher_profile_id || 0)) {
+      const profile = await get("SELECT user_id FROM teacher_profiles WHERE id=? LIMIT 1", [Number(req.body.teacher_profile_id)]);
+      teacherUserId = Number(profile?.user_id || 0) || null;
+    }
+    if (!teacherUserId) {
+      return res.status(400).json({ error: "teacher_profile_not_found" });
+    }
+    await ensureClassTeacherLink(classId, teacherUserId, req.body || {});
+    const detail = await getAcademicClassDetail(classId, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_teacher_link_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/students", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicClassDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "class_not_found" });
+    }
+    res.json({ class: detail.class, students: detail.students });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_students_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/sessions", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicClassDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "class_not_found" });
+    }
+    res.json({ class: detail.class, sessions: detail.sessions });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_sessions_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes/:id/sessions", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const session = await saveAcademicClassSession(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, session });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_session_save_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/attendance", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const classId = Number(req.params.id);
+    if (!(await canAccessAcademicClass(scope, classId))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classDate = normalizeAcademicDateInput(req.query?.class_date) || brazilDateKey();
+    const items = await all(
+      `SELECT ar.*, s.full_name AS student_name
+         FROM attendance_records ar
+         JOIN enrollments e ON e.id = ar.enrollment_id
+         JOIN students s ON s.id = e.student_id
+        WHERE ar.class_id=? AND ar.class_date=?
+        ORDER BY lower(s.full_name) ASC`,
+      [classId, classDate]
+    );
+    res.json({ class_id: classId, class_date: classDate, attendance: items });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_attendance_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes/:id/attendance", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const attendance = await saveAcademicAttendance(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, attendance });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_attendance_save_failed");
+  }
+});
+
+app.get("/api/intranet/academic/teachers", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const teachers = await listAcademicTeacherProfiles(scope);
+    res.json({ teachers });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_teachers_list_failed");
+  }
+});
+
+app.get("/api/intranet/academic/me/classes", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const classes = await listAcademicClasses(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      limit: parseAcademicLimit(req.query?.limit, 80, 200),
+    });
+    res.json({ classes });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_teacher_classes_failed");
+  }
+});
+
+app.get("/api/intranet/academic/dashboard/pedagogical", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const dashboard = await buildAcademicDashboard(scope);
+    res.json({ dashboard });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_dashboard_failed");
+  }
+});
+
+app.get("/api/intranet/academic/dashboard/teacher", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (scope.kind !== "teacher" && !scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const dashboard = await buildAcademicDashboard(scope);
+    res.json({ dashboard });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_teacher_dashboard_failed");
   }
 });
 

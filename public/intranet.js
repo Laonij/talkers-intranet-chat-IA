@@ -103,6 +103,39 @@ let salesState = {
   ratingOptions: [],
   restrictedScope: false,
 };
+const ACADEMIC_PEDAGOGICAL_VIEW_KEYS = ['academic-students', 'academic-enrollments', 'academic-classes', 'academic-schedules', 'academic-teachers', 'academic-attendance', 'academic-movements'];
+const ACADEMIC_TEACHER_VIEW_KEYS = ['teacher-classes', 'teacher-attendance', 'teacher-class-students'];
+const ACADEMIC_ALL_VIEW_KEYS = new Set([...ACADEMIC_PEDAGOGICAL_VIEW_KEYS, ...ACADEMIC_TEACHER_VIEW_KEYS]);
+let academicState = {
+  enabled: false,
+  loading: false,
+  loaded: false,
+  error: '',
+  bootstrap: null,
+  viewKey: '',
+  selectedStudentId: null,
+  selectedEnrollmentId: null,
+  selectedClassId: null,
+  attendanceDate: '',
+  attendanceData: [],
+  notice: null,
+  studentDetail: null,
+  studentDetailLoading: false,
+  enrollmentDetail: null,
+  enrollmentDetailLoading: false,
+  classDetail: null,
+  classDetailLoading: false,
+  filters: {
+    search: '',
+    studentStatus: '',
+    enrollmentStatus: '',
+    classStatus: '',
+    language: '',
+    modality: '',
+    teacher: '',
+    termCode: '',
+  },
+};
 let trainingState = null;
 let calendarState = {
   enabled: false,
@@ -1491,6 +1524,12 @@ function isPedagogicalWhatsAppWorkspace(department, submenu) {
   return String(department?.slug || '') === 'pedagogico' && String(submenu?.slug || '') === 'whatsapp';
 }
 
+function isAcademicWorkspace(department, submenu) {
+  const viewKey = String(submenu?.view_key || '').trim();
+  if (!ACADEMIC_ALL_VIEW_KEYS.has(viewKey)) return false;
+  return ['pedagogico', 'professor'].includes(String(department?.slug || '').trim());
+}
+
 function getMarketingIndicatorTabs() {
   return Array.isArray(indicatorState.bootstrap?.tabs) ? indicatorState.bootstrap.tabs : [];
 }
@@ -2588,14 +2627,19 @@ function renderDepartmentWorkspace(intranet) {
   const isInfluencerWorkspace = isMarketingInfluencerWorkspace(department, submenu);
   const isIndicatorWorkspace = isMarketingIndicatorWorkspace(department, submenu);
   const isWhatsAppWorkspace = isPedagogicalWhatsAppWorkspace(department, submenu);
-  const isCustomWorkspace = isInfluencerWorkspace || isIndicatorWorkspace || isWhatsAppWorkspace;
+  const isAcademicCustomWorkspace = isAcademicWorkspace(department, submenu);
+  const isCustomWorkspace = isInfluencerWorkspace || isIndicatorWorkspace || isWhatsAppWorkspace || isAcademicCustomWorkspace;
   el('departmentWorkspaceDescription').textContent = isInfluencerWorkspace
     ? t('intranet.marketingInfluencer.workspaceDescription', {}, 'Cadastro, lançamentos, relatórios e análise da operação de influencers do Marketing.')
     : isIndicatorWorkspace
       ? t('intranet.marketingIndicator.description', {}, 'Entrada de dados em estilo planilha e acompanhamento dos indicadores que alimentam o Dashboard do Marketing.')
       : isWhatsAppWorkspace
         ? t('intranet.whatsapp.workspaceDescription', {}, 'Cadastro de grupos, campanhas pedagógicas, fila, histórico e diagnóstico de integração do WhatsApp.')
-      : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Área departamental da intranet.'));
+        : isAcademicCustomWorkspace
+          ? (String(department?.slug || '') === 'professor'
+              ? 'Gestão acadêmica do professor com turmas, alunos, aulas e frequência no escopo permitido.'
+              : 'Operação acadêmica com alunos, matrículas, turmas, horários, professores e movimentações escolares.')
+        : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Área departamental da intranet.'));
 
   const summary = el('departmentWorkspaceSummary');
   summary.innerHTML = '';
@@ -2618,6 +2662,12 @@ function renderDepartmentWorkspace(intranet) {
           { title: t('intranet.whatsapp.actions.groups', {}, 'Cadastro de grupos'), description: t('intranet.whatsapp.actions.groupsHint', {}, 'Base dos grupos pedagógicos'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
           { title: t('intranet.whatsapp.actions.campaigns', {}, 'Campanhas'), description: t('intranet.whatsapp.actions.campaignsHint', {}, 'Texto, imagem, link e intervalo'), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
           { title: t('intranet.whatsapp.actions.queue', {}, 'Fila de envio'), description: t('intranet.whatsapp.actions.queueHint', {}, 'Status por grupo e execução'), badge: t('intranet.departmentSummary.detail', {}, 'Detalhe') },
+        ]
+      : isAcademicCustomWorkspace
+        ? [
+          { title: 'Dashboard acadêmico', description: String(department?.slug || '') === 'professor' ? 'Leitura rápida das turmas e aulas do professor.' : 'Indicadores operacionais do contexto escolar.', badge: t('intranet.departmentSummary.main', {}, 'Principal') },
+          { title: 'Listagens operacionais', description: String(department?.slug || '') === 'professor' ? 'Turmas, alunos e frequência dentro do escopo docente.' : 'Alunos, matrículas, turmas, horários e vínculos de professores.', badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+          { title: 'Movimentações e frequência', description: 'Históricos, chamadas e ações acadêmicas com rastreabilidade.', badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
         ]
     : [
       { title: t('intranet.departmentSummary.currentLevel', {}, 'Nível atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissão') },
@@ -2685,6 +2735,12 @@ function renderDepartmentWorkspace(intranet) {
       renderPedagogicalWhatsAppWorkspace();
       if (!whatsappState.bootstrap && !whatsappState.loading) {
         fetchPedagogicalWhatsAppBootstrap();
+      }
+    } else if (isAcademicCustomWorkspace) {
+      renderAcademicWorkspace();
+      const nextViewKey = String(submenu?.view_key || '').trim();
+      if (!academicState.bootstrap || academicState.viewKey !== nextViewKey || !academicState.loaded) {
+        fetchAcademicBootstrap({ viewKey: nextViewKey, preserveSelection: true });
       }
     }
     return;
@@ -4363,6 +4419,739 @@ function hydrateSalesWorkspace(intranet) {
   renderSalesSummary(sales);
   renderSalesFilterOptions(sales);
   renderSalesRecordsGrid();
+}
+
+function getAcademicBootstrap() {
+  return academicState.bootstrap || {};
+}
+
+function getAcademicCurrentViewKey() {
+  const intranet = bootstrapData?.intranet || {};
+  const { submenu } = getDepartmentRouteMeta(intranet, currentViewState.departmentSlug, currentViewState.submenuSlug);
+  const viewKey = String(submenu?.view_key || academicState.viewKey || '').trim();
+  if (ACADEMIC_ALL_VIEW_KEYS.has(viewKey)) return viewKey;
+  return academicState.viewKey || 'academic-students';
+}
+
+function isTeacherAcademicView(viewKey = '') {
+  return ACADEMIC_TEACHER_VIEW_KEYS.includes(String(viewKey || '').trim());
+}
+
+function setAcademicNotice(type = '', text = '') {
+  const safeText = String(text || '').trim();
+  academicState.notice = safeText ? { type: type || 'info', text: safeText } : null;
+}
+
+function getAcademicStatusTone(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (['matriculado', 'ativa', 'ativo', 'presente', 'realizada', 'concluido'].includes(safe)) return 'is-success';
+  if (['cancelado', 'desistente', 'falta', 'sem retorno'].includes(safe)) return 'is-danger';
+  if (['trancado', 'aguardando turma', 'planejada', 'remarcada', 'reagendado', 'atraso', 'falta_justificada'].includes(safe)) return 'is-warning';
+  if (['transferido', 'em andamento', 'reposicao'].includes(safe)) return 'is-info';
+  return 'is-neutral';
+}
+
+function formatAcademicDate(value = '') {
+  if (!value) return '-';
+  try {
+    const safeValue = /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim())
+      ? `${String(value).trim()}T12:00:00`
+      : value;
+    return new Date(safeValue).toLocaleDateString(currentLocale());
+  } catch {
+    return String(value || '-');
+  }
+}
+
+function formatAcademicDateTime(value = '') {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString(currentLocale());
+  } catch {
+    return String(value || '-');
+  }
+}
+
+function buildAcademicSummaryCards(dashboard = {}, isTeacher = false) {
+  return isTeacher
+    ? [
+        { label: 'Turmas', value: Number(dashboard.total_classes || 0) },
+        { label: 'Alunos', value: Number(dashboard.total_students || 0) },
+        { label: 'Aulas de hoje', value: Number(dashboard.classes_today || 0) },
+        { label: 'Movimentações', value: Number(dashboard.recent_movements || 0) },
+      ]
+    : [
+        { label: 'Alunos', value: Number(dashboard.total_students || 0) },
+        { label: 'Matrículas ativas', value: Number(dashboard.active_enrollments || 0) },
+        { label: 'Turmas ativas', value: Number(dashboard.active_classes || 0) },
+        { label: 'Aguardando turma', value: Number(dashboard.waiting_for_class || 0) },
+        { label: 'Trancados', value: Number(dashboard.trancados || 0) },
+        { label: 'Desistentes / cancelados', value: Number(dashboard.inactive_total || 0) },
+      ];
+}
+
+function buildAcademicGuardiansMarkup(guardians = []) {
+  const safeGuardians = Array.isArray(guardians) && guardians.length
+    ? guardians
+    : [{ name: '', relation_type: '', phone: '', whatsapp: '', email: '', financial_responsible: true, pedagogical_responsible: true, receives_notifications: true, notes: '' }];
+  return safeGuardians.map((guardian, index) => `
+    <article class="academic-guardian-card" data-academic-guardian-row="${index}">
+      <div class="academic-guardian-grid">
+        <div>
+          <label>Nome</label>
+          <input type="text" data-guardian-field="name" value="${escapeHtml(guardian.name || '')}" />
+        </div>
+        <div>
+          <label>Relação</label>
+          <input type="text" data-guardian-field="relation_type" value="${escapeHtml(guardian.relation_type || '')}" placeholder="Mãe, pai, responsável..." />
+        </div>
+        <div>
+          <label>Telefone</label>
+          <input type="text" data-guardian-field="phone" value="${escapeHtml(guardian.phone || '')}" />
+        </div>
+        <div>
+          <label>WhatsApp</label>
+          <input type="text" data-guardian-field="whatsapp" value="${escapeHtml(guardian.whatsapp || '')}" />
+        </div>
+        <div>
+          <label>E-mail</label>
+          <input type="email" data-guardian-field="email" value="${escapeHtml(guardian.email || '')}" />
+        </div>
+        <div class="academic-guardian-checks">
+          <label><input type="checkbox" data-guardian-field="financial_responsible" ${guardian.financial_responsible ? 'checked' : ''} /> Financeiro</label>
+          <label><input type="checkbox" data-guardian-field="pedagogical_responsible" ${guardian.pedagogical_responsible ? 'checked' : ''} /> Pedagógico</label>
+          <label><input type="checkbox" data-guardian-field="receives_notifications" ${guardian.receives_notifications !== false ? 'checked' : ''} /> Recebe avisos</label>
+        </div>
+        <div class="academic-grid-span">
+          <label>Observações</label>
+          <textarea rows="2" data-guardian-field="notes">${escapeHtml(guardian.notes || '')}</textarea>
+        </div>
+      </div>
+      <div class="academic-guardian-actions">
+        <button class="btn danger" type="button" data-remove-guardian="${index}">Remover responsável</button>
+      </div>
+    </article>
+  `).join('');
+}
+
+function buildEmptyAcademicStudentDetail() {
+  return {
+    student: {
+      id: '',
+      full_name: '',
+      preferred_name: '',
+      birth_date: '',
+      email: '',
+      phone: '',
+      whatsapp: '',
+      school_name: '',
+      school_grade: '',
+      status: 'ativo',
+      notes: '',
+    },
+    guardians: [],
+    enrollments: [],
+    attendance_summary: { total: 0, present_total: 0, absent_total: 0 },
+  };
+}
+
+function buildEmptyAcademicEnrollmentDetail() {
+  return {
+    enrollment: {
+      id: '',
+      student_id: '',
+      student_name: '',
+      enrollment_status: 'aguardando turma',
+      enrollment_date: '',
+      start_date: '',
+      end_date: '',
+      contract_status: '',
+      payment_status: '',
+      pedagogical_status: '',
+      source_channel: '',
+      source_notes: '',
+      notes: '',
+      class_id: '',
+      class_name: '',
+      school_term_code: '',
+    },
+    class_history: [],
+    schedule_history: [],
+  };
+}
+
+function buildEmptyAcademicClassDetail() {
+  return {
+    class: {
+      id: '',
+      code: '',
+      name: '',
+      language: '',
+      modality: 'online',
+      level_name: '',
+      semester_label: '',
+      capacity: '',
+      min_students: '',
+      status: 'planejada',
+      room_name: '',
+      unit_name: '',
+      notes: '',
+    },
+    schedules: [],
+    teachers: [],
+    students: [],
+    sessions: [],
+    attendance_summary: { total: 0, present_total: 0, absent_total: 0 },
+  };
+}
+
+async function fetchAcademicAttendance(classId, classDate = '') {
+  const safeClassId = Number(classId || 0);
+  if (!safeClassId) {
+    academicState.attendanceData = [];
+    return;
+  }
+  const safeDate = String(classDate || academicState.attendanceDate || getTodayDateKey()).trim() || getTodayDateKey();
+  academicState.attendanceDate = safeDate;
+  try {
+    const { attendance } = await api(`/api/intranet/academic/classes/${safeClassId}/attendance?class_date=${encodeURIComponent(safeDate)}`);
+    academicState.attendanceData = Array.isArray(attendance) ? attendance : [];
+  } catch {
+    academicState.attendanceData = [];
+  }
+}
+
+async function selectAcademicStudent(studentId) {
+  const safeId = Number(studentId || 0);
+  academicState.selectedStudentId = safeId || null;
+  academicState.studentDetailLoading = Boolean(safeId);
+  if (!safeId) {
+    academicState.studentDetailLoading = false;
+    academicState.studentDetail = buildEmptyAcademicStudentDetail();
+    renderAcademicWorkspace();
+    return;
+  }
+  renderAcademicWorkspace();
+  try {
+    academicState.studentDetail = await api(`/api/intranet/academic/students/${safeId}`);
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível carregar o aluno.');
+    academicState.studentDetail = buildEmptyAcademicStudentDetail();
+  } finally {
+    academicState.studentDetailLoading = false;
+    renderAcademicWorkspace();
+  }
+}
+
+async function selectAcademicEnrollment(enrollmentId) {
+  const safeId = Number(enrollmentId || 0);
+  academicState.selectedEnrollmentId = safeId || null;
+  academicState.enrollmentDetailLoading = Boolean(safeId);
+  if (!safeId) {
+    academicState.enrollmentDetailLoading = false;
+    academicState.enrollmentDetail = buildEmptyAcademicEnrollmentDetail();
+    renderAcademicWorkspace();
+    return;
+  }
+  renderAcademicWorkspace();
+  try {
+    academicState.enrollmentDetail = await api(`/api/intranet/academic/enrollments/${safeId}`);
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível carregar a matrícula.');
+    academicState.enrollmentDetail = buildEmptyAcademicEnrollmentDetail();
+  } finally {
+    academicState.enrollmentDetailLoading = false;
+    renderAcademicWorkspace();
+  }
+}
+
+async function selectAcademicClass(classId) {
+  const safeId = Number(classId || 0);
+  academicState.selectedClassId = safeId || null;
+  academicState.classDetailLoading = Boolean(safeId);
+  if (!safeId) {
+    academicState.classDetailLoading = false;
+    academicState.classDetail = buildEmptyAcademicClassDetail();
+    academicState.attendanceData = [];
+    renderAcademicWorkspace();
+    return;
+  }
+  renderAcademicWorkspace();
+  try {
+    academicState.classDetail = await api(`/api/intranet/academic/classes/${safeId}`);
+    await fetchAcademicAttendance(safeId, academicState.attendanceDate || getTodayDateKey());
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível carregar a turma.');
+    academicState.classDetail = buildEmptyAcademicClassDetail();
+    academicState.attendanceData = [];
+  } finally {
+    academicState.classDetailLoading = false;
+    renderAcademicWorkspace();
+  }
+}
+
+function collectAcademicGuardiansFromForm() {
+  return Array.from(document.querySelectorAll('[data-academic-guardian-row]')).map((row) => ({
+    name: row.querySelector('[data-guardian-field="name"]')?.value?.trim() || '',
+    relation_type: row.querySelector('[data-guardian-field="relation_type"]')?.value?.trim() || '',
+    phone: row.querySelector('[data-guardian-field="phone"]')?.value?.trim() || '',
+    whatsapp: row.querySelector('[data-guardian-field="whatsapp"]')?.value?.trim() || '',
+    email: row.querySelector('[data-guardian-field="email"]')?.value?.trim() || '',
+    financial_responsible: Boolean(row.querySelector('[data-guardian-field="financial_responsible"]')?.checked),
+    pedagogical_responsible: Boolean(row.querySelector('[data-guardian-field="pedagogical_responsible"]')?.checked),
+    receives_notifications: Boolean(row.querySelector('[data-guardian-field="receives_notifications"]')?.checked),
+    notes: row.querySelector('[data-guardian-field="notes"]')?.value?.trim() || '',
+  })).filter((item) => item.name);
+}
+
+function applyAcademicFiltersFromUi() {
+  academicState.filters.search = el('academicSearchInput')?.value?.trim() || '';
+  academicState.filters.studentStatus = el('academicStudentStatusFilter')?.value || '';
+  academicState.filters.enrollmentStatus = el('academicEnrollmentStatusFilter')?.value || '';
+  academicState.filters.classStatus = el('academicClassStatusFilter')?.value || '';
+  academicState.filters.language = el('academicLanguageFilter')?.value || '';
+  academicState.filters.modality = el('academicModalityFilter')?.value || '';
+  academicState.filters.teacher = el('academicTeacherFilter')?.value || '';
+  academicState.filters.termCode = el('academicTermFilter')?.value || '';
+}
+
+async function fetchAcademicBootstrap(options = {}) {
+  academicState.loading = true;
+  academicState.error = '';
+  academicState.viewKey = String(options.viewKey || academicState.viewKey || getAcademicCurrentViewKey()).trim() || 'academic-students';
+  renderAcademicWorkspace();
+  try {
+    const params = new URLSearchParams();
+    const filters = academicState.filters || {};
+    if (filters.search) params.set('search', filters.search);
+    if (filters.studentStatus) params.set('student_status', filters.studentStatus);
+    if (filters.enrollmentStatus) params.set('enrollment_status', filters.enrollmentStatus);
+    if (filters.classStatus) params.set('class_status', filters.classStatus);
+    if (filters.language) params.set('language', filters.language);
+    if (filters.modality) params.set('modality', filters.modality);
+    if (filters.teacher) params.set('teacher', filters.teacher);
+    if (filters.termCode) params.set('term_code', filters.termCode);
+    params.set('view_key', academicState.viewKey);
+    const { academic } = await api(`/api/intranet/academic/bootstrap?${params.toString()}`);
+    academicState.bootstrap = academic || {};
+    academicState.enabled = Boolean(academic?.enabled);
+    academicState.loaded = true;
+    academicState.loading = false;
+    academicState.attendanceDate = academicState.attendanceDate || getTodayDateKey();
+
+    if (academicState.viewKey === 'academic-students') {
+      const targetId = options.preserveSelection ? academicState.selectedStudentId : null;
+      const nextId = (academic.students || []).some((item) => Number(item.id) === Number(targetId || 0))
+        ? targetId
+        : academic.students?.[0]?.id || null;
+      await selectAcademicStudent(nextId);
+      return;
+    }
+
+    if (academicState.viewKey === 'academic-enrollments') {
+      const targetId = options.preserveSelection ? academicState.selectedEnrollmentId : null;
+      const nextId = (academic.enrollments || []).some((item) => Number(item.id) === Number(targetId || 0))
+        ? targetId
+        : academic.enrollments?.[0]?.id || null;
+      await selectAcademicEnrollment(nextId);
+      return;
+    }
+
+    const targetClassId = options.preserveSelection ? academicState.selectedClassId : null;
+    const nextClassId = (academic.classes || []).some((item) => Number(item.id) === Number(targetClassId || 0))
+      ? targetClassId
+      : academic.classes?.[0]?.id || null;
+    await selectAcademicClass(nextClassId);
+  } catch (err) {
+    academicState.loading = false;
+    academicState.loaded = true;
+    academicState.error = err.message || 'Não foi possível carregar a base acadêmica.';
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicImportSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const fileInput = form.querySelector('input[type="file"]');
+  const file = fileInput?.files?.[0] || null;
+  if (!file) {
+    window.alert('Selecione a planilha acadêmica para importar.');
+    return;
+  }
+  const formData = new FormData();
+  formData.append('academic_workbook', file);
+  try {
+    const response = await api('/api/intranet/academic/import', {
+      method: 'POST',
+      body: formData,
+      headers: {},
+    });
+    setAcademicNotice('success', `Importação concluída: ${response?.result?.totals?.students_inserted || 0} aluno(s) novos, ${response?.result?.totals?.classes_upserted || 0} turma(s) sincronizada(s).`);
+    academicState.bootstrap = response?.academic || academicState.bootstrap;
+    await fetchAcademicBootstrap({ viewKey: academicState.viewKey, preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível importar a planilha acadêmica.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicStudentSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('academicStudentId')?.value || 0) || null,
+    full_name: el('academicStudentFullName')?.value?.trim() || '',
+    preferred_name: el('academicStudentPreferredName')?.value?.trim() || '',
+    birth_date: el('academicStudentBirthDate')?.value || '',
+    email: el('academicStudentEmail')?.value?.trim() || '',
+    phone: el('academicStudentPhone')?.value?.trim() || '',
+    whatsapp: el('academicStudentWhatsapp')?.value?.trim() || '',
+    school_name: el('academicStudentSchoolName')?.value?.trim() || '',
+    school_grade: el('academicStudentSchoolGrade')?.value?.trim() || '',
+    status: el('academicStudentStatus')?.value || 'ativo',
+    notes: el('academicStudentNotes')?.value?.trim() || '',
+    guardians: collectAcademicGuardiansFromForm(),
+  };
+  if (!payload.full_name) {
+    window.alert('Informe o nome completo do aluno.');
+    return;
+  }
+  try {
+    const endpoint = payload.id ? `/api/intranet/academic/students/${payload.id}` : '/api/intranet/academic/students';
+    const method = payload.id ? 'PATCH' : 'POST';
+    const response = await api(endpoint, {
+      method,
+      body: JSON.stringify(payload),
+    });
+    setAcademicNotice('success', 'Aluno salvo com sucesso.');
+    academicState.selectedStudentId = response?.student?.id || academicState.selectedStudentId;
+    await fetchAcademicBootstrap({ viewKey: 'academic-students', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar o aluno.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicEnrollmentSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('academicEnrollmentId')?.value || 0) || null,
+    student_id: Number(el('academicEnrollmentStudentId')?.value || 0) || null,
+    academic_program_id: Number(el('academicEnrollmentProgramId')?.value || 0) || null,
+    school_term_id: Number(el('academicEnrollmentSchoolTermId')?.value || 0) || null,
+    class_id: Number(el('academicEnrollmentClassId')?.value || 0) || null,
+    enrollment_date: el('academicEnrollmentDate')?.value || '',
+    start_date: el('academicEnrollmentStartDate')?.value || '',
+    end_date: el('academicEnrollmentEndDate')?.value || '',
+    enrollment_status: el('academicEnrollmentStatus')?.value || 'aguardando turma',
+    contract_status: el('academicEnrollmentContractStatus')?.value?.trim() || '',
+    payment_status: el('academicEnrollmentPaymentStatus')?.value?.trim() || '',
+    pedagogical_status: el('academicEnrollmentPedagogicalStatus')?.value?.trim() || '',
+    source_channel: el('academicEnrollmentSourceChannel')?.value?.trim() || '',
+    source_notes: el('academicEnrollmentSourceNotes')?.value?.trim() || '',
+    notes: el('academicEnrollmentNotes')?.value?.trim() || '',
+  };
+  if (!payload.student_id) {
+    window.alert('Informe o aluno da matrícula.');
+    return;
+  }
+  try {
+    const endpoint = payload.id ? `/api/intranet/academic/enrollments/${payload.id}` : '/api/intranet/academic/enrollments';
+    const method = payload.id ? 'PATCH' : 'POST';
+    const response = await api(endpoint, {
+      method,
+      body: JSON.stringify(payload),
+    });
+    setAcademicNotice('success', payload.id ? 'Matrícula atualizada com sucesso.' : 'Matrícula criada com sucesso.');
+    academicState.selectedEnrollmentId = response?.enrollment?.id || academicState.selectedEnrollmentId;
+    await fetchAcademicBootstrap({ viewKey: 'academic-enrollments', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar a matrícula.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicTransferSubmit(event) {
+  event.preventDefault();
+  const enrollmentId = Number(el('academicEnrollmentId')?.value || 0) || null;
+  const newClassId = Number(el('academicTransferClassId')?.value || 0) || null;
+  const reason = el('academicTransferReason')?.value?.trim() || '';
+  if (!enrollmentId || !newClassId) {
+    window.alert('Selecione a nova turma para transferir.');
+    return;
+  }
+  try {
+    await api(`/api/intranet/academic/enrollments/${enrollmentId}/transfer-class`, {
+      method: 'POST',
+      body: JSON.stringify({ new_class_id: newClassId, reason }),
+    });
+    setAcademicNotice('success', 'Troca de turma registrada com sucesso.');
+    await fetchAcademicBootstrap({ viewKey: 'academic-enrollments', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível transferir a matrícula.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicScheduleSubmit(event) {
+  event.preventDefault();
+  const enrollmentId = Number(el('academicEnrollmentId')?.value || 0) || null;
+  const newClassId = Number(el('academicScheduleClassId')?.value || 0) || null;
+  const reason = el('academicScheduleReason')?.value?.trim() || '';
+  if (!enrollmentId) {
+    window.alert('Selecione uma matrícula.');
+    return;
+  }
+  try {
+    await api(`/api/intranet/academic/enrollments/${enrollmentId}/change-schedule`, {
+      method: 'POST',
+      body: JSON.stringify({ new_class_id: newClassId || null, reason }),
+    });
+    setAcademicNotice('success', 'Mudança de horário registrada com sucesso.');
+    await fetchAcademicBootstrap({ viewKey: 'academic-enrollments', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível registrar a mudança de horário.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicClassSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('academicClassId')?.value || 0) || null,
+    code: el('academicClassCode')?.value?.trim() || '',
+    name: el('academicClassName')?.value?.trim() || '',
+    school_term_id: Number(el('academicClassSchoolTermId')?.value || 0) || null,
+    academic_program_id: Number(el('academicClassProgramId')?.value || 0) || null,
+    language: el('academicClassLanguage')?.value?.trim() || '',
+    modality: el('academicClassModality')?.value?.trim() || '',
+    level_name: el('academicClassLevel')?.value?.trim() || '',
+    semester_label: el('academicClassSemester')?.value?.trim() || '',
+    capacity: Number(el('academicClassCapacity')?.value || 0) || null,
+    min_students: Number(el('academicClassMinStudents')?.value || 0) || null,
+    status: el('academicClassStatus')?.value || 'planejada',
+    room_name: el('academicClassRoom')?.value?.trim() || '',
+    unit_name: el('academicClassUnit')?.value?.trim() || '',
+    notes: el('academicClassNotes')?.value?.trim() || '',
+    schedules: Array.from(document.querySelectorAll('[data-academic-schedule-row]')).map((row) => ({
+      weekday: row.querySelector('[data-schedule-field="weekday"]')?.value?.trim() || '',
+      start_time: row.querySelector('[data-schedule-field="start_time"]')?.value?.trim() || '',
+      end_time: row.querySelector('[data-schedule-field="end_time"]')?.value?.trim() || '',
+      notes: row.querySelector('[data-schedule-field="notes"]')?.value?.trim() || '',
+    })).filter((item) => item.weekday || item.start_time || item.end_time),
+  };
+  if (!payload.name) {
+    window.alert('Informe o nome da turma.');
+    return;
+  }
+  try {
+    const endpoint = payload.id ? `/api/intranet/academic/classes/${payload.id}` : '/api/intranet/academic/classes';
+    const method = payload.id ? 'PATCH' : 'POST';
+    const response = await api(endpoint, {
+      method,
+      body: JSON.stringify(payload),
+    });
+    setAcademicNotice('success', 'Turma salva com sucesso.');
+    academicState.selectedClassId = response?.class?.id || academicState.selectedClassId;
+    await fetchAcademicBootstrap({ viewKey: academicState.viewKey, preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar a turma.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicTeacherLinkSubmit(event) {
+  event.preventDefault();
+  const classId = Number(el('academicClassId')?.value || 0) || null;
+  const teacherProfileId = Number(el('academicTeacherProfileId')?.value || 0) || null;
+  if (!classId || !teacherProfileId) {
+    window.alert('Selecione uma turma e um professor.');
+    return;
+  }
+  try {
+    await api(`/api/intranet/academic/classes/${classId}/teachers`, {
+      method: 'POST',
+      body: JSON.stringify({
+        teacher_profile_id: teacherProfileId,
+        role_in_class: el('academicTeacherRole')?.value || 'teacher',
+        start_date: el('academicTeacherStartDate')?.value || '',
+      }),
+    });
+    setAcademicNotice('success', 'Professor vinculado à turma com sucesso.');
+    await fetchAcademicBootstrap({ viewKey: academicState.viewKey, preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível vincular o professor.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicAttendanceSubmit(event) {
+  event.preventDefault();
+  const classId = Number(el('academicAttendanceClassId')?.value || 0) || null;
+  if (!classId) {
+    window.alert('Selecione uma turma.');
+    return;
+  }
+  const items = Array.from(document.querySelectorAll('[data-attendance-enrollment-id]')).map((row) => ({
+    enrollment_id: Number(row.getAttribute('data-attendance-enrollment-id') || 0),
+    attendance_status: row.querySelector('[data-attendance-field="status"]')?.value || 'presente',
+    notes: row.querySelector('[data-attendance-field="notes"]')?.value?.trim() || '',
+  })).filter((item) => item.enrollment_id);
+  try {
+    await api(`/api/intranet/academic/classes/${classId}/attendance`, {
+      method: 'POST',
+      body: JSON.stringify({
+        class_date: el('academicAttendanceDate')?.value || academicState.attendanceDate || getTodayDateKey(),
+        class_schedule_id: Number(el('academicAttendanceScheduleId')?.value || 0) || null,
+        session_status: el('academicAttendanceSessionStatus')?.value || 'realizada',
+        session_notes: el('academicAttendanceSessionNotes')?.value?.trim() || '',
+        items,
+      }),
+    });
+    setAcademicNotice('success', 'Frequência salva com sucesso.');
+    await fetchAcademicAttendance(classId, el('academicAttendanceDate')?.value || academicState.attendanceDate);
+    renderAcademicWorkspace();
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar a frequência.');
+    renderAcademicWorkspace();
+  }
+}
+
+function renderAcademicWorkspace() {
+  const customWrap = el('departmentWorkspaceCustom');
+  if (!customWrap) return;
+  const viewKey = getAcademicCurrentViewKey();
+  academicState.viewKey = viewKey;
+  const bootstrap = getAcademicBootstrap();
+  const isTeacherView = isTeacherAcademicView(viewKey) || String(bootstrap.scope_kind || '') === 'teacher';
+
+  if (academicState.loading && !bootstrap.enabled) {
+    customWrap.hidden = false;
+    customWrap.innerHTML = `<div class="intranet-empty-card">Carregando base acadêmica...</div>`;
+    return;
+  }
+  if (academicState.error && !bootstrap.enabled) {
+    customWrap.hidden = false;
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(academicState.error)}</div>`;
+    return;
+  }
+
+  const dashboard = bootstrap.dashboard || {};
+  const filters = bootstrap.filters || {};
+  const teachers = Array.isArray(bootstrap.teacher_profiles) ? bootstrap.teacher_profiles : [];
+  const programs = Array.isArray(bootstrap.programs) ? bootstrap.programs : [];
+  const schoolTerms = Array.isArray(bootstrap.school_terms) ? bootstrap.school_terms : [];
+  const classes = Array.isArray(bootstrap.classes) ? bootstrap.classes : [];
+  const students = Array.isArray(bootstrap.students) ? bootstrap.students : [];
+  const enrollments = Array.isArray(bootstrap.enrollments) ? bootstrap.enrollments : [];
+  const movements = Array.isArray(bootstrap.movements) ? bootstrap.movements : [];
+  const studentDetail = academicState.studentDetail || buildEmptyAcademicStudentDetail();
+  const enrollmentDetail = academicState.enrollmentDetail || buildEmptyAcademicEnrollmentDetail();
+  const classDetail = academicState.classDetail || buildEmptyAcademicClassDetail();
+  const noticeMarkup = academicState.notice?.text
+    ? `<div class="workspace-inline-notice is-${escapeHtml(academicState.notice.type || 'info')}"><span>${escapeHtml(academicState.notice.text)}</span><button class="btn workspace-inline-notice-close" type="button" id="btnDismissAcademicNotice">${renderIcon('chevron')}</button></div>`
+    : '';
+  const importMarkup = bootstrap.can_import
+    ? `<form id="academicImportForm" class="academic-import-form"><input type="file" id="academicImportFile" accept=".xlsx,.xls" /><button class="btn" type="submit">Importar planilha acadêmica</button></form>`
+    : '';
+  const summaryMarkup = `
+    <div class="academic-summary-grid">
+      ${buildAcademicSummaryCards(dashboard, isTeacherView).map((item) => `<article class="intranet-sales-card"><strong>${escapeHtml(item.value)}</strong><span>${escapeHtml(item.label)}</span></article>`).join('')}
+    </div>
+  `;
+  const filtersMarkup = `
+    <div class="academic-filter-grid">
+      <div><label>Busca</label><input id="academicSearchInput" value="${escapeHtml(academicState.filters.search || '')}" placeholder="Nome, turma, idioma..." /></div>
+      <div><label>Idioma</label><select id="academicLanguageFilter"><option value="">Todos</option>${(filters.languages || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.language ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div><label>Modalidade</label><select id="academicModalityFilter"><option value="">Todas</option>${(filters.modalities || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.modality ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div><label>Status aluno</label><select id="academicStudentStatusFilter"><option value="">Todos</option>${(filters.student_statuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.studentStatus ? ' selected' : ''}>${item}</option>`).join('')}</select></div>
+      <div><label>Status matrícula</label><select id="academicEnrollmentStatusFilter"><option value="">Todos</option>${(filters.enrollment_statuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.enrollmentStatus ? ' selected' : ''}>${item}</option>`).join('')}</select></div>
+      <div><label>Status turma</label><select id="academicClassStatusFilter"><option value="">Todos</option>${(filters.class_statuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.classStatus ? ' selected' : ''}>${item}</option>`).join('')}</select></div>
+      <div><label>Professor</label><select id="academicTeacherFilter"><option value="">Todos</option>${(filters.teachers || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.teacher ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div><label>Semestre</label><select id="academicTermFilter"><option value="">Todos</option>${(filters.terms || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.termCode ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div class="academic-filter-actions"><button class="btn" type="button" id="btnRefreshAcademicWorkspace">Atualizar</button></div>
+    </div>
+  `;
+
+  let sectionMarkup = '';
+  if (viewKey === 'academic-students') {
+    sectionMarkup = `
+      <div class="academic-layout">
+        <section class="academic-list-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Pedagógico</div><h4 class="intranet-section-title">Alunos</h4></div><button class="btn" type="button" id="btnNewAcademicStudent">Novo aluno</button></div>
+          <div class="academic-list">
+            ${students.length ? students.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedStudentId || 0) ? ' is-active' : ''}" data-academic-student="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.full_name || 'Aluno')}</h4><div class="small muted">${escapeHtml(item.latest_class_name || item.latest_language || 'Sem turma')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.status || item.latest_enrollment_status)}">${escapeHtml(item.status || item.latest_enrollment_status || 'ativo')}</span></div><div class="small muted">${escapeHtml(item.phone || item.whatsapp || '-')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhum aluno encontrado.</div>`}
+          </div>
+        </section>
+        <aside class="academic-detail-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Cadastro/Matrícula</div><h4 class="intranet-section-title">${escapeHtml(studentDetail.student?.full_name || 'Novo aluno')}</h4></div></div>
+          ${academicState.studentDetailLoading ? `<div class="small muted">Carregando aluno...</div>` : `<form id="academicStudentForm" class="academic-form"><input type="hidden" id="academicStudentId" value="${escapeHtml(studentDetail.student?.id || '')}" /><div class="academic-form-grid"><div><label>Nome completo</label><input id="academicStudentFullName" value="${escapeHtml(studentDetail.student?.full_name || '')}" /></div><div><label>Nome preferido</label><input id="academicStudentPreferredName" value="${escapeHtml(studentDetail.student?.preferred_name || '')}" /></div><div><label>Nascimento</label><input id="academicStudentBirthDate" type="date" value="${escapeHtml(studentDetail.student?.birth_date || '')}" /></div><div><label>Status</label><select id="academicStudentStatus">${['ativo','inativo','aguardando','cancelado','trancado','desistente'].map((item) => `<option value="${item}"${item === (studentDetail.student?.status || 'ativo') ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div><label>E-mail</label><input id="academicStudentEmail" type="email" value="${escapeHtml(studentDetail.student?.email || '')}" /></div><div><label>Telefone</label><input id="academicStudentPhone" value="${escapeHtml(studentDetail.student?.phone || '')}" /></div><div><label>WhatsApp</label><input id="academicStudentWhatsapp" value="${escapeHtml(studentDetail.student?.whatsapp || '')}" /></div><div><label>Escola</label><input id="academicStudentSchoolName" value="${escapeHtml(studentDetail.student?.school_name || '')}" /></div><div><label>Série</label><input id="academicStudentSchoolGrade" value="${escapeHtml(studentDetail.student?.school_grade || '')}" /></div><div class="academic-grid-span"><label>Observações</label><textarea id="academicStudentNotes" rows="3">${escapeHtml(studentDetail.student?.notes || '')}</textarea></div></div><div class="workspace-section-head academic-inline-head"><div><div class="intranet-section-eyebrow">Responsáveis</div><h5 class="intranet-section-title">Contato e responsáveis</h5></div><button class="btn" type="button" id="btnAddAcademicGuardian">Adicionar responsável</button></div><div id="academicGuardiansWrap" class="academic-guardians-wrap">${buildAcademicGuardiansMarkup(studentDetail.guardians || [])}</div><div class="academic-form-actions"><button class="btn primary" type="submit">Salvar aluno</button></div></form>`}
+        </aside>
+      </div>
+    `;
+  } else if (viewKey === 'academic-enrollments') {
+    sectionMarkup = `
+      <div class="academic-layout">
+        <section class="academic-list-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Pedagógico</div><h4 class="intranet-section-title">Matrículas</h4></div><button class="btn" type="button" id="btnNewAcademicEnrollment">Nova matrícula</button></div>
+          <div class="academic-list">
+            ${enrollments.length ? enrollments.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedEnrollmentId || 0) ? ' is-active' : ''}" data-academic-enrollment="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.student_name || 'Matrícula')}</h4><div class="small muted">${escapeHtml(item.class_name || 'Aguardando turma')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.enrollment_status)}">${escapeHtml(item.enrollment_status || 'aguardando turma')}</span></div><div class="small muted">${escapeHtml(item.language || '-')} · ${escapeHtml(item.school_term_code || '-')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma matrícula encontrada.</div>`}
+          </div>
+        </section>
+        <aside class="academic-detail-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Vínculo acadêmico</div><h4 class="intranet-section-title">${escapeHtml(enrollmentDetail.enrollment?.student_name || 'Selecione uma matrícula')}</h4></div></div>
+          ${academicState.enrollmentDetailLoading ? `<div class="small muted">Carregando matrícula...</div>` : `<form id="academicEnrollmentForm" class="academic-form"><input type="hidden" id="academicEnrollmentId" value="${escapeHtml(enrollmentDetail.enrollment?.id || '')}" /><div class="academic-form-grid"><div><label>ID do aluno</label><input id="academicEnrollmentStudentId" value="${escapeHtml(enrollmentDetail.enrollment?.student_id || '')}" placeholder="ID do aluno" /></div><div><label>Programa</label><select id="academicEnrollmentProgramId"><option value="">Selecione</option>${programs.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(enrollmentDetail.enrollment?.academic_program_id || 0) ? ' selected' : ''}>${escapeHtml(item.program_name || item.level_name || ('Programa #' + item.id))}</option>`).join('')}</select></div><div><label>Período letivo</label><select id="academicEnrollmentSchoolTermId"><option value="">Selecione</option>${schoolTerms.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(enrollmentDetail.enrollment?.school_term_id || 0) ? ' selected' : ''}>${escapeHtml(item.code || item.name || ('Período #' + item.id))}</option>`).join('')}</select></div><div><label>Turma</label><select id="academicEnrollmentClassId"><option value="">Aguardando turma</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(enrollmentDetail.enrollment?.class_id || 0) ? ' selected' : ''}>${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select></div><div><label>Status</label><select id="academicEnrollmentStatus">${['pre-matricula','matriculado','aguardando turma','transferido','trancado','cancelado','concluido','desistente'].map((item) => `<option value="${item}"${item === (enrollmentDetail.enrollment?.enrollment_status || 'aguardando turma') ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div><label>Data matrícula</label><input id="academicEnrollmentDate" type="date" value="${escapeHtml(enrollmentDetail.enrollment?.enrollment_date || '')}" /></div><div><label>Início</label><input id="academicEnrollmentStartDate" type="date" value="${escapeHtml(enrollmentDetail.enrollment?.start_date || '')}" /></div><div><label>Fim</label><input id="academicEnrollmentEndDate" type="date" value="${escapeHtml(enrollmentDetail.enrollment?.end_date || '')}" /></div><div><label>Status contratual</label><input id="academicEnrollmentContractStatus" value="${escapeHtml(enrollmentDetail.enrollment?.contract_status || '')}" /></div><div><label>Status financeiro</label><input id="academicEnrollmentPaymentStatus" value="${escapeHtml(enrollmentDetail.enrollment?.payment_status || '')}" /></div><div><label>Status pedagógico</label><input id="academicEnrollmentPedagogicalStatus" value="${escapeHtml(enrollmentDetail.enrollment?.pedagogical_status || '')}" /></div><div><label>Canal de origem</label><input id="academicEnrollmentSourceChannel" value="${escapeHtml(enrollmentDetail.enrollment?.source_channel || '')}" /></div><div class="academic-grid-span"><label>Origem / observações</label><textarea id="academicEnrollmentSourceNotes" rows="2">${escapeHtml(enrollmentDetail.enrollment?.source_notes || '')}</textarea></div><div class="academic-grid-span"><label>Observações</label><textarea id="academicEnrollmentNotes" rows="3">${escapeHtml(enrollmentDetail.enrollment?.notes || '')}</textarea></div></div><div class="academic-form-actions"><button class="btn primary" type="submit">Salvar matrícula</button></div></form><div class="academic-inline-split"><form id="academicTransferForm" class="academic-inline-form"><h5>Troca de turma</h5><label>Nova turma</label><select id="academicTransferClassId"><option value="">Selecione</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select><label>Motivo</label><input id="academicTransferReason" placeholder="Motivo da troca" /><button class="btn" type="submit">Transferir</button></form><form id="academicScheduleForm" class="academic-inline-form"><h5>Troca de horário</h5><label>Turma base</label><select id="academicScheduleClassId"><option value="">Manter turma atual</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select><label>Motivo</label><input id="academicScheduleReason" placeholder="Motivo do ajuste" /><button class="btn" type="submit">Registrar mudança</button></form></div><div class="academic-history-grid"><article class="academic-history-panel"><h5>Histórico de turma</h5>${(enrollmentDetail.class_history || []).length ? enrollmentDetail.class_history.map((item) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(item.reason || 'Troca')}</strong><div>${escapeHtml(item.old_class_name || '-')} → ${escapeHtml(item.new_class_name || '-')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))}</div></div>`).join('') : `<div class="intranet-empty-card">Sem histórico de turma.</div>`}</article><article class="academic-history-panel"><h5>Histórico de horário</h5>${(enrollmentDetail.schedule_history || []).length ? enrollmentDetail.schedule_history.map((item) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(item.reason || 'Mudança')}</strong><div>${escapeHtml(item.old_class_name || '-')} → ${escapeHtml(item.new_class_name || '-')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))}</div></div>`).join('') : `<div class="intranet-empty-card">Sem histórico de horário.</div>`}</article></div>`}
+        </aside>
+      </div>
+    `;
+  } else if (viewKey === 'academic-movements') {
+    sectionMarkup = `<section class="workspace-section-panel"><div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${isTeacherView ? 'Professor' : 'Pedagógico'}</div><h4 class="intranet-section-title">Movimentações acadêmicas</h4></div></div><div class="academic-history-grid">${movements.length ? movements.map((item) => `<article class="intranet-sales-history-item"><strong>${escapeHtml(item.movement_type === 'schedule' ? 'Mudança de horário' : 'Troca de turma')}</strong><div>${escapeHtml(item.reason || 'Sem motivo informado')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma movimentação recente.</div>`}</div></section>`;
+  } else {
+    const schedules = Array.isArray(classDetail.schedules) && classDetail.schedules.length ? classDetail.schedules : [{ weekday: '', start_time: '', end_time: '', notes: '' }];
+    sectionMarkup = `
+      <div class="academic-layout">
+        <section class="academic-list-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${isTeacherView ? 'Professor' : 'Pedagógico'}</div><h4 class="intranet-section-title">${isTeacherView ? 'Minhas turmas' : 'Turmas'}</h4></div>${!isTeacherView ? `<button class="btn" type="button" id="btnNewAcademicClass">Nova turma</button>` : ''}</div>
+          <div class="academic-list">
+            ${classes.length ? classes.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedClassId || 0) ? ' is-active' : ''}" data-academic-class="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.name || item.code || 'Turma')}</h4><div class="small muted">${escapeHtml(item.language || '-')} · ${escapeHtml(item.modality || '-')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.status)}">${escapeHtml(item.status || 'planejada')}</span></div><div class="small muted">${escapeHtml((item.teachers || []).map((teacher) => teacher.display_name).join(', ') || 'Sem professor')} · ${escapeHtml(String(item.enrolled_total || 0))} aluno(s)</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma turma encontrada.</div>`}
+          </div>
+        </section>
+        <aside class="academic-detail-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Turma</div><h4 class="intranet-section-title">${escapeHtml(classDetail.class?.name || 'Selecione uma turma')}</h4></div></div>
+          ${academicState.classDetailLoading ? `<div class="small muted">Carregando turma...</div>` : `<form id="academicClassForm" class="academic-form"><input type="hidden" id="academicClassId" value="${escapeHtml(classDetail.class?.id || '')}" /><div class="academic-form-grid"><div><label>Código</label><input id="academicClassCode" value="${escapeHtml(classDetail.class?.code || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Nome</label><input id="academicClassName" value="${escapeHtml(classDetail.class?.name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Período letivo</label><select id="academicClassSchoolTermId" ${isTeacherView ? 'disabled' : ''}><option value="">Selecione</option>${schoolTerms.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(classDetail.class?.school_term_id || 0) ? ' selected' : ''}>${escapeHtml(item.code || item.name || ('Período #' + item.id))}</option>`).join('')}</select></div><div><label>Programa</label><select id="academicClassProgramId" ${isTeacherView ? 'disabled' : ''}><option value="">Selecione</option>${programs.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(classDetail.class?.academic_program_id || 0) ? ' selected' : ''}>${escapeHtml(item.program_name || item.level_name || ('Programa #' + item.id))}</option>`).join('')}</select></div><div><label>Idioma</label><input id="academicClassLanguage" value="${escapeHtml(classDetail.class?.language || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Modalidade</label><input id="academicClassModality" value="${escapeHtml(classDetail.class?.modality || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Nível</label><input id="academicClassLevel" value="${escapeHtml(classDetail.class?.level_name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Semestre</label><input id="academicClassSemester" value="${escapeHtml(classDetail.class?.semester_label || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Capacidade</label><input id="academicClassCapacity" type="number" value="${escapeHtml(classDetail.class?.capacity || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Mínimo</label><input id="academicClassMinStudents" type="number" value="${escapeHtml(classDetail.class?.min_students || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Status</label><select id="academicClassStatus" ${isTeacherView ? 'disabled' : ''}>${['planejada','ativa','encerrada','cancelada'].map((item) => `<option value="${item}"${item === (classDetail.class?.status || 'planejada') ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div><label>Sala</label><input id="academicClassRoom" value="${escapeHtml(classDetail.class?.room_name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Unidade</label><input id="academicClassUnit" value="${escapeHtml(classDetail.class?.unit_name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div class="academic-grid-span"><label>Observações</label><textarea id="academicClassNotes" rows="2" ${isTeacherView ? 'disabled' : ''}>${escapeHtml(classDetail.class?.notes || '')}</textarea></div></div><div class="workspace-section-head academic-inline-head"><div><div class="intranet-section-eyebrow">Horários</div><h5 class="intranet-section-title">Grade da turma</h5></div>${!isTeacherView ? `<button class="btn" type="button" id="btnAddAcademicSchedule">Adicionar horário</button>` : ''}</div><div id="academicSchedulesWrap" class="academic-schedules-wrap">${schedules.map((schedule, index) => `<div class="academic-schedule-row" data-academic-schedule-row="${index}"><input data-schedule-field="weekday" value="${escapeHtml(schedule.weekday || '')}" placeholder="Dia da semana" ${isTeacherView ? 'disabled' : ''} /><input data-schedule-field="start_time" value="${escapeHtml(schedule.start_time || '')}" placeholder="Início" ${isTeacherView ? 'disabled' : ''} /><input data-schedule-field="end_time" value="${escapeHtml(schedule.end_time || '')}" placeholder="Fim" ${isTeacherView ? 'disabled' : ''} /><input data-schedule-field="notes" value="${escapeHtml(schedule.notes || '')}" placeholder="Observações" ${isTeacherView ? 'disabled' : ''} /></div>`).join('')}</div>${!isTeacherView ? `<div class="academic-form-actions"><button class="btn primary" type="submit">Salvar turma</button></div>` : ''}</form>${!isTeacherView ? `<form id="academicTeacherLinkForm" class="academic-inline-form"><h5>Vincular professor</h5><label>Professor</label><select id="academicTeacherProfileId"><option value="">Selecione</option>${teachers.map((teacher) => `<option value="${escapeHtml(teacher.id)}">${escapeHtml(teacher.display_name || teacher.user_name || 'Professor')}</option>`).join('')}</select><label>Papel</label><select id="academicTeacherRole"><option value="teacher">Professor</option><option value="assistant">Assistente</option><option value="substitute">Substituto</option><option value="coordinator">Coordenador</option></select><label>Início</label><input id="academicTeacherStartDate" type="date" /><button class="btn" type="submit">Vincular</button></form>` : ''}<div class="academic-class-columns"><article class="academic-history-panel"><h5>Professores vinculados</h5>${(classDetail.teachers || []).length ? classDetail.teachers.map((teacher) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(teacher.display_name || teacher.user_name || 'Professor')}</strong><div>${escapeHtml(teacher.role_in_class || 'teacher')}</div><div class="small muted">${escapeHtml(teacher.start_date || '')}</div></div>`).join('') : `<div class="intranet-empty-card">Nenhum professor vinculado.</div>`}</article><article class="academic-history-panel"><h5>Alunos da turma</h5>${(classDetail.students || []).length ? classDetail.students.map((student) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(student.full_name || 'Aluno')}</strong><div>${escapeHtml(student.language || '-')} · ${escapeHtml(student.modality || '-')}</div><div class="small muted">${escapeHtml(student.enrollment_status || '')}</div></div>`).join('') : `<div class="intranet-empty-card">Nenhum aluno matriculado.</div>`}</article></div><section class="workspace-section-panel academic-attendance-panel"><div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Chamada</div><h5 class="intranet-section-title">Frequência da turma</h5></div></div><form id="academicAttendanceForm" class="academic-form"><input type="hidden" id="academicAttendanceClassId" value="${escapeHtml(classDetail.class?.id || '')}" /><div class="academic-filter-grid academic-filter-grid-compact"><div><label>Data</label><input id="academicAttendanceDate" type="date" value="${escapeHtml(academicState.attendanceDate || getTodayDateKey())}" /></div><div><label>Horário</label><select id="academicAttendanceScheduleId"><option value="">Principal</option>${(classDetail.schedules || []).map((schedule) => `<option value="${escapeHtml(schedule.id)}">${escapeHtml([schedule.weekday, schedule.start_time, schedule.end_time].filter(Boolean).join(' · '))}</option>`).join('')}</select></div><div><label>Status da sessão</label><select id="academicAttendanceSessionStatus">${['planejada','realizada','cancelada','remarcada'].map((item) => `<option value="${item}"${item === 'realizada' ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div class="academic-grid-span"><label>Observações da aula</label><input id="academicAttendanceSessionNotes" value="" placeholder="Resumo da aula, recados ou ocorrências" /></div></div><div class="academic-attendance-list">${(classDetail.students || []).length ? (classDetail.students || []).map((student) => { const recorded = (academicState.attendanceData || []).find((item) => Number(item.enrollment_id || 0) === Number(student.enrollment_id || 0)); return `<div class="academic-attendance-row" data-attendance-enrollment-id="${escapeHtml(student.enrollment_id)}"><div><strong>${escapeHtml(student.full_name || 'Aluno')}</strong><small>${escapeHtml(student.language || '-')} · ${escapeHtml(student.modality || '-')}</small></div><select data-attendance-field="status">${['presente','falta','falta_justificada','reposicao','atraso'].map((item) => `<option value="${item}"${item === (recorded?.attendance_status || 'presente') ? ' selected' : ''}>${item}</option>`).join('')}</select><input data-attendance-field="notes" value="${escapeHtml(recorded?.notes || '')}" placeholder="Observações" /></div>`; }).join('') : `<div class="intranet-empty-card">Nenhum aluno disponível para chamada.</div>`}</div><div class="academic-form-actions"><button class="btn" type="button" id="btnRefreshAcademicAttendance">Atualizar frequência</button><button class="btn primary" type="submit">Salvar frequência</button></div></form></section>`}
+        </aside>
+      </div>
+    `;
+  }
+
+  customWrap.hidden = false;
+  customWrap.innerHTML = `<section class="academic-workspace"><div class="academic-toolbar"><div><div class="intranet-section-eyebrow">${escapeHtml(isTeacherView ? 'Professor' : 'Pedagógico')}</div><h3 class="intranet-section-title">${escapeHtml(isTeacherView ? 'Operação do professor' : 'Base acadêmica da escola')}</h3><p class="small muted">${escapeHtml(isTeacherView ? 'Turmas, alunos e chamada dentro do seu escopo.' : 'Alunos, matrículas, turmas, horários, professores, frequência e movimentações integrados à intranet.')}</p></div><div class="academic-toolbar-side">${importMarkup}</div></div>${noticeMarkup}${summaryMarkup}${filtersMarkup}${sectionMarkup}</section>`;
+
+  el('btnDismissAcademicNotice')?.addEventListener('click', () => { setAcademicNotice('', ''); renderAcademicWorkspace(); });
+  el('btnRefreshAcademicWorkspace')?.addEventListener('click', async () => { applyAcademicFiltersFromUi(); await fetchAcademicBootstrap({ viewKey, preserveSelection: true }); });
+  el('academicSearchInput')?.addEventListener('keydown', async (event) => { if (event.key !== 'Enter') return; event.preventDefault(); applyAcademicFiltersFromUi(); await fetchAcademicBootstrap({ viewKey, preserveSelection: true }); });
+  ['academicLanguageFilter', 'academicModalityFilter', 'academicTeacherFilter', 'academicStudentStatusFilter', 'academicEnrollmentStatusFilter', 'academicClassStatusFilter', 'academicTermFilter'].forEach((id) => {
+    el(id)?.addEventListener('change', async () => { applyAcademicFiltersFromUi(); await fetchAcademicBootstrap({ viewKey, preserveSelection: true }); });
+  });
+  el('academicImportForm')?.addEventListener('submit', handleAcademicImportSubmit);
+  Array.from(customWrap.querySelectorAll('[data-academic-student]')).forEach((button) => button.addEventListener('click', () => selectAcademicStudent(button.getAttribute('data-academic-student'))));
+  Array.from(customWrap.querySelectorAll('[data-academic-enrollment]')).forEach((button) => button.addEventListener('click', () => selectAcademicEnrollment(button.getAttribute('data-academic-enrollment'))));
+  Array.from(customWrap.querySelectorAll('[data-academic-class]')).forEach((button) => button.addEventListener('click', () => selectAcademicClass(button.getAttribute('data-academic-class'))));
+  el('btnNewAcademicStudent')?.addEventListener('click', () => { academicState.selectedStudentId = null; academicState.studentDetail = buildEmptyAcademicStudentDetail(); renderAcademicWorkspace(); });
+  el('btnNewAcademicEnrollment')?.addEventListener('click', () => { academicState.selectedEnrollmentId = null; academicState.enrollmentDetail = buildEmptyAcademicEnrollmentDetail(); renderAcademicWorkspace(); });
+  el('btnNewAcademicClass')?.addEventListener('click', () => { academicState.selectedClassId = null; academicState.classDetail = buildEmptyAcademicClassDetail(); renderAcademicWorkspace(); });
+  el('academicStudentForm')?.addEventListener('submit', handleAcademicStudentSubmit);
+  el('academicEnrollmentForm')?.addEventListener('submit', handleAcademicEnrollmentSubmit);
+  el('academicTransferForm')?.addEventListener('submit', handleAcademicTransferSubmit);
+  el('academicScheduleForm')?.addEventListener('submit', handleAcademicScheduleSubmit);
+  el('academicClassForm')?.addEventListener('submit', handleAcademicClassSubmit);
+  el('academicTeacherLinkForm')?.addEventListener('submit', handleAcademicTeacherLinkSubmit);
+  el('academicAttendanceForm')?.addEventListener('submit', handleAcademicAttendanceSubmit);
+  el('btnRefreshAcademicAttendance')?.addEventListener('click', async () => { await fetchAcademicAttendance(Number(el('academicAttendanceClassId')?.value || 0), el('academicAttendanceDate')?.value || academicState.attendanceDate); renderAcademicWorkspace(); });
+  el('academicAttendanceDate')?.addEventListener('change', async () => { await fetchAcademicAttendance(Number(el('academicAttendanceClassId')?.value || 0), el('academicAttendanceDate')?.value || academicState.attendanceDate); renderAcademicWorkspace(); });
+  el('btnAddAcademicGuardian')?.addEventListener('click', () => { const baseDetail = academicState.studentDetail || buildEmptyAcademicStudentDetail(); const guardians = Array.isArray(baseDetail.guardians) ? [...baseDetail.guardians] : []; guardians.push({ name: '', relation_type: '', phone: '', whatsapp: '', email: '', financial_responsible: false, pedagogical_responsible: false, receives_notifications: true, notes: '' }); academicState.studentDetail = { ...baseDetail, guardians }; renderAcademicWorkspace(); });
+  Array.from(customWrap.querySelectorAll('[data-remove-guardian]')).forEach((button) => button.addEventListener('click', () => { const index = Number(button.getAttribute('data-remove-guardian') || -1); const baseDetail = academicState.studentDetail || buildEmptyAcademicStudentDetail(); const guardians = (baseDetail.guardians || []).filter((_, guardianIndex) => guardianIndex !== index); academicState.studentDetail = { ...baseDetail, guardians }; renderAcademicWorkspace(); }));
+  el('btnAddAcademicSchedule')?.addEventListener('click', () => { const baseDetail = academicState.classDetail || buildEmptyAcademicClassDetail(); const schedules = Array.isArray(baseDetail.schedules) ? [...baseDetail.schedules] : []; schedules.push({ weekday: '', start_time: '', end_time: '', notes: '' }); academicState.classDetail = { ...baseDetail, schedules }; renderAcademicWorkspace(); });
 }
 
 function canManageCommunication() {

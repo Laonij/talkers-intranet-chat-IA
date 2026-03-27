@@ -1416,6 +1416,246 @@ async function migrateSqlite() {
   `);
 
   await execSqlite(`
+    CREATE TABLE IF NOT EXISTS students (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      full_name TEXT NOT NULL,
+      normalized_name TEXT,
+      preferred_name TEXT,
+      birth_date TEXT,
+      age INTEGER,
+      gender TEXT,
+      cpf TEXT,
+      rg TEXT,
+      email TEXT,
+      phone TEXT,
+      whatsapp TEXT,
+      emergency_contact_name TEXT,
+      emergency_contact_phone TEXT,
+      address_zipcode TEXT,
+      address_street TEXT,
+      address_number TEXT,
+      address_complement TEXT,
+      address_neighborhood TEXT,
+      address_city TEXT,
+      address_state TEXT,
+      notes TEXT,
+      allergies TEXT,
+      medical_notes TEXT,
+      school_name TEXT,
+      school_grade TEXT,
+      status TEXT NOT NULL DEFAULT 'ativo',
+      source_sheet TEXT,
+      source_row_identifier TEXT,
+      source_payload_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS student_guardians (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      relation_type TEXT,
+      phone TEXT,
+      whatsapp TEXT,
+      email TEXT,
+      financial_responsible INTEGER NOT NULL DEFAULT 0,
+      pedagogical_responsible INTEGER NOT NULL DEFAULT 0,
+      receives_notifications INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS academic_programs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      language TEXT,
+      program_name TEXT NOT NULL,
+      level_name TEXT,
+      stage_name TEXT,
+      semester_label TEXT,
+      modality TEXT,
+      material_name TEXT,
+      workload_hours REAL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS school_terms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      code TEXT NOT NULL UNIQUE,
+      start_date TEXT,
+      end_date TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS classes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT UNIQUE,
+      name TEXT NOT NULL,
+      school_term_id INTEGER,
+      academic_program_id INTEGER,
+      language TEXT,
+      modality TEXT,
+      level_name TEXT,
+      semester_label TEXT,
+      age_group TEXT,
+      capacity INTEGER,
+      min_students INTEGER,
+      status TEXT NOT NULL DEFAULT 'planejada',
+      room_name TEXT,
+      unit_name TEXT,
+      notes TEXT,
+      source_sheet TEXT,
+      source_block_ref TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS class_schedules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id INTEGER NOT NULL,
+      weekday TEXT,
+      start_time TEXT,
+      end_time TEXT,
+      timezone TEXT NOT NULL DEFAULT 'America/Sao_Paulo',
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS teacher_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      display_name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL UNIQUE,
+      aliases_json TEXT,
+      specialties_json TEXT,
+      metadata_json TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS class_teachers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      role_in_class TEXT NOT NULL DEFAULT 'teacher',
+      start_date TEXT,
+      end_date TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(class_id, user_id, role_in_class, start_date)
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS enrollments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      academic_program_id INTEGER,
+      school_term_id INTEGER,
+      class_id INTEGER,
+      enrollment_number TEXT UNIQUE,
+      enrollment_date TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      enrollment_status TEXT NOT NULL DEFAULT 'aguardando turma',
+      contract_status TEXT,
+      payment_status TEXT,
+      pedagogical_status TEXT,
+      source_channel TEXT,
+      source_notes TEXT,
+      notes TEXT,
+      source_sheet TEXT,
+      source_row_identifier TEXT,
+      source_payload_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS class_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id INTEGER NOT NULL,
+      class_schedule_id INTEGER,
+      class_date TEXT NOT NULL,
+      start_time TEXT,
+      end_time TEXT,
+      session_status TEXT NOT NULL DEFAULT 'planejada',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS attendance_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      enrollment_id INTEGER NOT NULL,
+      class_id INTEGER NOT NULL,
+      class_schedule_id INTEGER,
+      class_date TEXT NOT NULL,
+      attendance_status TEXT NOT NULL DEFAULT 'presente',
+      notes TEXT,
+      recorded_by_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(enrollment_id, class_id, class_schedule_id, class_date)
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS enrollment_class_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      enrollment_id INTEGER NOT NULL,
+      old_class_id INTEGER,
+      new_class_id INTEGER,
+      reason TEXT,
+      changed_by_user_id INTEGER,
+      changed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      notes TEXT
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS enrollment_schedule_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      enrollment_id INTEGER NOT NULL,
+      old_class_id INTEGER,
+      new_class_id INTEGER,
+      old_schedule_snapshot_json TEXT,
+      new_schedule_snapshot_json TEXT,
+      reason TEXT,
+      changed_by_user_id INTEGER,
+      changed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      notes TEXT
+    );
+  `);
+
+  await execSqlite(`
     CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
     USING fts5(extracted_text, translated_text, rel_path, keywords, language, content='documents', content_rowid='id');
   `);
@@ -1484,6 +1724,28 @@ async function migrateSqlite() {
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_campaign ON pedagogical_whatsapp_campaign_items(campaign_id, queue_order, send_status);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_group ON pedagogical_whatsapp_campaign_items(group_id, send_status, updated_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_logs_campaign ON pedagogical_whatsapp_campaign_logs(campaign_id, created_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_students_name ON students(normalized_name, status, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone, whatsapp);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_student_guardians_student ON student_guardians(student_id, financial_responsible, pedagogical_responsible);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_academic_programs_lookup ON academic_programs(language, modality, semester_label, level_name);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_school_terms_code ON school_terms(code, status);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_classes_term_program ON classes(school_term_id, academic_program_id, status);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_classes_source ON classes(source_sheet, source_block_ref);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_class_schedules_class ON class_schedules(class_id, weekday, start_time);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_name ON teacher_profiles(normalized_name, active);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_user ON teacher_profiles(user_id, active);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_class_teachers_class ON class_teachers(class_id, is_active, role_in_class);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_class_teachers_user ON class_teachers(user_id, is_active, class_id);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id, enrollment_status, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollments_class ON enrollments(class_id, enrollment_status, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollments_term ON enrollments(school_term_id, academic_program_id, updated_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollments_source ON enrollments(source_sheet, source_row_identifier);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_class_sessions_class_date ON class_sessions(class_id, class_date, session_status);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_class_sessions_schedule ON class_sessions(class_schedule_id, class_date);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_attendance_class_date ON attendance_records(class_id, class_date, attendance_status);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_attendance_enrollment_date ON attendance_records(enrollment_id, class_date, attendance_status);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollment_class_history_enrollment ON enrollment_class_history(enrollment_id, changed_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollment_schedule_history_enrollment ON enrollment_schedule_history(enrollment_id, changed_at);");
 
   await execSqlite(`
     CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
@@ -2126,6 +2388,246 @@ async function migratePostgres() {
     );
   `);
 
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS students (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      full_name TEXT NOT NULL,
+      normalized_name TEXT,
+      preferred_name TEXT,
+      birth_date DATE,
+      age INTEGER,
+      gender TEXT,
+      cpf TEXT,
+      rg TEXT,
+      email TEXT,
+      phone TEXT,
+      whatsapp TEXT,
+      emergency_contact_name TEXT,
+      emergency_contact_phone TEXT,
+      address_zipcode TEXT,
+      address_street TEXT,
+      address_number TEXT,
+      address_complement TEXT,
+      address_neighborhood TEXT,
+      address_city TEXT,
+      address_state TEXT,
+      notes TEXT,
+      allergies TEXT,
+      medical_notes TEXT,
+      school_name TEXT,
+      school_grade TEXT,
+      status TEXT NOT NULL DEFAULT 'ativo',
+      source_sheet TEXT,
+      source_row_identifier TEXT,
+      source_payload_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS student_guardians (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      student_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      relation_type TEXT,
+      phone TEXT,
+      whatsapp TEXT,
+      email TEXT,
+      financial_responsible BOOLEAN NOT NULL DEFAULT FALSE,
+      pedagogical_responsible BOOLEAN NOT NULL DEFAULT FALSE,
+      receives_notifications BOOLEAN NOT NULL DEFAULT TRUE,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS academic_programs (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      language TEXT,
+      program_name TEXT NOT NULL,
+      level_name TEXT,
+      stage_name TEXT,
+      semester_label TEXT,
+      modality TEXT,
+      material_name TEXT,
+      workload_hours DOUBLE PRECISION,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS school_terms (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      name TEXT NOT NULL,
+      code TEXT NOT NULL UNIQUE,
+      start_date DATE,
+      end_date DATE,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS classes (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      code TEXT UNIQUE,
+      name TEXT NOT NULL,
+      school_term_id INTEGER,
+      academic_program_id INTEGER,
+      language TEXT,
+      modality TEXT,
+      level_name TEXT,
+      semester_label TEXT,
+      age_group TEXT,
+      capacity INTEGER,
+      min_students INTEGER,
+      status TEXT NOT NULL DEFAULT 'planejada',
+      room_name TEXT,
+      unit_name TEXT,
+      notes TEXT,
+      source_sheet TEXT,
+      source_block_ref TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS class_schedules (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      class_id INTEGER NOT NULL,
+      weekday TEXT,
+      start_time TEXT,
+      end_time TEXT,
+      timezone TEXT NOT NULL DEFAULT 'America/Sao_Paulo',
+      is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS teacher_profiles (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      user_id INTEGER,
+      display_name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL UNIQUE,
+      aliases_json TEXT,
+      specialties_json TEXT,
+      metadata_json TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS class_teachers (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      class_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      role_in_class TEXT NOT NULL DEFAULT 'teacher',
+      start_date DATE,
+      end_date DATE,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(class_id, user_id, role_in_class, start_date)
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS enrollments (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      student_id INTEGER NOT NULL,
+      academic_program_id INTEGER,
+      school_term_id INTEGER,
+      class_id INTEGER,
+      enrollment_number TEXT UNIQUE,
+      enrollment_date DATE,
+      start_date DATE,
+      end_date DATE,
+      enrollment_status TEXT NOT NULL DEFAULT 'aguardando turma',
+      contract_status TEXT,
+      payment_status TEXT,
+      pedagogical_status TEXT,
+      source_channel TEXT,
+      source_notes TEXT,
+      notes TEXT,
+      source_sheet TEXT,
+      source_row_identifier TEXT,
+      source_payload_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS class_sessions (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      class_id INTEGER NOT NULL,
+      class_schedule_id INTEGER,
+      class_date DATE NOT NULL,
+      start_time TEXT,
+      end_time TEXT,
+      session_status TEXT NOT NULL DEFAULT 'planejada',
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS attendance_records (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      enrollment_id INTEGER NOT NULL,
+      class_id INTEGER NOT NULL,
+      class_schedule_id INTEGER,
+      class_date DATE NOT NULL,
+      attendance_status TEXT NOT NULL DEFAULT 'presente',
+      notes TEXT,
+      recorded_by_user_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(enrollment_id, class_id, class_schedule_id, class_date)
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS enrollment_class_history (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      enrollment_id INTEGER NOT NULL,
+      old_class_id INTEGER,
+      new_class_id INTEGER,
+      reason TEXT,
+      changed_by_user_id INTEGER,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS enrollment_schedule_history (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      enrollment_id INTEGER NOT NULL,
+      old_class_id INTEGER,
+      new_class_id INTEGER,
+      old_schedule_snapshot_json TEXT,
+      new_schedule_snapshot_json TEXT,
+      reason TEXT,
+      changed_by_user_id INTEGER,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT
+    );
+  `);
+
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS can_access_intranet BOOLEAN NOT NULL DEFAULT FALSE;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_locale TEXT NOT NULL DEFAULT 'pt-BR';");
@@ -2280,6 +2782,28 @@ async function migratePostgres() {
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_campaign ON pedagogical_whatsapp_campaign_items(campaign_id, queue_order, send_status);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_items_group ON pedagogical_whatsapp_campaign_items(group_id, send_status, updated_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_pedagogical_whatsapp_logs_campaign ON pedagogical_whatsapp_campaign_logs(campaign_id, created_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_students_name ON students(normalized_name, status, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone, whatsapp);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_student_guardians_student ON student_guardians(student_id, financial_responsible, pedagogical_responsible);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_academic_programs_lookup ON academic_programs(language, modality, semester_label, level_name);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_school_terms_code ON school_terms(code, status);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_classes_term_program ON classes(school_term_id, academic_program_id, status);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_classes_source ON classes(source_sheet, source_block_ref);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_class_schedules_class ON class_schedules(class_id, weekday, start_time);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_name ON teacher_profiles(normalized_name, active);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_user ON teacher_profiles(user_id, active);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_class_teachers_class ON class_teachers(class_id, is_active, role_in_class);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_class_teachers_user ON class_teachers(user_id, is_active, class_id);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id, enrollment_status, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollments_class ON enrollments(class_id, enrollment_status, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollments_term ON enrollments(school_term_id, academic_program_id, updated_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollments_source ON enrollments(source_sheet, source_row_identifier);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_class_sessions_class_date ON class_sessions(class_id, class_date, session_status);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_class_sessions_schedule ON class_sessions(class_schedule_id, class_date);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_attendance_class_date ON attendance_records(class_id, class_date, attendance_status);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_attendance_enrollment_date ON attendance_records(enrollment_id, class_date, attendance_status);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollment_class_history_enrollment ON enrollment_class_history(enrollment_id, changed_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollment_schedule_history_enrollment ON enrollment_schedule_history(enrollment_id, changed_at);");
 }
 async function postgresHasData() {
   const tables = [
@@ -2299,6 +2823,10 @@ async function postgresHasData() {
     "marketing_influencer_metrics",
     "pedagogical_whatsapp_groups",
     "pedagogical_whatsapp_campaigns",
+    "students",
+    "enrollments",
+    "classes",
+    "teacher_profiles",
   ];
 
   for (const table of tables) {
@@ -2327,7 +2855,7 @@ async function importLegacySqliteIntoPostgres() {
     legacyDb = await openLegacySqlite(sqlitePath);
     const tableRows = await sqliteAllFrom(
       legacyDb,
-      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','department_submenus','intranet_announcements','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','knowledge_processing_logs','memory_entries','ai_training_events','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log','calendar_event_types','calendar_events','calendar_event_participants','calendar_event_logs','marketing_influencers','marketing_influencer_metrics','marketing_indicator_tabs','marketing_indicator_rows','pedagogical_whatsapp_groups','pedagogical_whatsapp_campaigns','pedagogical_whatsapp_campaign_items','pedagogical_whatsapp_campaign_logs','pedagogical_whatsapp_settings')"
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','department_submenus','intranet_announcements','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','knowledge_processing_logs','memory_entries','ai_training_events','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log','calendar_event_types','calendar_events','calendar_event_participants','calendar_event_logs','marketing_influencers','marketing_influencer_metrics','marketing_indicator_tabs','marketing_indicator_rows','pedagogical_whatsapp_groups','pedagogical_whatsapp_campaigns','pedagogical_whatsapp_campaign_items','pedagogical_whatsapp_campaign_logs','pedagogical_whatsapp_settings','students','student_guardians','academic_programs','school_terms','classes','class_schedules','teacher_profiles','class_teachers','enrollments','class_sessions','attendance_records','enrollment_class_history','enrollment_schedule_history')"
     );
 
     if (!Array.isArray(tableRows) || !tableRows.length) {
@@ -2384,6 +2912,19 @@ async function importLegacySqliteIntoPostgres() {
         { name: "pedagogical_whatsapp_campaign_items", pk: "id", orderBy: "id" },
         { name: "pedagogical_whatsapp_campaign_logs", pk: "id", orderBy: "id" },
         { name: "pedagogical_whatsapp_settings", pk: "id", orderBy: "id" },
+        { name: "students", pk: "id", orderBy: "id" },
+        { name: "student_guardians", pk: "id", orderBy: "id" },
+        { name: "academic_programs", pk: "id", orderBy: "id" },
+        { name: "school_terms", pk: "id", orderBy: "id" },
+        { name: "classes", pk: "id", orderBy: "id" },
+        { name: "class_schedules", pk: "id", orderBy: "id" },
+        { name: "teacher_profiles", pk: "id", orderBy: "id" },
+        { name: "class_teachers", pk: "id", orderBy: "id" },
+        { name: "enrollments", pk: "id", orderBy: "id" },
+        { name: "class_sessions", pk: "id", orderBy: "id" },
+        { name: "attendance_records", pk: "id", orderBy: "id" },
+        { name: "enrollment_class_history", pk: "id", orderBy: "id" },
+        { name: "enrollment_schedule_history", pk: "id", orderBy: "id" },
       ];
 
       const availableTables = new Set(tableRows.map((row) => row.name));
@@ -2466,12 +3007,25 @@ async function importLegacySqliteIntoPostgres() {
   await setPostgresSequence(client, "marketing_influencers", "id");
   await setPostgresSequence(client, "marketing_influencer_metrics", "id");
   await setPostgresSequence(client, "marketing_indicator_tabs", "id");
-  await setPostgresSequence(client, "marketing_indicator_rows", "id");
-  await setPostgresSequence(client, "pedagogical_whatsapp_groups", "id");
-  await setPostgresSequence(client, "pedagogical_whatsapp_campaigns", "id");
-  await setPostgresSequence(client, "pedagogical_whatsapp_campaign_items", "id");
-  await setPostgresSequence(client, "pedagogical_whatsapp_campaign_logs", "id");
-  await setPostgresSequence(client, "pedagogical_whatsapp_settings", "id");
+      await setPostgresSequence(client, "marketing_indicator_rows", "id");
+      await setPostgresSequence(client, "pedagogical_whatsapp_groups", "id");
+      await setPostgresSequence(client, "pedagogical_whatsapp_campaigns", "id");
+      await setPostgresSequence(client, "pedagogical_whatsapp_campaign_items", "id");
+      await setPostgresSequence(client, "pedagogical_whatsapp_campaign_logs", "id");
+      await setPostgresSequence(client, "pedagogical_whatsapp_settings", "id");
+      await setPostgresSequence(client, "students", "id");
+      await setPostgresSequence(client, "student_guardians", "id");
+      await setPostgresSequence(client, "academic_programs", "id");
+      await setPostgresSequence(client, "school_terms", "id");
+      await setPostgresSequence(client, "classes", "id");
+      await setPostgresSequence(client, "class_schedules", "id");
+      await setPostgresSequence(client, "teacher_profiles", "id");
+      await setPostgresSequence(client, "class_teachers", "id");
+      await setPostgresSequence(client, "enrollments", "id");
+      await setPostgresSequence(client, "class_sessions", "id");
+      await setPostgresSequence(client, "attendance_records", "id");
+      await setPostgresSequence(client, "enrollment_class_history", "id");
+      await setPostgresSequence(client, "enrollment_schedule_history", "id");
 
       await client.query("COMMIT");
       console.log("Resumo da migracao SQLite -> Postgres:", migrationSummary);

@@ -9,7 +9,7 @@
                   },
     "common":  {
                    "back":  "Voltar",
-                   "backToChat":  "Voltar ao chat",
+                   "backToChat":  "Voltar",
                    "save":  "Salvar",
                    "saveChanges":  "Salvar alterações",
                    "cancel":  "Cancelar",
@@ -36,18 +36,18 @@
                    "no":  "Não"
                },
     "chat":  {
-                 "brandSubUser":  "Assistente da escola",
+                 "brandSubUser":  "Portal corporativo",
                  "brandSubAdmin":  "Painel administrativo",
-                 "assistantName":  "Talkers IA",
+                 "assistantName":  "Talkers Intranet",
                  "intranet":  "Intranet Talkers",
-                 "newConversation":  "Nova conversa",
+                 "newConversation":  "Intranet",
                  "conversations":  "Conversas",
                  "admin":  "Admin",
                  "logout":  "Sair",
-                 "assistantKicker":  "Assistente da escola",
-                 "emptyTitle":  "Como posso ajudar hoje?",
-                 "emptySubtitle":  "Crie documentos, planilhas, imagens e áudios, consulte a base da empresa e conduza atendimentos com uma experiência mais parecida com o ChatGPT.",
-                 "placeholder":  "Envie uma mensagem para a Talkers IA",
+                 "assistantKicker":  "Portal interno",
+                 "emptyTitle":  "Intranet Talkers",
+                 "emptySubtitle":  "Acesse a intranet corporativa para consultar documentos, comunicados e rotinas internas.",
+                 "placeholder":  "Acesse a intranet",
                  "hint":  "Enter envia, Shift+Enter quebra linha",
                  "attach":  "Adicionar fotos e arquivos",
                  "recordStart":  "Gravar áudio",
@@ -92,11 +92,11 @@
               },
     "intranet":  {
                      "title":  "Intranet Talkers",
-                     "brandSub":  "Ambiente corporativo interno",
-                     "eyebrow":  "Workspace corporativo",
-                     "heroBadge":  "IA + conteúdo corporativo",
+                     "brandSub":  "Portal corporativo interno",
+                     "eyebrow":  "Portal corporativo",
+                     "heroBadge":  "Portal interno",
                      "heroTitle":  "Intranet Talkers",
-                     "heroDescription":  "Um hub interno para documentos, comunicados, atalhos e apoio da IA por departamento.",
+                     "heroDescription":  "Um hub interno para documentos, comunicados, atalhos e rotinas por departamento.",
                      "overviewEyebrow":  "Visão geral",
                      "overviewTitle":  "Panorama rápido da rotina interna",
                      "quickEyebrow":  "Acesso rápido",
@@ -219,9 +219,9 @@
                                     "departmentsTitle":  "Departamentos",
                                     "departmentsEyebrow":  "Áreas de trabalho",
                                     "documentsTitle":  "Documentos",
-                                    "documentsEyebrow":  "Base de conhecimento",
-                                    "trainingTitle":  "Treinamento IA",
-                                    "trainingEyebrow":  "Aprendizado e ingestão",
+                                    "documentsEyebrow":  "Documentos internos",
+                                    "trainingTitle":  "Treinamentos internos",
+                                    "trainingEyebrow":  "Conteúdo interno",
                                     "communicationTitle":  "Comunicação",
                                     "communicationEyebrow":  "Avisos e comunicados",
                                     "salesEyebrow":  "Operação comercial"
@@ -434,14 +434,14 @@
                  },
     "admin":  {
                   "title":  "Admin",
-                  "subtitle":  "Usuários, permissões e base de conhecimento",
+                  "subtitle":  "Usuários, permissões e gestão da intranet",
                   "tabs":  {
                                "users":  "Usuários",
                                "departments":  "Departamentos",
-                               "knowledge":  "Base de conhecimento",
-                               "training":  "Treinamento da IA",
+                               "knowledge":  "Documentos",
+                               "training":  "Treinamentos",
                                "logs":  "Logs do sistema",
-                               "cockpit":  "Cockpit"
+                               "cockpit":  "Resumo"
                            }
               },
     "moderation":  {

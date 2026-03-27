@@ -284,13 +284,6 @@ function renderLogs() {
       <div class="small muted">${escapeHtml(item.detail_text || '')}</div>
     </article>
   `);
-  renderLogList('trainingLogsList', logs.training_logs || [], (item) => `
-    <article class="system-log-item">
-      <strong>${escapeHtml(item.training_title || item.event_type || '-')}</strong>
-      <div class="small muted">${escapeHtml(item.actor_name || 'Sistema')} · ${escapeHtml(item.created_at || '')}</div>
-      <div class="small muted">${escapeHtml(item.event_notes || item.detail_text || '')}</div>
-    </article>
-  `);
 }
 
 function renderListPane() {

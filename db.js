@@ -1108,7 +1108,11 @@ async function migrateSqlite() {
       dedupe_hash TEXT NOT NULL UNIQUE,
       row_hash TEXT,
       student_name TEXT NOT NULL,
+      phone TEXT,
       course_name TEXT,
+      level_name TEXT,
+      teacher_name TEXT,
+      attendant_name TEXT,
       sale_month TEXT,
       sale_date TEXT,
       semester_label TEXT,
@@ -1125,6 +1129,8 @@ async function migrateSqlite() {
       media_source TEXT,
       profession TEXT,
       indication TEXT,
+      feedback TEXT,
+      post_sale_rating TEXT,
       source_payload_json TEXT,
       operational_status TEXT NOT NULL DEFAULT 'Novo',
       follow_up_notes TEXT,
@@ -1138,6 +1144,21 @@ async function migrateSqlite() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  const salesRecordColumns = await allSqlite("PRAGMA table_info(sales_records)");
+  const missingSalesRecordColumns = [
+    ["phone", "TEXT"],
+    ["level_name", "TEXT"],
+    ["teacher_name", "TEXT"],
+    ["attendant_name", "TEXT"],
+    ["feedback", "TEXT"],
+    ["post_sale_rating", "TEXT"],
+  ];
+  for (const [columnName, columnType] of missingSalesRecordColumns) {
+    if (!salesRecordColumns.some((column) => column.name === columnName)) {
+      await execSqlite(`ALTER TABLE sales_records ADD COLUMN ${columnName} ${columnType};`);
+    }
+  }
 
   await execSqlite(`
     CREATE TABLE IF NOT EXISTS entity_change_log (
@@ -1807,7 +1828,11 @@ async function migratePostgres() {
       dedupe_hash TEXT NOT NULL UNIQUE,
       row_hash TEXT,
       student_name TEXT NOT NULL,
+      phone TEXT,
       course_name TEXT,
+      level_name TEXT,
+      teacher_name TEXT,
+      attendant_name TEXT,
       sale_month TEXT,
       sale_date TEXT,
       semester_label TEXT,
@@ -1824,6 +1849,8 @@ async function migratePostgres() {
       media_source TEXT,
       profession TEXT,
       indication TEXT,
+      feedback TEXT,
+      post_sale_rating TEXT,
       source_payload_json TEXT,
       operational_status TEXT NOT NULL DEFAULT 'Novo',
       follow_up_notes TEXT,
@@ -1837,6 +1864,12 @@ async function migratePostgres() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS phone TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS level_name TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS teacher_name TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS attendant_name TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS feedback TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS post_sale_rating TEXT;");
 
   await pgPool.query(`
     CREATE TABLE IF NOT EXISTS entity_change_log (

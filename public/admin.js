@@ -6,7 +6,10 @@ const state = {
   submenus: [],
   announcements: [],
   logs: null,
+  iconOptions: [],
 };
+
+const DEFAULT_SUBMENU_ICON = 'folder';
 
 function el(id) {
   return document.getElementById(id);
@@ -104,6 +107,32 @@ function renderDepartmentOptions() {
       </label>
     `).join('');
   }
+  renderSubmenuIconOptions(el('submenuIcon')?.value || DEFAULT_SUBMENU_ICON);
+}
+
+function getSubmenuIconOptions() {
+  return Array.isArray(state.iconOptions) && state.iconOptions.length
+    ? state.iconOptions
+    : [DEFAULT_SUBMENU_ICON];
+}
+
+function renderSubmenuIconOptions(selectedValue = DEFAULT_SUBMENU_ICON) {
+  const select = el('submenuIcon');
+  if (!select) return;
+  const normalizedSelected = String(selectedValue || '').trim().toLowerCase();
+  const baseOptions = getSubmenuIconOptions();
+  const options = normalizedSelected && !baseOptions.includes(normalizedSelected)
+    ? [normalizedSelected, ...baseOptions]
+    : [...baseOptions];
+  select.innerHTML = options
+    .map((icon) => {
+      const isLegacy = icon === normalizedSelected && !baseOptions.includes(icon);
+      return `<option value="${escapeHtml(icon)}">${escapeHtml(icon)}${isLegacy ? ' (legado)' : ''}</option>`;
+    })
+    .join('');
+  select.value = normalizedSelected && options.includes(normalizedSelected)
+    ? normalizedSelected
+    : (baseOptions.includes(DEFAULT_SUBMENU_ICON) ? DEFAULT_SUBMENU_ICON : (baseOptions[0] || DEFAULT_SUBMENU_ICON));
 }
 
 function selectedUserDepartments() {
@@ -141,8 +170,9 @@ function resetSubmenuForm() {
   el('submenuFormTitle').textContent = 'Criar submenu de departamento';
   el('btnSaveSubmenu').textContent = 'Salvar submenu';
   el('btnCancelSubmenuEdit').style.display = 'none';
-  ['submenuTitle', 'submenuSlug', 'submenuViewKey', 'submenuDescription', 'submenuIcon'].forEach((id) => { el(id).value = ''; });
+  ['submenuTitle', 'submenuSlug', 'submenuViewKey', 'submenuDescription'].forEach((id) => { el(id).value = ''; });
   el('submenuDepartmentId').value = '';
+  renderSubmenuIconOptions(DEFAULT_SUBMENU_ICON);
   el('submenuActive').checked = true;
 }
 
@@ -295,18 +325,22 @@ function renderListPane() {
 
 async function loadAdminData() {
   setStatus('Atualizando dados do admin...');
-  const [usersData, departmentsData, submenusData, announcementsData, logsData] = await Promise.all([
+  const [usersData, departmentsData, submenusData, announcementsData, logsData, iconsData] = await Promise.all([
     api('/api/admin/users'),
     api('/api/admin/departments'),
     api('/api/admin/department-submenus'),
     api('/api/admin/intranet/announcements'),
     api('/api/admin/system-logs'),
+    api('/api/admin/icon-options').catch(() => ({ icons: [] })),
   ]);
   state.users = usersData.users || [];
   state.departments = departmentsData.departments || [];
   state.submenus = submenusData.submenus || [];
   state.announcements = announcementsData.announcements || [];
   state.logs = logsData || null;
+  state.iconOptions = Array.isArray(iconsData?.icons)
+    ? iconsData.icons.map((icon) => String(icon || '').trim().toLowerCase()).filter(Boolean)
+    : [];
   renderDepartmentOptions();
   renderListPane();
   setStatus('Dados carregados com sucesso.');
@@ -360,7 +394,7 @@ function fillSubmenuForm(submenuId) {
   el('submenuSlug').value = submenu.slug || '';
   el('submenuViewKey').value = submenu.view_key || '';
   el('submenuDescription').value = submenu.description || '';
-  el('submenuIcon').value = submenu.icon || '';
+  renderSubmenuIconOptions(submenu.icon || DEFAULT_SUBMENU_ICON);
   el('submenuActive').checked = Boolean(submenu.is_active);
   setActiveTab('departments');
 }
@@ -441,7 +475,7 @@ async function saveSubmenu() {
     slug: el('submenuSlug').value.trim() || slugify(el('submenuTitle').value),
     view_key: el('submenuViewKey').value.trim() || slugify(el('submenuTitle').value),
     description: el('submenuDescription').value.trim(),
-    icon: el('submenuIcon').value.trim() || 'layers',
+    icon: el('submenuIcon').value.trim() || DEFAULT_SUBMENU_ICON,
     is_active: el('submenuActive').checked,
   };
   if (!payload.department_id || !payload.title) {

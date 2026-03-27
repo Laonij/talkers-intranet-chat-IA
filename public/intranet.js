@@ -1,6 +1,7 @@
 ﻿const el = (id) => document.getElementById(id);
 
 const ICONS = {
+  home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
   graduation: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 9 9-4 9 4-9 4-9-4Z"/><path d="M7 10.8v3.7c0 .7 2.2 2.5 5 2.5s5-1.8 5-2.5v-3.7"/><path d="M21 10v4"/></svg>',
   briefcase: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6V4h6v2"/><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 12h18"/></svg>',
   'book-open': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19a2 2 0 0 1 2-2h14"/><path d="M6 3h14v18H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M12 7h4"/></svg>',
@@ -21,6 +22,56 @@ const ICONS = {
   insight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V18h8v-3.3A7 7 0 0 0 12 2Z"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>',
   general: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>',
+};
+
+const ICON_ALIASES = {
+  user: 'users',
+  settings: 'layers',
+  folder: 'layers',
+  file: 'document',
+  'file-text': 'document',
+  clock: 'calendar',
+  search: 'general',
+  bell: 'message',
+  mail: 'message',
+  'message-square': 'message',
+  phone: 'message',
+  lock: 'shield',
+  'credit-card': 'wallet',
+  'shopping-cart': 'briefcase',
+  'chart-bar': 'chart',
+  'chart-pie': 'chart',
+  database: 'layers',
+  server: 'workspace',
+  globe: 'general',
+  map: 'general',
+  'map-pin': 'target',
+  camera: 'general',
+  image: 'document',
+  video: 'workspace',
+  music: 'general',
+  play: 'general',
+  pause: 'general',
+  upload: 'general',
+  download: 'general',
+  trash: 'general',
+  edit: 'general',
+  plus: 'general',
+  minus: 'general',
+  check: 'general',
+  x: 'general',
+  star: 'sparkles',
+  heart: 'sparkles',
+  bookmark: 'document',
+  tag: 'briefcase',
+  flag: 'target',
+  award: 'sparkles',
+  building: 'briefcase',
+  school: 'graduation',
+  book: 'book-open',
+  clipboard: 'document',
+  list: 'general',
+  menu: 'general',
 };
 
 const i18n = () => window.TalkersI18n;
@@ -48,6 +99,9 @@ let salesState = {
   closers: [],
   selectedRecordId: null,
   canEditAll: false,
+  statusOptions: [],
+  ratingOptions: [],
+  restrictedScope: false,
 };
 let trainingState = null;
 let calendarState = {
@@ -131,7 +185,8 @@ let currentViewState = { key: 'home', departmentSlug: '', submenuSlug: '' };
 let expandedDepartmentSlugs = new Set();
 
 function renderIcon(name) {
-  return ICONS[name] || ICONS.general;
+  const normalizedName = String(name || '').trim().toLowerCase();
+  return ICONS[normalizedName] || ICONS[ICON_ALIASES[normalizedName]] || ICONS.general;
 }
 
 async function api(path, opts = {}) {
@@ -538,14 +593,43 @@ function getVisibleDepartments(intranet) {
   return sortAlphabetically(intranet?.departments || [], (item) => item?.name || item?.slug || '');
 }
 
+function getIntranetPermissionHints(intranet) {
+  return intranet?.permissions || {};
+}
+
 function getGlobalNavigationItems(intranet) {
+  const allowedGlobalViews = new Set((getIntranetPermissionHints(intranet).allowed_global_views || []).map((item) => String(item || '').trim()).filter(Boolean));
   const items = [
     { key: 'home', label: t('intranet.nav.home'), icon: 'workspace' },
     { key: 'dashboard', label: t('intranet.nav.dashboard', {}, 'Dashboard'), icon: 'insight' },
     { key: 'calendar', label: t('intranet.nav.calendar'), icon: 'calendar' },
     { key: 'sales', label: t('intranet.nav.sales'), icon: 'target', hidden: !Boolean(salesState?.enabled) },
   ];
-  return items.filter((item) => !item.hidden);
+  return items.filter((item) => !item.hidden && (!allowedGlobalViews.size || allowedGlobalViews.has(item.key)));
+}
+
+function getDefaultRoute(intranet) {
+  const globalItems = getGlobalNavigationItems(intranet);
+  if (globalItems.some((item) => item.key === 'home')) {
+    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+  }
+  if (globalItems.length) {
+    return { key: globalItems[0].key, departmentSlug: '', submenuSlug: '' };
+  }
+  const department = getVisibleDepartments(intranet)[0] || null;
+  if (!department) return { key: 'home', departmentSlug: '', submenuSlug: '' };
+  const submenu = (department.submenus || [])[0] || null;
+  if (String(submenu?.view_key || '').trim() === 'sales-post-sale') {
+    return { key: 'sales', departmentSlug: '', submenuSlug: '' };
+  }
+  return { key: 'department', departmentSlug: department.slug || '', submenuSlug: submenu?.slug || '' };
+}
+
+function resolveDepartmentSubmenuRoute(department, submenu) {
+  if (String(submenu?.view_key || '').trim() === 'sales-post-sale') {
+    return { key: 'sales', departmentSlug: '', submenuSlug: '' };
+  }
+  return { key: 'department', departmentSlug: department?.slug || '', submenuSlug: submenu?.slug || '' };
 }
 
 function getDepartmentRouteMeta(intranet, departmentSlug = '', submenuSlug = '') {
@@ -579,6 +663,7 @@ function getRouteMeta(route = {}, intranet) {
 
 function normalizeViewState(route = {}, intranet) {
   const visibleDepartments = getVisibleDepartments(intranet);
+  const defaultRoute = getDefaultRoute(intranet);
   const normalized = {
     key: String(route.key || 'home'),
     departmentSlug: String(route.departmentSlug || ''),
@@ -589,7 +674,7 @@ function normalizeViewState(route = {}, intranet) {
   const internalKeys = new Set();
   if (normalized.key === 'department') {
     const department = visibleDepartments.find((item) => item.slug === normalized.departmentSlug);
-    if (!department) return { key: 'home', departmentSlug: '', submenuSlug: '' };
+    if (!department) return defaultRoute;
     const submenu = normalized.submenuSlug
       ? (department.submenus || []).find((item) => item.slug === normalized.submenuSlug)
       : null;
@@ -601,11 +686,11 @@ function normalizeViewState(route = {}, intranet) {
   }
 
   if (normalized.key === 'sales' && !salesState.enabled) {
-    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+    return defaultRoute;
   }
 
   if (!globalKeys.has(normalized.key) && !internalKeys.has(normalized.key)) {
-    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+    return defaultRoute;
   }
 
   return normalized;
@@ -616,7 +701,7 @@ function applyIntranetSnapshot(snapshot, options = {}) {
   const preserveRoute = options.preserveRoute !== false;
   const nextRoute = preserveRoute
     ? normalizeViewState(options.route || currentViewState, snapshot.intranet)
-    : normalizeViewState({ key: 'home', departmentSlug: '', submenuSlug: '' }, snapshot.intranet);
+    : getDefaultRoute(snapshot.intranet);
 
   bootstrapData = snapshot;
   allModuleItems = snapshot.intranet.modules || [];
@@ -836,7 +921,10 @@ function renderSidebar(user, intranet) {
 
         if (isExpanded) {
           toggleDepartmentExpanded(slug, false);
-          if (isCurrentDepartment) setActiveView('home');
+          if (isCurrentDepartment) {
+            const fallbackRoute = getDefaultRoute(bootstrapData?.intranet || {});
+            setActiveView(fallbackRoute.key, fallbackRoute);
+          }
           return;
         }
 
@@ -862,7 +950,8 @@ function renderSidebar(user, intranet) {
           `;
           button.onclick = () => {
             toggleDepartmentExpanded(department.slug || '', true);
-            setActiveView('department', { departmentSlug: department.slug || '', submenuSlug: submenu.slug || '' });
+            const route = resolveDepartmentSubmenuRoute(department, submenu);
+            setActiveView(route.key, route);
           };
           submenuList.appendChild(button);
         });
@@ -2559,7 +2648,10 @@ function renderDepartmentWorkspace(intranet) {
       card.type = 'button';
       card.className = `intranet-quick-card intranet-submenu-card${currentViewState.submenuSlug === item.slug ? ' is-active' : ''}`;
       card.innerHTML = `<div class="intranet-quick-title">${escapeHtml(item.title)}</div>`;
-      card.onclick = () => setActiveView('department', { departmentSlug: department.slug, submenuSlug: item.slug || '' });
+      card.onclick = () => {
+        const route = resolveDepartmentSubmenuRoute(department, item);
+        setActiveView(route.key, route);
+      };
       submenusWrap.appendChild(card);
     });
   }
@@ -3957,6 +4049,38 @@ function setSalesSectionVisible(isVisible) {
   if (section) section.hidden = !isVisible;
 }
 
+function getSalesTodayKey() {
+  return salesState.summary?.today_key || new Date().toISOString().slice(0, 10);
+}
+
+function isSalesRecordDueToday(record) {
+  return Boolean(record?.next_action_date) && String(record.next_action_date).slice(0, 10) === getSalesTodayKey();
+}
+
+function isSalesRecordOverdue(record) {
+  return Boolean(record?.next_action_date)
+    && String(record.next_action_date).slice(0, 10) < getSalesTodayKey()
+    && String(record?.operational_status || '').trim().toLowerCase() !== 'realizado';
+}
+
+function buildSalesStatusChipClass(status = '') {
+  const safe = String(status || '').trim().toLowerCase();
+  if (safe === 'realizado') return 'is-success';
+  if (safe === 'sem retorno') return 'is-danger';
+  if (safe === 'reagendado') return 'is-warning';
+  if (safe === 'em andamento') return 'is-info';
+  if (safe === 'pendente') return 'is-warning';
+  return 'is-neutral';
+}
+
+function buildSalesRatingChipClass(rating = '') {
+  const safe = String(rating || '').trim().toLowerCase();
+  if (safe === 'otimo') return 'is-success';
+  if (safe === 'bom') return 'is-warning';
+  if (safe === 'ruim') return 'is-danger';
+  return 'is-neutral';
+}
+
 function renderSalesSummary(sales) {
   const summaryWrap = el('salesSummaryCards');
   const closerWrap = el('salesCloserCards');
@@ -3968,15 +4092,16 @@ function renderSalesSummary(sales) {
     return;
   }
 
-  const statusEntries = Object.entries(sales.summary?.statuses || {});
   const cards = [
-    { label: 'Matrículas', value: Number(sales.summary?.total || 0) },
-    { label: 'Closers ativas', value: Array.isArray(sales.closers) ? sales.closers.length : 0 },
-    { label: 'Escopo atual', value: sales.can_view_all ? 'Geral' : 'Minha carteira' },
+    { label: 'Total', value: Number(sales.summary?.total || 0) },
+    { label: 'Pendentes', value: Number(sales.summary?.pending_total || 0) },
+    { label: 'Realizados', value: Number(sales.summary?.realized_total || 0) },
+    { label: 'Ação hoje', value: Number(sales.summary?.action_today_total || 0) },
+    { label: 'Atrasados', value: Number(sales.summary?.overdue_total || 0) },
+    { label: 'Sem observação', value: Number(sales.summary?.no_observation_total || 0) },
+    { label: 'Ótimos', value: Number(sales.summary?.ratings?.otimo || 0) },
+    { label: 'Ruins', value: Number(sales.summary?.ratings?.ruim || 0) },
   ];
-  statusEntries.slice(0, 3).forEach(([status, total]) => {
-    cards.push({ label: status, value: Number(total || 0) });
-  });
 
   cards.forEach((card) => {
     const item = document.createElement('article');
@@ -3989,7 +4114,11 @@ function renderSalesSummary(sales) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'intranet-sales-closer';
-    card.innerHTML = `<strong>${escapeHtml(closer.closer_name || 'Sem closer')}</strong><span>${Number(closer.total || 0)} matricula(s)</span>`;
+    card.innerHTML = `
+      <strong>${escapeHtml(closer.closer_name || 'Sem closer')}</strong>
+      <span>${Number(closer.total || 0)} registro(s) · ${Number(closer.realized_total || 0)} realizado(s)</span>
+      <span>${Number(closer.overdue_total || 0)} atrasado(s)</span>
+    `;
     card.onclick = () => {
       el('salesCloserFilter').value = closer.closer_id ? String(closer.closer_id) : '';
       fetchSalesRecords();
@@ -4001,8 +4130,12 @@ function renderSalesSummary(sales) {
 function renderSalesFilterOptions(sales) {
   const closerSelect = el('salesCloserFilter');
   const statusSelect = el('salesStatusFilter');
+  const languageSelect = el('salesLanguageFilter');
+  const modalitySelect = el('salesModalityFilter');
   const previousCloser = closerSelect.value;
   const previousStatus = statusSelect.value;
+  const previousLanguage = languageSelect?.value || '';
+  const previousModality = modalitySelect?.value || '';
 
   closerSelect.innerHTML = '<option value="">Todas</option>';
   (sales.closers || []).forEach((closer) => {
@@ -4016,14 +4149,43 @@ function renderSalesFilterOptions(sales) {
   }
 
   statusSelect.innerHTML = '<option value="">Todos</option>';
-  Object.entries(sales.summary?.statuses || {}).forEach(([status, total]) => {
+  (sales.status_options || Object.keys(sales.summary?.statuses || {})).forEach((status) => {
     const option = document.createElement('option');
     option.value = status;
+    const total = Number((sales.summary?.statuses || {})[status] || 0);
     option.textContent = `${status} (${total})`;
     statusSelect.appendChild(option);
   });
   if (Array.from(statusSelect.options).some((option) => option.value === previousStatus)) {
     statusSelect.value = previousStatus;
+  }
+
+  if (languageSelect) {
+    const languages = Array.from(new Set((sales.records || []).map((item) => String(item.language || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, currentLocale()));
+    languageSelect.innerHTML = '<option value="">Todos</option>';
+    languages.forEach((language) => {
+      const option = document.createElement('option');
+      option.value = language;
+      option.textContent = language;
+      languageSelect.appendChild(option);
+    });
+    if (Array.from(languageSelect.options).some((option) => option.value === previousLanguage)) {
+      languageSelect.value = previousLanguage;
+    }
+  }
+
+  if (modalitySelect) {
+    const modalities = Array.from(new Set((sales.records || []).map((item) => String(item.modality || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, currentLocale()));
+    modalitySelect.innerHTML = '<option value="">Todas</option>';
+    modalities.forEach((modality) => {
+      const option = document.createElement('option');
+      option.value = modality;
+      option.textContent = modality;
+      modalitySelect.appendChild(option);
+    });
+    if (Array.from(modalitySelect.options).some((option) => option.value === previousModality)) {
+      modalitySelect.value = previousModality;
+    }
   }
 }
 
@@ -4040,8 +4202,8 @@ function renderSalesDetail(record, history = []) {
   const form = el('salesDetailForm');
 
   if (!record) {
-    title.textContent = 'Selecione uma matrícula';
-    meta.innerHTML = '<div class="intranet-empty-card">Clique em um registro para ver detalhes, histórico e editar os campos permitidos.</div>';
+    title.textContent = 'Selecione um registro';
+    meta.innerHTML = '<div class="intranet-empty-card">Clique em um pós-venda para ver detalhes, histórico e editar os campos permitidos.</div>';
     historyWrap.innerHTML = '';
     form.reset();
     Array.from(form.elements).forEach((field) => {
@@ -4051,19 +4213,25 @@ function renderSalesDetail(record, history = []) {
     return;
   }
 
-  title.textContent = record.student_name || 'Matrícula';
+  title.textContent = record.student_name || 'Pós-venda';
   meta.innerHTML = [
-    ['Curso', record.course_name || '-'],
+    ['Telefone', record.phone || '-'],
+    ['Curso / nível', record.level_name || record.course_name || '-'],
+    ['Professor', record.teacher_name || '-'],
     ['Closer', record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer'],
+    ['Semestre', record.semester_label || '-'],
     ['Data', record.sale_date || '-'],
     ['Status', record.operational_status || 'Novo'],
     ['Origem', record.media_source || record.source_workbook || '-'],
     ['Idioma', record.language || '-'],
+    ['Próxima ação', record.next_action || '-'],
   ].map(([label, value]) => `<div class="intranet-sales-meta-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`).join('');
 
   el('salesOperationalStatus').value = record.operational_status || '';
+  el('salesPostSaleRating').value = record.post_sale_rating || '';
   el('salesNextAction').value = record.next_action || '';
   el('salesNextActionDate').value = record.next_action_date || '';
+  el('salesFeedback').value = record.feedback || '';
   el('salesFollowUpNotes').value = record.follow_up_notes || '';
   el('salesObservations').value = record.observations || '';
 
@@ -4093,28 +4261,40 @@ function renderSalesRecordsGrid() {
   wrap.innerHTML = '';
 
   if (!salesState.records.length) {
-    wrap.innerHTML = '<div class="intranet-empty-card">Nenhuma matricula encontrada para os filtros atuais.</div>';
+    wrap.innerHTML = '<div class="intranet-empty-card">Nenhum registro de pós-venda encontrado para os filtros atuais.</div>';
     renderSalesDetail(null, []);
     return;
   }
 
   salesState.records.forEach((record) => {
     const card = document.createElement('article');
-    card.className = 'intranet-sales-record';
+    card.className = `intranet-sales-record${isSalesRecordOverdue(record) ? ' is-urgent' : ''}${isSalesRecordDueToday(record) ? ' is-today' : ''}`;
     if (Number(record.id) === Number(salesState.selectedRecordId || 0)) {
       card.style.borderColor = '#bbf7d0';
       card.style.boxShadow = '0 18px 32px rgba(15,23,42,.08)';
     }
+    const feedbackPreview = String(record.feedback || record.follow_up_notes || record.observations || '').trim();
     card.innerHTML = `
       <div class="intranet-sales-record-head">
         <div>
           <h4>${escapeHtml(record.student_name || 'Sem nome')}</h4>
-          <div class="small muted">${escapeHtml(record.course_name || '-')}</div>
+          <div class="small muted">${escapeHtml(record.level_name || record.course_name || '-')}</div>
         </div>
-        <span class="intranet-chip">${escapeHtml(record.operational_status || 'Novo')}</span>
+        <span class="intranet-chip ${buildSalesStatusChipClass(record.operational_status)}">${escapeHtml(record.operational_status || 'Novo')}</span>
       </div>
-      <div class="small muted">${escapeHtml(record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer')}</div>
-      <div class="small muted">${escapeHtml(record.sale_date || '-')} - ${escapeHtml(record.media_source || record.source_workbook || '-')}</div>
+      <div class="intranet-sales-record-grid">
+        <div><strong>Telefone</strong><span>${escapeHtml(record.phone || '-')}</span></div>
+        <div><strong>Idioma</strong><span>${escapeHtml(record.language || '-')}</span></div>
+        <div><strong>Semestre</strong><span>${escapeHtml(record.semester_label || '-')}</span></div>
+        <div><strong>Closer</strong><span>${escapeHtml(record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer')}</span></div>
+        <div><strong>Próxima ação</strong><span>${escapeHtml(record.next_action || '-')}</span></div>
+        <div><strong>Data</strong><span>${escapeHtml(record.next_action_date || record.sale_date || '-')}</span></div>
+      </div>
+      <div class="intranet-sales-record-feedback">${escapeHtml(feedbackPreview || 'Sem feedback registrado')}</div>
+      <div class="intranet-sales-record-foot">
+        <span class="intranet-chip ${buildSalesRatingChipClass(record.post_sale_rating)}">${escapeHtml(record.post_sale_rating || 'sem avaliação')}</span>
+        <span class="small muted">${escapeHtml(record.updated_at ? `Atualizado em ${formatDate(record.updated_at)}` : 'Sem atualização recente')}</span>
+      </div>
     `;
     card.onclick = () => selectSalesRecord(record.id);
     wrap.appendChild(card);
@@ -4136,14 +4316,25 @@ async function fetchSalesRecords() {
   const params = new URLSearchParams();
   const closerId = el('salesCloserFilter').value;
   const status = el('salesStatusFilter').value;
+  const language = el('salesLanguageFilter')?.value || '';
+  const modality = el('salesModalityFilter')?.value || '';
   const search = el('salesSearchInput').value.trim();
   if (closerId) params.set('closer_id', closerId);
   if (status) params.set('status', status);
+  if (language) params.set('language', language);
+  if (modality) params.set('modality', modality);
   if (search) params.set('search', search);
   params.set('limit', '80');
 
-  const { records } = await api(`/api/intranet/sales/records?${params.toString()}`);
+  const { records, summary } = await api(`/api/intranet/sales/records?${params.toString()}`);
+  salesState.summary = summary || salesState.summary;
   salesState.records = records || [];
+  renderSalesSummary({
+    enabled: salesState.enabled,
+    can_view_all: salesState.canEditAll,
+    closers: salesState.closers,
+    summary: salesState.summary,
+  });
   if (!salesState.records.some((item) => Number(item.id) === Number(salesState.selectedRecordId || 0))) {
     salesState.selectedRecordId = salesState.records[0]?.id || null;
   }
@@ -4162,6 +4353,9 @@ function hydrateSalesWorkspace(intranet) {
     closers: Array.isArray(sales.closers) ? sales.closers : [],
     selectedRecordId: sales.records?.[0]?.id || null,
     canEditAll: Boolean(sales.can_edit_all),
+    statusOptions: Array.isArray(sales.status_options) ? sales.status_options : [],
+    ratingOptions: Array.isArray(sales.rating_options) ? sales.rating_options : [],
+    restrictedScope: Boolean(sales.restricted_scope),
   };
 
   setSalesSectionVisible(salesState.enabled);
@@ -4566,6 +4760,8 @@ async function init() {
   el('btnRefreshSales')?.addEventListener('click', fetchSalesRecords);
   el('salesCloserFilter')?.addEventListener('change', fetchSalesRecords);
   el('salesStatusFilter')?.addEventListener('change', fetchSalesRecords);
+  el('salesLanguageFilter')?.addEventListener('change', fetchSalesRecords);
+  el('salesModalityFilter')?.addEventListener('change', fetchSalesRecords);
   el('salesSearchInput')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -4577,8 +4773,10 @@ async function init() {
     if (!salesState.selectedRecordId) return;
     const payload = {
       operational_status: el('salesOperationalStatus').value.trim(),
+      post_sale_rating: el('salesPostSaleRating').value.trim(),
       next_action: el('salesNextAction').value.trim(),
       next_action_date: el('salesNextActionDate').value,
+      feedback: el('salesFeedback').value.trim(),
       follow_up_notes: el('salesFollowUpNotes').value.trim(),
       observations: el('salesObservations').value.trim(),
     };

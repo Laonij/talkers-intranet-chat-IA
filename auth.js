@@ -25,6 +25,10 @@ function signSession(user, jwtSecret) {
       departments: Array.isArray(user.departments) ? user.departments : [],
       can_access_intranet: Boolean(user.can_access_intranet),
       preferred_locale: user.preferred_locale || "pt-BR",
+      additional_permissions: user.additional_permissions || {},
+      additional_permissions_json: user.additional_permissions_json || "",
+      job_title: user.job_title || "",
+      unit_name: user.unit_name || "",
     },
     safeSecret,
     {

@@ -402,8 +402,8 @@
       <section class="intranet-section sales-section intranet-view" id="sales" data-view="sales" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
-            <div class="intranet-section-eyebrow">Comercial e pós-venda</div>
-            <h3 class="intranet-section-title">Operação de matrículas por closer</h3>
+            <div class="intranet-section-eyebrow">Comercial &gt; Pós-venda</div>
+            <h3 class="intranet-section-title">Operação de pós-venda por closer</h3>
           </div>
         </div>
 
@@ -424,8 +424,20 @@
             </select>
           </div>
           <div>
+            <label for="salesLanguageFilter">Idioma</label>
+            <select id="salesLanguageFilter">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label for="salesModalityFilter">Modalidade</label>
+            <select id="salesModalityFilter">
+              <option value="">Todas</option>
+            </select>
+          </div>
+          <div>
             <label for="salesSearchInput">Busca</label>
-            <input id="salesSearchInput" class="intranet-search" placeholder="Aluno, curso, closer ou midia" />
+            <input id="salesSearchInput" class="intranet-search" placeholder="Nome, telefone, idioma, closer ou mídia" />
           </div>
           <div class="intranet-topbar-actions">
             <button class="btn" id="btnRefreshSales" type="button">Atualizar</button>
@@ -437,31 +449,52 @@
           <aside class="intranet-sales-detail" id="salesDetailPanel">
             <div class="intranet-sales-detail-head">
               <div>
-                <div class="intranet-section-eyebrow">Histórico do registro</div>
-                <h4 id="salesDetailTitle">Selecione uma matrícula</h4>
+                <div class="intranet-section-eyebrow">Detalhe do pós-venda</div>
+                <h4 id="salesDetailTitle">Selecione um registro</h4>
               </div>
             </div>
             <div class="intranet-sales-meta" id="salesDetailMeta"></div>
             <form class="intranet-sales-detail-form" id="salesDetailForm">
               <div>
                 <label for="salesOperationalStatus">Status operacional</label>
-                <input id="salesOperationalStatus" placeholder="Ex.: Em andamento" />
+                <select id="salesOperationalStatus">
+                  <option value="">Selecione</option>
+                  <option value="Novo">Novo</option>
+                  <option value="Pendente">Pendente</option>
+                  <option value="Em andamento">Em andamento</option>
+                  <option value="Realizado">Realizado</option>
+                  <option value="Sem retorno">Sem retorno</option>
+                  <option value="Reagendado">Reagendado</option>
+                </select>
               </div>
               <div>
-                <label for="salesNextAction">Proxima acao</label>
-                <input id="salesNextAction" placeholder="Ex.: Ligar amanha" />
+                <label for="salesPostSaleRating">Avaliação qualitativa</label>
+                <select id="salesPostSaleRating">
+                  <option value="">Sem avaliação</option>
+                  <option value="ruim">Ruim</option>
+                  <option value="bom">Bom</option>
+                  <option value="otimo">Ótimo</option>
+                </select>
+              </div>
+              <div>
+                <label for="salesNextAction">Próxima ação</label>
+                <input id="salesNextAction" placeholder="Ex.: Ligar amanhã" />
               </div>
               <div>
                 <label for="salesNextActionDate">Data da próxima ação</label>
                 <input id="salesNextActionDate" type="date" />
               </div>
               <div>
+                <label for="salesFeedback">Feedback do pós-venda</label>
+                <textarea id="salesFeedback" placeholder="Registre o retorno, a percepção do aluno ou o resultado do contato"></textarea>
+              </div>
+              <div>
                 <label for="salesFollowUpNotes">Notas de follow-up</label>
-                <textarea id="salesFollowUpNotes" placeholder="Registre o andamento comercial ou de pós-venda"></textarea>
+                <textarea id="salesFollowUpNotes" placeholder="Registre o andamento operacional do caso"></textarea>
               </div>
               <div>
                 <label for="salesObservations">Observações</label>
-                <textarea id="salesObservations" placeholder="Informações complementares do caso"></textarea>
+                <textarea id="salesObservations" placeholder="Informações complementares, impedimentos ou contexto importante"></textarea>
               </div>
               <div class="intranet-topbar-actions">
                 <button class="btn" id="btnSaveSalesRecord" type="submit">Salvar atualização</button>

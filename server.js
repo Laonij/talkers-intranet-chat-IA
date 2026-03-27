@@ -73,6 +73,7 @@ const {
   extractCloserSheetNames,
   normalizeSalesText,
   parseMatriculasWorkbook,
+  parsePostSaleWorkbook,
   readWorkbookFromFile,
 } = require("./lib/sales");
 const {
@@ -124,7 +125,13 @@ const FIXED_DEPARTMENT_BY_EMAIL = {
   'laura@talkers.com': ['Administrativo'],
 };
 const SALES_VIEW_DEPARTMENTS = new Set(['comercial', 'gestao', 'administrativo', 'financeiro', 'atendimento']);
-const SALES_EDITABLE_FIELDS = ['operational_status', 'follow_up_notes', 'next_action', 'next_action_date', 'observations'];
+const SALES_EDITABLE_FIELDS = ['operational_status', 'follow_up_notes', 'next_action', 'next_action_date', 'observations', 'feedback', 'post_sale_rating'];
+const SALES_OPERATIONAL_STATUS_OPTIONS = ['Novo', 'Pendente', 'Em andamento', 'Realizado', 'Sem retorno', 'Reagendado'];
+const SALES_PENDING_STATUS_SET = new Set(['novo', 'pendente', 'em andamento', 'reagendado']);
+const SALES_REALIZED_STATUS_SET = new Set(['realizado']);
+const POST_SALE_RATING_OPTIONS = ['ruim', 'bom', 'otimo'];
+const POST_SALE_SUBMENU_VIEW_KEY = 'sales-post-sale';
+const DEFAULT_POST_SALE_CLOSER_NAMES = ['Bruna Rafaela', 'Bruna Gonçalves', 'Cristiana'];
 const SALES_SOURCE_KEY = 'matriculas-novas';
 const MARKETING_INFLUENCER_STATUSES = new Set(['ativo', 'em teste', 'pausado', 'encerrado']);
 const MARKETING_INFLUENCE_TYPE_SUGGESTIONS = ['Stories', 'Reels', 'Postagens', 'UGC', 'Presenca em evento', 'Campanha local'];
@@ -145,6 +152,8 @@ const WHATSAPP_PROVIDER_ENABLED = String(process.env.WHATSAPP_PROVIDER_ENABLED |
 const WHATSAPP_PROVIDER_NAME = String(process.env.WHATSAPP_PROVIDER_NAME || "").trim();
 const WHATSAPP_PROVIDER_API_URL = String(process.env.WHATSAPP_PROVIDER_API_URL || "").trim();
 const WHATSAPP_PROVIDER_TOKEN = String(process.env.WHATSAPP_PROVIDER_TOKEN || "").trim();
+const SUBMENU_ICON_SOURCE_PATH = path.join(__dirname, "src", "constants", "icons.js");
+let submenuIconOptionsCache = null;
 
 const startupLogger = createLogger("startup");
 const databaseLogger = createLogger("database");
@@ -153,6 +162,57 @@ const indexingLogger = createLogger("indexing");
 const jobsLogger = createLogger("jobs");
 const authLogger = createLogger("auth");
 const openaiLogger = createLogger("openai");
+
+function extractNamedStringArrayFromSource(source, exportName) {
+  const match = String(source || "").match(new RegExp(`export\\s+const\\s+${exportName}\\s*=\\s*(\\[[\\s\\S]*?\\])`, "m"));
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[1]);
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function listAvailableSubmenuIcons() {
+  if (Array.isArray(submenuIconOptionsCache) && submenuIconOptionsCache.length) {
+    return submenuIconOptionsCache;
+  }
+  try {
+    const source = fs.readFileSync(SUBMENU_ICON_SOURCE_PATH, "utf8");
+    const parsed = extractNamedStringArrayFromSource(source, "ICONS");
+    if (parsed.length) {
+      submenuIconOptionsCache = Array.from(new Set(parsed));
+      return submenuIconOptionsCache;
+    }
+  } catch (err) {
+    startupLogger.warn("Nao foi possivel carregar o catalogo de icones dos submenus.", {
+      message: err?.message || String(err || "submenu_icon_catalog_failed"),
+    });
+  }
+  submenuIconOptionsCache = ["folder"];
+  return submenuIconOptionsCache;
+}
+
+function normalizeSubmenuIconName(value, options = {}) {
+  const availableIcons = listAvailableSubmenuIcons();
+  const fallback = String(options.fallback || "folder").trim().toLowerCase();
+  const allowedLegacy = new Set(
+    (Array.isArray(options.allowLegacy) ? options.allowLegacy : [options.allowLegacy])
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized && (availableIcons.includes(normalized) || allowedLegacy.has(normalized))) {
+    return normalized;
+  }
+  if (availableIcons.includes(fallback)) {
+    return fallback;
+  }
+  return availableIcons[0] || "folder";
+}
 
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
@@ -522,6 +582,54 @@ function safeJsonParse(value) {
 
 function safeJsonStringify(value, fallback = "{}") {
   return safeJsonStringifyForPostgres(value, fallback);
+}
+
+function normalizeStringArray(values = []) {
+  return Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeAdditionalPermissions(value) {
+  const parsed = typeof value === "string"
+    ? (safeJsonParse(value || "{}") || {})
+    : (value && typeof value === "object" ? value : {});
+  return {
+    allowed_department_slugs: normalizeStringArray(parsed.allowed_department_slugs || []),
+    allowed_submenu_view_keys: normalizeStringArray(parsed.allowed_submenu_view_keys || []),
+    allowed_global_views: normalizeStringArray(parsed.allowed_global_views || []),
+    commercial_role: String(parsed.commercial_role || "").trim(),
+    intranet_scope: String(parsed.intranet_scope || "").trim(),
+  };
+}
+
+function buildPostSaleCloserPermissions() {
+  return {
+    allowed_department_slugs: ["comercial"],
+    allowed_submenu_view_keys: [POST_SALE_SUBMENU_VIEW_KEY],
+    allowed_global_views: ["sales"],
+    commercial_role: "post_sale_closer",
+    intranet_scope: "restricted_post_sale",
+  };
+}
+
+function hasRestrictedPostSaleScope(user = {}) {
+  return String(user?.additional_permissions?.commercial_role || "").trim() === "post_sale_closer"
+    || String(user?.additional_permissions?.intranet_scope || "").trim() === "restricted_post_sale";
+}
+
+function getAllowedDepartmentSlugSet(user = {}) {
+  return new Set((user?.additional_permissions?.allowed_department_slugs || []).map((item) => normalizeDepartmentValue(item)).filter(Boolean));
+}
+
+function getAllowedSubmenuViewKeySet(user = {}) {
+  return new Set((user?.additional_permissions?.allowed_submenu_view_keys || []).map((item) => String(item || "").trim()).filter(Boolean));
+}
+
+function getAllowedGlobalViewSet(user = {}) {
+  return new Set((user?.additional_permissions?.allowed_global_views || []).map((item) => String(item || "").trim()).filter(Boolean));
 }
 
 function sanitizePersistedText(value, options = {}) {
@@ -1301,6 +1409,7 @@ async function hydrateUserRecord(user) {
   const departments = details.filter((item) => item.is_active !== false).map((item) => item.name);
   const fallbackDepartments = details.map((item) => item.name);
   const primaryDepartment = user.department || getPrimaryDepartmentName(departments) || getPrimaryDepartmentName(fallbackDepartments);
+  const additionalPermissions = normalizeAdditionalPermissions(user.additional_permissions_json || user.additional_permissions || {});
   return {
     ...user,
     department: primaryDepartment,
@@ -1308,6 +1417,7 @@ async function hydrateUserRecord(user) {
     department_details: details,
     can_access_intranet: coerceDbBoolean(user.can_access_intranet),
     preferred_locale: normalizeLocaleCode(user.preferred_locale || DEFAULT_LOCALE),
+    additional_permissions: additionalPermissions,
   };
 }
 
@@ -1346,6 +1456,7 @@ function buildSessionUserFallback(sessionUser = null, fallbackUserId = null) {
         : true
     ),
     preferred_locale: normalizeLocaleCode(safeSession.preferred_locale || DEFAULT_LOCALE),
+    additional_permissions: normalizeAdditionalPermissions(safeSession.additional_permissions_json || safeSession.additional_permissions || {}),
     job_title: String(safeSession.job_title || "").trim(),
     unit_name: String(safeSession.unit_name || "").trim(),
     created_at: null,
@@ -1515,10 +1626,72 @@ function normalizeSqlTextValue(value) {
   return value === null || value === undefined ? '' : String(value).trim();
 }
 
+function normalizeSalesOperationalStatus(value) {
+  const safe = String(value || "").trim();
+  if (!safe) return 'Novo';
+  const matched = SALES_OPERATIONAL_STATUS_OPTIONS.find((item) => item.toLowerCase() === safe.toLowerCase());
+  return matched || '';
+}
+
+function normalizePostSaleRating(value) {
+  const safe = normalizeBusinessText(String(value || "").trim()).replace(/\s+/g, ' ').trim();
+  if (!safe) return null;
+  if (safe === 'otimo' || safe === 'ótimo') return 'otimo';
+  if (safe === 'bom') return 'bom';
+  if (safe === 'ruim') return 'ruim';
+  return '';
+}
+
+function hasImportedSalesChanges(existing = {}, nextValues = {}) {
+  return listSalesImportedFields().some((field) => normalizeSqlTextValue(existing[field]) !== normalizeSqlTextValue(nextValues[field]));
+}
+
+function mergeImportedSalesRecord(existing = null, prepared = {}) {
+  const merged = {
+    ...prepared,
+    phone: prepared.phone || null,
+    level_name: prepared.level_name || null,
+    teacher_name: prepared.teacher_name || null,
+    attendant_name: prepared.attendant_name || null,
+    feedback: prepared.feedback || null,
+    post_sale_rating: null,
+  };
+
+  if (!existing) {
+    return merged;
+  }
+
+  merged.operational_status = existing.operational_status || 'Novo';
+  merged.follow_up_notes = existing.follow_up_notes || null;
+  merged.next_action = existing.next_action || null;
+  merged.next_action_date = existing.next_action_date || null;
+  merged.observations = existing.observations || null;
+  merged.post_sale_rating = existing.post_sale_rating || null;
+  merged.last_modified_by = existing.last_modified_by || null;
+  merged.custom_fields_json = existing.custom_fields_json || null;
+  merged.feedback = normalizeSqlTextValue(existing.feedback) ? existing.feedback : (prepared.feedback || null);
+  return merged;
+}
+
+function summarizeSalesStatus(statusValue = '') {
+  const safe = normalizeBusinessText(String(statusValue || '').trim()).replace(/\s+/g, ' ').trim();
+  if (!safe) return 'novo';
+  if (SALES_REALIZED_STATUS_SET.has(safe)) return 'realizado';
+  if (safe === 'sem retorno') return 'sem retorno';
+  if (safe === 'reagendado') return 'reagendado';
+  if (safe === 'pendente') return 'pendente';
+  if (safe === 'em andamento') return 'em andamento';
+  return 'novo';
+}
+
 function listSalesImportedFields() {
   return [
     'student_name',
+    'phone',
     'course_name',
+    'level_name',
+    'teacher_name',
+    'attendant_name',
     'sale_month',
     'sale_date',
     'semester_label',
@@ -1535,6 +1708,7 @@ function listSalesImportedFields() {
     'media_source',
     'profession',
     'indication',
+    'feedback',
     'source_payload_json',
     'row_hash',
     'source_workbook',
@@ -1630,6 +1804,31 @@ async function ensureDefaultCloserCatalog() {
   }
 }
 
+async function ensurePostSaleCloserCatalog(closerNames = DEFAULT_POST_SALE_CLOSER_NAMES, actorUserId = null) {
+  const safeCloserNames = Array.from(new Set((Array.isArray(closerNames) ? closerNames : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)));
+
+  const synced = [];
+  for (const officialName of safeCloserNames) {
+    const closer = await ensureCloserRecord({
+      official_name: officialName,
+      display_name: officialName,
+      status: 'active',
+    }, { aliasOrigin: 'post_sale_seed' });
+    if (closer) synced.push(closer);
+  }
+
+  if (actorUserId && synced.length) {
+    await logEvent(actorUserId, 'admin_seed_post_sale_closers', {
+      closer_ids: synced.map((item) => Number(item.id || 0)).filter(Boolean),
+      closer_names: synced.map((item) => item.official_name || item.display_name).filter(Boolean),
+    });
+  }
+
+  return synced;
+}
+
 async function syncClosersFromWorkbook(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return [];
   const workbook = readWorkbookFromFile(filePath);
@@ -1640,6 +1839,124 @@ async function syncClosersFromWorkbook(filePath) {
     if (closer) synced.push(closer.official_name);
   }
   return synced;
+}
+
+function buildCloserEmailCandidates(closerName = '') {
+  const normalized = normalizeCloserValue(closerName);
+  if (!normalized) return [];
+  const tokens = normalized.split(/\s+/g).filter(Boolean);
+  const candidates = new Set();
+  if (tokens.length) {
+    candidates.add(`${tokens.join('.')}@talkers.com`);
+    candidates.add(`${tokens.join('.')}@talkers.local`);
+    candidates.add(`postvenda.${tokens.join('.')}@talkers.local`);
+    if (tokens.length === 1) {
+      candidates.add(`${tokens[0]}@talkers.com`);
+      candidates.add(`${tokens[0]}@talkers.local`);
+    }
+  }
+  return [...candidates];
+}
+
+async function ensureCloserOperationalUser(closer, actorUserId = null) {
+  if (!closer?.id || !closer?.official_name) return null;
+  const officialName = String(closer.official_name || closer.display_name || '').trim();
+  const normalizedName = normalizeCloserValue(officialName);
+  if (!normalizedName) return null;
+
+  const users = await all(
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json FROM users ORDER BY id ASC"
+  );
+  const emailCandidates = new Set(buildCloserEmailCandidates(officialName).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));
+  let matchedUser = users.find((user) => normalizeCloserValue(user.name) === normalizedName) || null;
+  if (!matchedUser) {
+    matchedUser = users.find((user) => emailCandidates.has(String(user.email || '').trim().toLowerCase())) || null;
+  }
+
+  let temporaryPassword = '';
+  let createdUser = false;
+  const permissions = buildPostSaleCloserPermissions();
+  if (!matchedUser) {
+    const occupiedEmails = new Set(users.map((user) => String(user.email || '').trim().toLowerCase()).filter(Boolean));
+    let generatedEmail = buildCloserEmailCandidates(officialName).find((candidate) => !occupiedEmails.has(candidate.toLowerCase())) || '';
+    if (!generatedEmail) {
+      const fallbackSlug = normalizedName.replace(/\s+/g, '.');
+      generatedEmail = `postvenda.${fallbackSlug}.${Date.now()}@talkers.local`;
+    }
+    temporaryPassword = `PV!${crypto.randomBytes(6).toString('base64url')}`;
+    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+    const created = await run(
+      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?)",
+      [
+        generatedEmail,
+        officialName,
+        passwordHash,
+        'Comercial',
+        true,
+        'Closer de pós-venda',
+        'Pós-venda',
+        safeJsonStringify(permissions, "{}"),
+      ]
+    );
+    matchedUser = await get(
+      "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json FROM users WHERE id=?",
+      [created.lastID]
+    );
+    createdUser = true;
+    if (actorUserId) {
+      await logEvent(actorUserId, 'admin_create_post_sale_user', {
+        user_id: created.lastID,
+        closer_id: closer.id,
+        closer_name: officialName,
+        email: generatedEmail,
+      });
+    }
+  }
+
+  if (!matchedUser?.id) return null;
+  await syncUserDepartments(matchedUser.id, ['Comercial']);
+  await run(
+    "UPDATE users SET role=?, department=?, can_access_intranet=?, job_title=?, unit_name=?, additional_permissions_json=? WHERE id=?",
+    [
+      String(matchedUser.role || '').trim() === 'admin' ? 'admin' : 'user',
+      'Comercial',
+      true,
+      normalizeSqlTextValue(matchedUser.job_title) || 'Closer de pós-venda',
+      normalizeSqlTextValue(matchedUser.unit_name) || 'Pós-venda',
+      safeJsonStringify(permissions, "{}"),
+      matchedUser.id,
+    ]
+  );
+  await run(
+    "UPDATE closers SET user_id=?, status=?, updated_at=datetime('now') WHERE id=?",
+    [matchedUser.id, 'active', closer.id]
+  );
+
+  return {
+    closer_id: closer.id,
+    closer_name: officialName,
+    user_id: matchedUser.id,
+    user_email: matchedUser.email,
+    created_user: createdUser,
+    temporary_password: temporaryPassword || null,
+  };
+}
+
+async function ensureCloserOperationalUsers(closerNames = [], actorUserId = null) {
+  const normalizedNames = Array.from(new Set((Array.isArray(closerNames) ? closerNames : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)));
+  await ensurePostSaleCloserCatalog(normalizedNames.length ? normalizedNames : DEFAULT_POST_SALE_CLOSER_NAMES);
+  const allClosers = await listClosers({ includeInactive: true });
+  const targetClosers = normalizedNames.length
+    ? allClosers.filter((closer) => normalizedNames.some((name) => normalizeCloserValue(name) === normalizeCloserValue(closer.official_name || closer.display_name)))
+    : allClosers.filter((closer) => String(closer.status || 'active').trim().toLowerCase() !== 'inactive');
+  const results = [];
+  for (const closer of targetClosers) {
+    const result = await ensureCloserOperationalUser(closer, actorUserId);
+    if (result) results.push(result);
+  }
+  return results;
 }
 
 async function listClosers(options = {}) {
@@ -1806,13 +2123,15 @@ async function getSalesAccessScope(user) {
     return { enabled: false, canViewAll: false, canEditAll: false, closer: null };
   }
   const departmentKeys = [...getUserDepartmentKeySet(user)];
-  const canViewAll = user.role === 'admin' || departmentKeys.some((key) => SALES_VIEW_DEPARTMENTS.has(key));
+  const restrictedPostSale = hasRestrictedPostSaleScope(user);
+  const canViewAll = !restrictedPostSale && (user.role === 'admin' || departmentKeys.some((key) => SALES_VIEW_DEPARTMENTS.has(key)));
   const closer = await get('SELECT id, official_name, display_name, user_id, status FROM closers WHERE user_id=? AND status<>? LIMIT 1', [user.id || user.sub, 'inactive']);
   return {
     enabled: canViewAll || Boolean(closer),
     canViewAll,
     canEditAll: user.role === 'admin',
     closer,
+    restrictedPostSale,
   };
 }
 
@@ -1839,10 +2158,25 @@ function buildSalesWhereClause(scope, filters = {}) {
     params.push(String(filters.status).trim());
   }
 
+  if (filters.language) {
+    clauses.push('lower(coalesce(sr.language, \'\'))=lower(?)');
+    params.push(String(filters.language).trim());
+  }
+
+  if (filters.modality) {
+    clauses.push('lower(coalesce(sr.modality, \'\'))=lower(?)');
+    params.push(String(filters.modality).trim());
+  }
+
+  if (filters.rating) {
+    clauses.push('lower(coalesce(sr.post_sale_rating, \'\'))=lower(?)');
+    params.push(String(filters.rating).trim());
+  }
+
   if (filters.search) {
     const search = `%${String(filters.search).trim()}%`;
-    clauses.push("(lower(coalesce(sr.student_name, '')) LIKE lower(?) OR lower(coalesce(sr.course_name, '')) LIKE lower(?) OR lower(coalesce(sr.closer_original, '')) LIKE lower(?) OR lower(coalesce(sr.media_source, '')) LIKE lower(?))");
-    params.push(search, search, search, search);
+    clauses.push("(lower(coalesce(sr.student_name, '')) LIKE lower(?) OR lower(coalesce(sr.course_name, '')) LIKE lower(?) OR lower(coalesce(sr.level_name, '')) LIKE lower(?) OR lower(coalesce(sr.phone, '')) LIKE lower(?) OR lower(coalesce(sr.closer_original, '')) LIKE lower(?) OR lower(coalesce(sr.attendant_name, '')) LIKE lower(?) OR lower(coalesce(sr.media_source, '')) LIKE lower(?) OR lower(coalesce(sr.feedback, '')) LIKE lower(?))");
+    params.push(search, search, search, search, search, search, search, search);
   }
 
   return {
@@ -1854,17 +2188,27 @@ function buildSalesWhereClause(scope, filters = {}) {
 async function getSalesSummaryForScope(scope, filters = {}) {
   const where = buildSalesWhereClause(scope, filters);
   const limit = Math.min(200, Math.max(1, Number(filters.limit || 80)));
-  const [rows, totalRow, closerTotals, statusTotals] = await Promise.all([
+  const todayKey = brazilDateKey();
+  const [rows, totalRow, closerTotals, statusTotals, ratingTotals, filterTotals] = await Promise.all([
     all(
-      `SELECT sr.id, sr.student_name, sr.course_name, sr.sale_date, sr.modality, sr.language, sr.media_source, sr.operational_status,
+      `SELECT sr.id, sr.student_name, sr.phone, sr.course_name, sr.level_name, sr.teacher_name, sr.attendant_name, sr.sale_date, sr.semester_label,
+              sr.modality, sr.class_type, sr.language, sr.media_source, sr.feedback, sr.operational_status,
+              sr.post_sale_rating, sr.next_action, sr.next_action_date, sr.follow_up_notes, sr.observations,
               sr.closer_original, sr.closer_normalized, sr.closer_id, sr.user_id, sr.updated_at,
               COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
          FROM sales_records sr
          LEFT JOIN closers c ON c.id = sr.closer_id
          ${where.sql}
-         ORDER BY COALESCE(sr.sale_date, sr.created_at) DESC, sr.id DESC
+         ORDER BY
+           CASE
+             WHEN sr.next_action_date IS NOT NULL AND sr.next_action_date <> '' AND sr.next_action_date < ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 0
+             WHEN sr.next_action_date = ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 1
+             ELSE 2
+           END ASC,
+           COALESCE(sr.next_action_date, sr.sale_date, substr(sr.updated_at, 1, 10), substr(sr.created_at, 1, 10)) ASC,
+           sr.id DESC
          LIMIT ?`,
-      [...where.params, limit]
+      [...where.params, todayKey, todayKey, limit]
     ),
     get(
       `SELECT COUNT(*) AS total
@@ -1876,13 +2220,18 @@ async function getSalesSummaryForScope(scope, filters = {}) {
     all(
       `SELECT sr.closer_id,
               COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name,
-              COUNT(*) AS total
+              COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(sr.operational_status, ''))='realizado' THEN 1 ELSE 0 END) AS realized_total,
+              SUM(CASE WHEN sr.next_action_date IS NOT NULL AND sr.next_action_date<>'' AND sr.next_action_date < ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 1 ELSE 0 END) AS overdue_total,
+              SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='ruim' THEN 1 ELSE 0 END) AS rating_ruim_total,
+              SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='bom' THEN 1 ELSE 0 END) AS rating_bom_total,
+              SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='otimo' THEN 1 ELSE 0 END) AS rating_otimo_total
          FROM sales_records sr
          LEFT JOIN closers c ON c.id = sr.closer_id
          ${where.sql}
         GROUP BY sr.closer_id, COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer')
         ORDER BY COUNT(*) DESC, closer_name ASC`,
-      where.params
+      [todayKey, ...where.params]
     ),
     all(
       `SELECT COALESCE(sr.operational_status, 'Novo') AS status_name, COUNT(*) AS total
@@ -1892,6 +2241,30 @@ async function getSalesSummaryForScope(scope, filters = {}) {
         GROUP BY COALESCE(sr.operational_status, 'Novo')
         ORDER BY COUNT(*) DESC, status_name ASC`,
       where.params
+    ),
+    all(
+      `SELECT COALESCE(sr.post_sale_rating, '') AS rating_name, COUNT(*) AS total
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}
+        GROUP BY COALESCE(sr.post_sale_rating, '')
+        ORDER BY rating_name ASC`,
+      where.params
+    ),
+    get(
+      `SELECT
+          SUM(CASE WHEN lower(coalesce(sr.operational_status, ''))='realizado' THEN 1 ELSE 0 END) AS realized_total,
+          SUM(CASE WHEN lower(coalesce(sr.operational_status, '')) IN ('novo', 'pendente', 'em andamento', 'reagendado') THEN 1 ELSE 0 END) AS pending_total,
+          SUM(CASE WHEN sr.next_action_date=? THEN 1 ELSE 0 END) AS action_today_total,
+          SUM(CASE WHEN sr.next_action_date IS NOT NULL AND sr.next_action_date<>'' AND sr.next_action_date < ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 1 ELSE 0 END) AS overdue_total,
+          SUM(CASE WHEN coalesce(nullif(trim(sr.observations), ''), nullif(trim(sr.follow_up_notes), '')) IS NULL THEN 1 ELSE 0 END) AS no_observation_total,
+          SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='ruim' THEN 1 ELSE 0 END) AS rating_ruim_total,
+          SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='bom' THEN 1 ELSE 0 END) AS rating_bom_total,
+          SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='otimo' THEN 1 ELSE 0 END) AS rating_otimo_total
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}`,
+      [todayKey, todayKey, ...where.params]
     ),
   ]);
 
@@ -1904,12 +2277,24 @@ async function getSalesSummaryForScope(scope, filters = {}) {
 
   const totals = {
     total: Number(totalRow?.total || 0),
+    pending_total: Number(filterTotals?.pending_total || 0),
+    realized_total: Number(filterTotals?.realized_total || 0),
+    action_today_total: Number(filterTotals?.action_today_total || 0),
+    overdue_total: Number(filterTotals?.overdue_total || 0),
+    no_observation_total: Number(filterTotals?.no_observation_total || 0),
     by_closer: closerTotals.map((item) => {
       const key = `${item.closer_id || 'none'}:${item.closer_name || 'Sem closer'}`;
       return {
         closer_id: item.closer_id || null,
         closer_name: item.closer_name || 'Sem closer',
         total: Number(item.total || 0),
+        realized_total: Number(item.realized_total || 0),
+        overdue_total: Number(item.overdue_total || 0),
+        ratings: {
+          ruim: Number(item.rating_ruim_total || 0),
+          bom: Number(item.rating_bom_total || 0),
+          otimo: Number(item.rating_otimo_total || 0),
+        },
         recent_records: groupedRecent.get(key) || [],
       };
     }),
@@ -1917,6 +2302,22 @@ async function getSalesSummaryForScope(scope, filters = {}) {
       acc[String(item.status_name || 'Novo').trim() || 'Novo'] = Number(item.total || 0);
       return acc;
     }, {}),
+    ratings: {
+      ruim: Number(filterTotals?.rating_ruim_total || 0),
+      bom: Number(filterTotals?.rating_bom_total || 0),
+      otimo: Number(filterTotals?.rating_otimo_total || 0),
+    },
+    rating_percentages: {
+      ruim: Number(totalRow?.total || 0) ? Math.round((Number(filterTotals?.rating_ruim_total || 0) / Number(totalRow.total || 0)) * 100) : 0,
+      bom: Number(totalRow?.total || 0) ? Math.round((Number(filterTotals?.rating_bom_total || 0) / Number(totalRow.total || 0)) * 100) : 0,
+      otimo: Number(totalRow?.total || 0) ? Math.round((Number(filterTotals?.rating_otimo_total || 0) / Number(totalRow.total || 0)) * 100) : 0,
+    },
+    rating_breakdown: ratingTotals.reduce((acc, item) => {
+      const key = String(item.rating_name || '').trim() || 'sem_avaliacao';
+      acc[key] = Number(item.total || 0);
+      return acc;
+    }, {}),
+    today_key: todayKey,
   };
 
   return {
@@ -1974,6 +2375,20 @@ async function updateSalesRecord(recordId, payload = {}, actorUser) {
   const updates = {};
   for (const field of SALES_EDITABLE_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(payload || {}, field)) {
+      if (field === 'operational_status') {
+        const normalizedStatus = normalizeSalesOperationalStatus(payload[field]);
+        if (!normalizedStatus) throw new Error('invalid_operational_status');
+        updates[field] = normalizedStatus;
+        continue;
+      }
+      if (field === 'post_sale_rating') {
+        const normalizedRating = normalizePostSaleRating(payload[field]);
+        if (payload[field] !== null && payload[field] !== undefined && String(payload[field]).trim() && !normalizedRating) {
+          throw new Error('invalid_post_sale_rating');
+        }
+        updates[field] = normalizedRating;
+        continue;
+      }
       updates[field] = String(payload[field] ?? '').trim() || null;
     }
   }
@@ -1984,13 +2399,15 @@ async function updateSalesRecord(recordId, payload = {}, actorUser) {
 
   const merged = { ...existing, ...updates };
   await run(
-    "UPDATE sales_records SET operational_status=?, follow_up_notes=?, next_action=?, next_action_date=?, observations=?, last_modified_by=?, updated_at=datetime('now') WHERE id=?",
+    "UPDATE sales_records SET operational_status=?, follow_up_notes=?, next_action=?, next_action_date=?, observations=?, feedback=?, post_sale_rating=?, last_modified_by=?, updated_at=datetime('now') WHERE id=?",
     [
       merged.operational_status || 'Novo',
       merged.follow_up_notes,
       merged.next_action,
       merged.next_action_date,
       merged.observations,
+      merged.feedback,
+      merged.post_sale_rating,
       actorId,
       recordId,
     ]
@@ -2038,29 +2455,105 @@ async function recordSalesImportChange(existing, nextValues, actorUserId, origin
 }
 
 async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, postSaleWorkbookPath = '', postSaleWorkbookName = '', actorUserId = null }) {
-  if (!salesWorkbookPath || !fs.existsSync(salesWorkbookPath)) {
-    throw new Error('missing_sales_workbook');
+  const availableInputs = [
+    salesWorkbookPath && fs.existsSync(salesWorkbookPath) ? {
+      kind: 'sales_workbook',
+      filePath: salesWorkbookPath,
+      workbookName: salesWorkbookName || path.basename(salesWorkbookPath),
+    } : null,
+    postSaleWorkbookPath && fs.existsSync(postSaleWorkbookPath) ? {
+      kind: 'post_sale_workbook',
+      filePath: postSaleWorkbookPath,
+      workbookName: postSaleWorkbookName || path.basename(postSaleWorkbookPath),
+    } : null,
+  ].filter(Boolean);
+
+  if (!availableInputs.length) {
+    throw new Error('missing_sales_or_post_sale_workbook');
   }
 
   const source = await ensureSalesImportSource();
   await ensureDefaultCloserCatalog();
-  const syncedCloserNames = postSaleWorkbookPath ? await syncClosersFromWorkbook(postSaleWorkbookPath) : [];
+  await ensurePostSaleCloserCatalog(DEFAULT_POST_SALE_CLOSER_NAMES);
+
+  const parsedDatasets = [];
+  const processedPaths = new Set();
+  const syncedCloserNames = [];
+
+  for (const input of availableInputs) {
+    const fileKey = path.resolve(input.filePath);
+    if (processedPaths.has(fileKey)) continue;
+    processedPaths.add(fileKey);
+    const workbook = readWorkbookFromFile(input.filePath);
+    const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames : [];
+    const hasSalesPrimarySheet = sheetNames.includes(SALES_PRIMARY_SHEET);
+    const closerSheets = extractCloserSheetNames(workbook);
+
+    if (hasSalesPrimarySheet) {
+      const salesParsed = parseMatriculasWorkbook(workbook, {
+        workbookName: input.workbookName,
+        sheetName: SALES_PRIMARY_SHEET,
+      });
+      if (salesParsed.records.length) {
+        parsedDatasets.push({
+          source_kind: 'sales',
+          workbook_name: salesParsed.workbook_name,
+          sheet_name: salesParsed.sheet_name,
+          records: salesParsed.records,
+        });
+      }
+    }
+
+    if (closerSheets.length) {
+      const postSaleParsed = parsePostSaleWorkbook(workbook, {
+        workbookName: input.workbookName,
+      });
+      if (postSaleParsed.records.length) {
+        parsedDatasets.push({
+          source_kind: 'post_sale',
+          workbook_name: postSaleParsed.workbook_name,
+          sheet_names: postSaleParsed.sheet_names,
+          records: postSaleParsed.records,
+        });
+      }
+      syncedCloserNames.push(...closerSheets);
+      for (const officialName of closerSheets) {
+        await ensureCloserRecord({ official_name: officialName, display_name: officialName, status: 'active' }, { aliasOrigin: 'post_sale_workbook' });
+      }
+    }
+  }
+
+  if (!parsedDatasets.length) {
+    throw new Error('sales_workbook_without_supported_sheets');
+  }
+
+  const uniqueCloserNames = Array.from(new Set(syncedCloserNames.map((item) => String(item || '').trim()).filter(Boolean)));
+  const closerUsersProvisioned = uniqueCloserNames.length
+    ? await ensureCloserOperationalUsers(uniqueCloserNames, actorUserId)
+    : [];
   const closerCatalog = await getCloserCatalog();
-  const parsed = parseMatriculasWorkbook(readWorkbookFromFile(salesWorkbookPath), {
-    workbookName: salesWorkbookName || path.basename(salesWorkbookPath),
-    sheetName: SALES_PRIMARY_SHEET,
-  });
+  const flattenedRecords = parsedDatasets.flatMap((item) => item.records || []);
+  const primaryDataset = parsedDatasets.find((item) => item.source_kind === 'sales') || parsedDatasets[0];
+  const sourceWorkbookLabel = Array.from(new Set(parsedDatasets.map((item) => item.workbook_name).filter(Boolean))).join(' | ');
 
   const runResult = await run(
     "INSERT INTO sales_import_runs (source_id, origin_type, source_workbook, post_sale_workbook, source_sheet, total_rows, status, triggered_by, summary_json, updated_at) VALUES (?, 'manual_upload', ?, ?, ?, ?, 'running', ?, ?, datetime('now'))",
     [
       source?.id || null,
-      parsed.workbook_name,
-      postSaleWorkbookName ? path.basename(postSaleWorkbookName) : (postSaleWorkbookPath ? path.basename(postSaleWorkbookPath) : null),
-      parsed.sheet_name,
-      parsed.records.length,
+      primaryDataset?.workbook_name || sourceWorkbookLabel || null,
+      uniqueCloserNames.length ? (postSaleWorkbookName ? path.basename(postSaleWorkbookName) : (postSaleWorkbookPath ? path.basename(postSaleWorkbookPath) : sourceWorkbookLabel || null)) : null,
+      primaryDataset?.sheet_name || SALES_PRIMARY_SHEET,
+      flattenedRecords.length,
       actorUserId,
-      JSON.stringify({ synced_closers: syncedCloserNames }),
+      JSON.stringify({
+        synced_closers: uniqueCloserNames,
+        provisioned_users: closerUsersProvisioned.map((item) => ({
+          closer_id: item.closer_id,
+          user_id: item.user_id,
+          user_email: item.user_email,
+          created_user: item.created_user,
+        })),
+      }),
     ]
   );
 
@@ -2071,52 +2564,67 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
   let ignoredRows = 0;
   const importedRecordIds = [];
 
-  for (const item of parsed.records) {
+  for (const item of flattenedRecords) {
     const match = await resolveCloserMatch(item.closer_original, closerCatalog);
     const prepared = {
       ...item,
       source_id: source?.id || null,
       import_run_id: importRunId,
+      origin_type: String(item.origin_type || (item.source_sheet && item.source_sheet !== SALES_PRIMARY_SHEET ? 'post_sale_import' : 'spreadsheet_import')).trim(),
       closer_normalized: match.normalizedName || item.closer_original,
       closer_id: match.closer?.id || null,
       user_id: match.closer?.user_id || null,
-      source_payload_json: JSON.stringify(item.source_payload || {}),
+      source_payload_json: safeJsonStringify(item.source_payload || {}, "{}"),
       last_synced_at: new Date().toISOString(),
     };
 
+    if (!prepared.student_name && !prepared.phone && !prepared.language) {
+      ignoredRows += 1;
+      continue;
+    }
+
     const existing = await get('SELECT * FROM sales_records WHERE dedupe_hash=? LIMIT 1', [prepared.dedupe_hash]);
+    const persisted = mergeImportedSalesRecord(existing, prepared);
     if (!existing) {
       const created = await run(
-        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, course_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, 'spreadsheet_import', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, phone, course_name, level_name, teacher_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, feedback, post_sale_rating, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, phone, course_name, level_name, teacher_name, attendant_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, feedback, post_sale_rating, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
         [
-          prepared.source_id,
-          prepared.import_run_id,
-          prepared.source_workbook,
-          prepared.source_sheet,
-          prepared.source_row_number,
-          prepared.source_row_identifier,
-          prepared.dedupe_hash,
-          prepared.row_hash,
-          prepared.student_name,
-          prepared.course_name,
-          prepared.sale_month,
-          prepared.sale_date,
-          prepared.semester_label,
-          prepared.availability,
-          prepared.modality,
-          prepared.class_type,
-          prepared.system_name,
-          prepared.contract_status,
-          prepared.language,
-          prepared.closer_original,
-          prepared.closer_normalized,
-          prepared.closer_id,
-          prepared.user_id,
-          prepared.media_source,
-          prepared.profession,
-          prepared.indication,
-          prepared.source_payload_json,
-          prepared.last_synced_at,
+          persisted.source_id,
+          persisted.import_run_id,
+          persisted.origin_type,
+          persisted.source_workbook,
+          persisted.source_sheet,
+          persisted.source_row_number,
+          persisted.source_row_identifier,
+          persisted.dedupe_hash,
+          persisted.row_hash,
+          persisted.student_name,
+          persisted.phone,
+          persisted.course_name,
+          persisted.level_name,
+          persisted.teacher_name,
+          persisted.attendant_name,
+          persisted.sale_month,
+          persisted.sale_date,
+          persisted.semester_label,
+          persisted.availability,
+          persisted.modality,
+          persisted.class_type,
+          persisted.system_name,
+          persisted.contract_status,
+          persisted.language,
+          persisted.closer_original,
+          persisted.closer_normalized,
+          persisted.closer_id,
+          persisted.user_id,
+          persisted.media_source,
+          persisted.profession,
+          persisted.indication,
+          persisted.feedback,
+          persisted.post_sale_rating,
+          persisted.source_payload_json,
+          persisted.last_synced_at,
         ]
       );
       insertedRows += 1;
@@ -2126,53 +2634,59 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
         entityId: created.lastID,
         action: 'created',
         actorUserId,
-        closerId: prepared.closer_id,
-        origin: 'spreadsheet_import',
+        closerId: persisted.closer_id,
+        origin: persisted.origin_type,
         detail: {
-          source_workbook: prepared.source_workbook,
-          source_sheet: prepared.source_sheet,
-          source_row_identifier: prepared.source_row_identifier,
+          source_workbook: persisted.source_workbook,
+          source_sheet: persisted.source_sheet,
+          source_row_identifier: persisted.source_row_identifier,
         },
       });
       continue;
     }
 
-    if (String(existing.row_hash || '') === String(prepared.row_hash || '')) {
+    if (!hasImportedSalesChanges(existing, persisted)) {
       duplicateRows += 1;
       continue;
     }
 
-    await recordSalesImportChange(existing, prepared, actorUserId, 'spreadsheet_sync');
+    await recordSalesImportChange(existing, persisted, actorUserId, 'spreadsheet_sync');
     await run(
-      "UPDATE sales_records SET source_id=?, import_run_id=?, source_workbook=?, source_sheet=?, source_row_number=?, source_row_identifier=?, row_hash=?, student_name=?, course_name=?, sale_month=?, sale_date=?, semester_label=?, availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, closer_id=?, user_id=?, media_source=?, profession=?, indication=?, source_payload_json=?, last_synced_at=?, updated_at=datetime('now') WHERE id=?",
+      "UPDATE sales_records SET source_id=?, import_run_id=?, origin_type=?, source_workbook=?, source_sheet=?, source_row_number=?, source_row_identifier=?, row_hash=?, student_name=?, phone=?, course_name=?, level_name=?, teacher_name=?, attendant_name=?, sale_month=?, sale_date=?, semester_label=?, availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, closer_id=?, user_id=?, media_source=?, profession=?, indication=?, feedback=?, source_payload_json=?, last_synced_at=?, updated_at=datetime('now') WHERE id=?",
       [
-        prepared.source_id,
-        prepared.import_run_id,
-        prepared.source_workbook,
-        prepared.source_sheet,
-        prepared.source_row_number,
-        prepared.source_row_identifier,
-        prepared.row_hash,
-        prepared.student_name,
-        prepared.course_name,
-        prepared.sale_month,
-        prepared.sale_date,
-        prepared.semester_label,
-        prepared.availability,
-        prepared.modality,
-        prepared.class_type,
-        prepared.system_name,
-        prepared.contract_status,
-        prepared.language,
-        prepared.closer_original,
-        prepared.closer_normalized,
-        prepared.closer_id,
-        prepared.user_id,
-        prepared.media_source,
-        prepared.profession,
-        prepared.indication,
-        prepared.source_payload_json,
-        prepared.last_synced_at,
+        persisted.source_id,
+        persisted.import_run_id,
+        persisted.origin_type,
+        persisted.source_workbook,
+        persisted.source_sheet,
+        persisted.source_row_number,
+        persisted.source_row_identifier,
+        persisted.row_hash,
+        persisted.student_name,
+        persisted.phone,
+        persisted.course_name,
+        persisted.level_name,
+        persisted.teacher_name,
+        persisted.attendant_name,
+        persisted.sale_month,
+        persisted.sale_date,
+        persisted.semester_label,
+        persisted.availability,
+        persisted.modality,
+        persisted.class_type,
+        persisted.system_name,
+        persisted.contract_status,
+        persisted.language,
+        persisted.closer_original,
+        persisted.closer_normalized,
+        persisted.closer_id,
+        persisted.user_id,
+        persisted.media_source,
+        persisted.profession,
+        persisted.indication,
+        persisted.feedback,
+        persisted.source_payload_json,
+        persisted.last_synced_at,
         existing.id,
       ]
     );
@@ -2181,8 +2695,16 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
   }
 
   const summary = {
-    synced_closers: syncedCloserNames,
+    synced_closers: uniqueCloserNames,
+    provisioned_users: closerUsersProvisioned,
     imported_record_ids: importedRecordIds.slice(0, 20),
+    imported_sources: parsedDatasets.map((dataset) => ({
+      source_kind: dataset.source_kind,
+      workbook_name: dataset.workbook_name,
+      sheet_name: dataset.sheet_name || null,
+      sheet_names: dataset.sheet_names || [],
+      total_records: Number((dataset.records || []).length || 0),
+    })),
   };
 
   await run(
@@ -2196,21 +2718,29 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
       inserted_rows: insertedRows,
       updated_rows: updatedRows,
       duplicate_rows: duplicateRows,
-      synced_closers: syncedCloserNames,
-      workbook: parsed.workbook_name,
+      ignored_rows: ignoredRows,
+      synced_closers: uniqueCloserNames,
+      provisioned_users: closerUsersProvisioned.map((item) => ({
+        closer_id: item.closer_id,
+        user_id: item.user_id,
+        created_user: item.created_user,
+      })),
+      workbook: sourceWorkbookLabel,
     });
   }
 
   return {
     import_run_id: importRunId,
-    total_rows: parsed.records.length,
+    total_rows: flattenedRecords.length,
     inserted_rows: insertedRows,
     updated_rows: updatedRows,
     duplicate_rows: duplicateRows,
     ignored_rows: ignoredRows,
-    synced_closers: syncedCloserNames,
-    workbook: parsed.workbook_name,
-    sheet_name: parsed.sheet_name,
+    synced_closers: uniqueCloserNames,
+    provisioned_users: closerUsersProvisioned,
+    workbook: sourceWorkbookLabel,
+    sheet_name: primaryDataset?.sheet_name || null,
+    sources: summary.imported_sources,
   };
 }
 
@@ -2240,6 +2770,9 @@ async function buildSalesIntranetPayload(user) {
     can_view_all: scope.canViewAll,
     can_edit_all: scope.canEditAll,
     scope_closer_id: scope.closer?.id || null,
+    restricted_scope: scope.restrictedPostSale,
+    status_options: SALES_OPERATIONAL_STATUS_OPTIONS.slice(),
+    rating_options: POST_SALE_RATING_OPTIONS.slice(),
     summary: salesSummary.totals,
     records: salesSummary.records.map(serializeSalesRecord),
     closers: visibleClosers.map((closer) => ({
@@ -6284,7 +6817,7 @@ async function openaiReplyStream({
 
 async function getUserById(userId) {
   const user = await get(
-    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, created_at FROM users WHERE id=?",
+    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json, created_at FROM users WHERE id=?",
     [userId]
   );
   return hydrateUserRecord(user);
@@ -6292,7 +6825,7 @@ async function getUserById(userId) {
 
 async function getUserByEmail(email) {
   const user = await get(
-    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, created_at FROM users WHERE email=?",
+    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json, created_at FROM users WHERE email=?",
     [email]
   );
   return hydrateUserRecord(user);
@@ -6337,12 +6870,18 @@ async function buildIntranetPayload(userId) {
 
   const isAdmin = user.role === 'admin';
   const departmentCatalog = await listDepartmentCatalog();
-  const visibleDepartmentDetails = isAdmin
+  const allowedDepartmentSlugs = getAllowedDepartmentSlugSet(user);
+  const allowedSubmenuViewKeys = getAllowedSubmenuViewKeySet(user);
+  const visibleDepartmentDetails = (isAdmin
     ? departmentCatalog.map((department) => ({
         ...department,
         access_level: 'administrador',
       }))
-    : (user.department_details || []).filter((department) => department.is_active !== false);
+    : (user.department_details || []).filter((department) => department.is_active !== false))
+    .filter((department) => {
+      if (isAdmin || !allowedDepartmentSlugs.size) return true;
+      return allowedDepartmentSlugs.has(normalizeDepartmentValue(department.slug || department.name || ""));
+    });
   const visibleDepartments = visibleDepartmentDetails.map((item) => item.name).filter(Boolean);
   const visibleDepartmentIds = visibleDepartmentDetails.map((item) => Number(item.id || 0)).filter(Boolean);
   const documentWhere = [];
@@ -6393,6 +6932,10 @@ async function buildIntranetPayload(userId) {
 
   const submenusByDepartmentId = new Map();
   for (const submenu of departmentSubmenus || []) {
+    if (!isAdmin && allowedSubmenuViewKeys.size) {
+      const submenuKey = String(submenu.view_key || submenu.slug || "").trim();
+      if (!allowedSubmenuViewKeys.has(submenuKey)) continue;
+    }
     const key = Number(submenu.department_id || 0);
     if (!submenusByDepartmentId.has(key)) submenusByDepartmentId.set(key, []);
     submenusByDepartmentId.get(key).push(submenu);
@@ -6432,6 +6975,12 @@ async function buildIntranetPayload(userId) {
     announcements: visibleAnnouncements,
     upcomingEvents,
     notifications: buildIntranetNotifications(visibleAnnouncements, upcomingEvents),
+    permissionHints: {
+      allowed_global_views: Array.from(getAllowedGlobalViewSet(user)),
+      allowed_department_slugs: Array.from(allowedDepartmentSlugs),
+      allowed_submenu_view_keys: Array.from(allowedSubmenuViewKeys),
+      restricted_post_sale_scope: hasRestrictedPostSaleScope(user),
+    },
   });
 
   workspace.sales = salesPayload;
@@ -8288,6 +8837,14 @@ async function requireIntranetAccess(req, res, next) {
   const user = await resolveRequestUser(req.user, req.user?.sub);
   if (!user) return res.status(401).json({ error: 'not_authenticated' });
   if (!hasIntranetAccess(user)) return res.status(403).json({ error: 'intranet_access_denied' });
+  if (
+    hasRestrictedPostSaleScope(user)
+    && String(req.path || '').startsWith('/api/intranet')
+    && req.path !== '/api/intranet/bootstrap'
+    && !String(req.path || '').startsWith('/api/intranet/sales')
+  ) {
+    return res.status(403).json({ error: 'restricted_post_sale_scope' });
+  }
   req.currentUser = user;
   next();
 }
@@ -8902,11 +9459,15 @@ app.get("/api/admin/department-submenus", requireAuth(JWT_SECRET), requireRole("
   res.json({ submenus });
 });
 
+app.get("/api/admin/icon-options", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  res.json({ icons: listAvailableSubmenuIcons() });
+});
+
 app.post("/api/admin/department-submenus", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const departmentId = Number(req.body?.department_id || 0);
   const title = String(req.body?.title || '').trim();
   const description = String(req.body?.description || '').trim();
-  const icon = String(req.body?.icon || 'layers').trim() || 'layers';
+  const icon = normalizeSubmenuIconName(req.body?.icon, { fallback: 'folder' });
   const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active')
     ? parseBooleanInput(req.body?.is_active)
     : true;
@@ -8950,7 +9511,12 @@ app.patch("/api/admin/department-submenus/:id", requireAuth(JWT_SECRET), require
     : Number(existing.department_id || 0);
   const title = Object.prototype.hasOwnProperty.call(req.body || {}, 'title') ? String(req.body?.title || '').trim() : String(existing.title || '').trim();
   const description = Object.prototype.hasOwnProperty.call(req.body || {}, 'description') ? String(req.body?.description || '').trim() : String(existing.description || '').trim();
-  const icon = Object.prototype.hasOwnProperty.call(req.body || {}, 'icon') ? String(req.body?.icon || '').trim() : String(existing.icon || 'layers').trim();
+  const icon = Object.prototype.hasOwnProperty.call(req.body || {}, 'icon')
+    ? normalizeSubmenuIconName(req.body?.icon, {
+        fallback: String(existing.icon || 'folder').trim().toLowerCase() || 'folder',
+        allowLegacy: existing.icon,
+      })
+    : String(existing.icon || 'folder').trim();
   const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? parseBooleanInput(req.body?.is_active) : coerceDbBoolean(existing.is_active);
   const slug = slugifyDepartmentName(req.body?.slug || title || existing.slug);
   const viewKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'view_key')
@@ -8969,7 +9535,7 @@ app.patch("/api/admin/department-submenus/:id", requireAuth(JWT_SECRET), require
 
   await run(
     "UPDATE department_submenus SET department_id=?, title=?, slug=?, description=?, icon=?, view_key=?, is_active=?, updated_at=datetime('now') WHERE id=?",
-    [departmentId, title, slug, description || null, icon || 'layers', viewKey || slug, isActive, submenuId]
+    [departmentId, title, slug, description || null, icon || 'folder', viewKey || slug, isActive, submenuId]
   );
 
   await logEvent(req.user.sub, 'admin_update_department_submenu', { submenu_id: submenuId, department_id: departmentId, title, slug });
@@ -9157,7 +9723,7 @@ app.get("/api/admin/system-logs", requireAuth(JWT_SECRET), requireRole("admin"),
 
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const users = await all(
-    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, created_at FROM users ORDER BY id DESC",
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json, created_at FROM users ORDER BY id DESC",
     []
   );
 
@@ -9207,7 +9773,7 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
 app.patch("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const userId = Number(req.params.id);
   const existingUser = await get(
-    "SELECT id, name, email, password_hash, role, department, can_access_intranet, job_title, unit_name FROM users WHERE id=?",
+    "SELECT id, name, email, password_hash, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json FROM users WHERE id=?",
     [userId]
   );
   if (!existingUser) return res.status(404).json({ error: "not_found" });
@@ -9330,6 +9896,9 @@ app.get('/api/admin/sales/records', requireAuth(JWT_SECRET), requireRole('admin'
   const payload = await getSalesSummaryForScope(scope, {
     closerId: req.query?.closer_id,
     status: req.query?.status,
+    language: req.query?.language,
+    modality: req.query?.modality,
+    rating: req.query?.rating,
     search: req.query?.search,
     limit: Math.min(200, Math.max(1, Number(req.query?.limit || 100))),
   });
@@ -9385,15 +9954,15 @@ app.post('/api/admin/sales/import', requireAuth(JWT_SECRET), requireRole('admin'
   const salesWorkbook = (req.files?.sales_workbook || [])[0] || null;
   const postSaleWorkbook = (req.files?.post_sale_workbook || [])[0] || null;
 
-  if (!salesWorkbook) {
+  if (!salesWorkbook && !postSaleWorkbook) {
     cleanupUploadedFiles(uploads);
-    return res.status(400).json({ error: 'missing_sales_workbook' });
+    return res.status(400).json({ error: 'missing_sales_or_post_sale_workbook' });
   }
 
   try {
     const summary = await importSalesWorkbookBatch({
-      salesWorkbookPath: salesWorkbook.path,
-      salesWorkbookName: salesWorkbook.originalname,
+      salesWorkbookPath: salesWorkbook?.path || '',
+      salesWorkbookName: salesWorkbook?.originalname || '',
       postSaleWorkbookPath: postSaleWorkbook?.path || '',
       postSaleWorkbookName: postSaleWorkbook?.originalname || '',
       actorUserId: req.user.sub,
@@ -9406,6 +9975,12 @@ app.post('/api/admin/sales/import', requireAuth(JWT_SECRET), requireRole('admin'
   } finally {
     cleanupUploadedFiles(uploads);
   }
+});
+
+app.post('/api/admin/sales/closers/provision-users', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  const requestedClosers = Array.isArray(req.body?.closers) ? req.body.closers : [];
+  const provisioned = await ensureCloserOperationalUsers(requestedClosers, req.user.sub);
+  res.json({ ok: true, provisioned });
 });
 
 app.get('/api/admin/sales/overview', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
@@ -9507,6 +10082,22 @@ app.get('/api/intranet/sales/bootstrap', requireAuth(JWT_SECRET), requireIntrane
   res.json({ sales });
 });
 
+app.get('/api/intranet/sales/dashboard', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  const scope = await getSalesAccessScope(user);
+  if (!scope.enabled) return res.status(403).json({ error: 'sales_access_denied' });
+  const payload = await getSalesSummaryForScope(scope, {
+    closerId: req.query?.closer_id,
+    status: req.query?.status,
+    language: req.query?.language,
+    modality: req.query?.modality,
+    rating: req.query?.rating,
+    search: req.query?.search,
+    limit: Math.min(150, Math.max(1, Number(req.query?.limit || 80))),
+  });
+  res.json({ summary: payload.totals });
+});
+
 app.get('/api/intranet/sales/records', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
   const user = req.currentUser || await getUserById(req.user.sub);
   const scope = await getSalesAccessScope(user);
@@ -9514,6 +10105,9 @@ app.get('/api/intranet/sales/records', requireAuth(JWT_SECRET), requireIntranetA
   const payload = await getSalesSummaryForScope(scope, {
     closerId: req.query?.closer_id,
     status: req.query?.status,
+    language: req.query?.language,
+    modality: req.query?.modality,
+    rating: req.query?.rating,
     search: req.query?.search,
     limit: Math.min(150, Math.max(1, Number(req.query?.limit || 80))),
   });
@@ -9542,6 +10136,9 @@ app.patch('/api/intranet/sales/records/:id', requireAuth(JWT_SECRET), requireInt
   } catch (err) {
     if (err?.message === 'not_found') return res.status(404).json({ error: 'not_found' });
     if (err?.message === 'forbidden') return res.status(403).json({ error: 'forbidden' });
+    if (err?.message === 'invalid_operational_status' || err?.message === 'invalid_post_sale_rating') {
+      return res.status(400).json({ error: err.message });
+    }
     res.status(400).json({ error: err?.message || 'sales_record_update_failed' });
   }
 });

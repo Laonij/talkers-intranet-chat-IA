@@ -3298,7 +3298,7 @@ body.intranet-sidebar-collapsed .intranet-nav-link-label {
 
 .intranet-sales-filter-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -3310,6 +3310,15 @@ body.intranet-sidebar-collapsed .intranet-nav-link-label {
 
 .intranet-sales-record {
   cursor: pointer;
+}
+
+.intranet-sales-record.is-urgent {
+  border-color: #fecaca;
+  box-shadow: 0 20px 40px rgba(185, 28, 28, .08);
+}
+
+.intranet-sales-record.is-today {
+  border-color: #fde68a;
 }
 
 .intranet-sales-record-head,
@@ -3356,6 +3365,71 @@ body.intranet-sidebar-collapsed .intranet-nav-link-label {
 .intranet-sales-detail textarea {
   min-height: 88px;
   resize: vertical;
+}
+
+.intranet-sales-record-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+  margin-top: 12px;
+}
+
+.intranet-sales-record-grid strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: #94a3b8;
+}
+
+.intranet-sales-record-grid span {
+  display: block;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.intranet-sales-record-feedback {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
+}
+
+.intranet-sales-record-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.intranet-chip.is-success {
+  background: rgba(34, 197, 94, .14);
+  color: #166534;
+}
+
+.intranet-chip.is-danger {
+  background: rgba(239, 68, 68, .14);
+  color: #991b1b;
+}
+
+.intranet-chip.is-warning {
+  background: rgba(245, 158, 11, .16);
+  color: #92400e;
+}
+
+.intranet-chip.is-info {
+  background: rgba(14, 165, 233, .16);
+  color: #075985;
+}
+
+.intranet-chip.is-neutral {
+  background: rgba(148, 163, 184, .18);
+  color: #334155;
 }
 
 .intranet-calendar-summary {
@@ -3629,6 +3703,10 @@ body.intranet-sidebar-collapsed .intranet-nav-link-label {
   }
 
   .intranet-sales-filter-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .intranet-sales-record-grid {
     grid-template-columns: 1fr 1fr;
   }
 

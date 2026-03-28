@@ -166,6 +166,13 @@ const ACADEMIC_SESSION_STATUS_OPTIONS = ["planejada", "realizada", "cancelada", 
 const ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS = ["teacher-classes", "teacher-attendance", "teacher-class-students"];
 const ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS = ["academic-students", "academic-enrollments", "academic-classes", "academic-schedules", "academic-teachers", "academic-attendance", "academic-movements"];
 const ACADEMIC_ALL_SUBMENU_VIEW_KEYS = [...ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS, ...ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS];
+const STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS = ["student-search", "student-profile", "student-history"];
+const STUDENT_HUB_COMMERCIAL_VIEW_KEYS = ["commercial-leads", "commercial-negotiations", "commercial-enrollment-conversion"];
+const STUDENT_HUB_FINANCIAL_VIEW_KEYS = ["financial-contracts", "financial-installments", "financial-receivables", "financial-delinquency", "financial-student-profile"];
+const STUDENT_HUB_ALL_VIEW_KEYS = [...STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS, ...STUDENT_HUB_COMMERCIAL_VIEW_KEYS, ...STUDENT_HUB_FINANCIAL_VIEW_KEYS];
+const STUDENT_HUB_LEAD_STAGE_OPTIONS = ["lead", "negociacao", "fechado", "convertido", "perdido"];
+const FINANCIAL_CONTRACT_STATUS_OPTIONS = ["draft", "pending", "active", "signed", "cancelled", "completed"];
+const FINANCIAL_INSTALLMENT_STATUS_OPTIONS = ["pending", "paid", "overdue", "cancelled", "negotiated"];
 const CHAT_PERFORMANCE_SAMPLE_LIMIT = 60;
 const CHAT_HISTORY_CONTEXT_LIMIT = 8;
 const CHAT_HISTORY_CONTEXT_MAX_CHARS = 2200;
@@ -2819,6 +2826,1174 @@ async function buildSalesIntranetPayload(user) {
   };
 }
 
+function normalizeStudentHubViewKey(value = "") {
+  const safe = String(value || "").trim();
+  return STUDENT_HUB_ALL_VIEW_KEYS.includes(safe) ? safe : "student-search";
+}
+
+function getStudentHubAreaByViewKey(viewKey = "") {
+  const safe = normalizeStudentHubViewKey(viewKey);
+  if (STUDENT_HUB_COMMERCIAL_VIEW_KEYS.includes(safe)) return "commercial";
+  if (STUDENT_HUB_FINANCIAL_VIEW_KEYS.includes(safe)) return "financial";
+  return "attendance";
+}
+
+function normalizeLeadStage(value = "", fallback = "lead") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return fallback;
+  const matched = STUDENT_HUB_LEAD_STAGE_OPTIONS.find((item) => normalizeAcademicText(item) === safe);
+  return matched || fallback;
+}
+
+function normalizeFinancialContractStatus(value = "", fallback = "draft") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return fallback;
+  const matched = FINANCIAL_CONTRACT_STATUS_OPTIONS.find((item) => normalizeAcademicText(item) === safe);
+  return matched || fallback;
+}
+
+function normalizeFinancialInstallmentStatus(value = "", fallback = "pending") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return fallback;
+  const matched = FINANCIAL_INSTALLMENT_STATUS_OPTIONS.find((item) => normalizeAcademicText(item) === safe);
+  return matched || fallback;
+}
+
+function normalizeDigits(value = "") {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+function parseMoneyValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const normalized = String(value)
+    .replace(/\s+/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+    .replace(/[^\d.-]/g, "");
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function addMonthsToDateKey(dateKey = "", months = 0) {
+  const safe = normalizeAcademicDateInput(dateKey);
+  if (!safe) return null;
+  const [year, month, day] = safe.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day || 1, 12, 0, 0));
+  date.setUTCMonth(date.getUTCMonth() + Number(months || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+async function createStudentTimelineEntry(payload = {}) {
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) return null;
+  const created = await run(
+    `INSERT INTO student_timeline
+       (student_id, enrollment_id, sales_record_id, contract_id, installment_id, event_type, title, description, actor_user_id, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      studentId,
+      Number(payload.enrollment_id || 0) || null,
+      Number(payload.sales_record_id || 0) || null,
+      Number(payload.contract_id || 0) || null,
+      Number(payload.installment_id || 0) || null,
+      sanitizePersistedText(payload.event_type || "note"),
+      sanitizePersistedText(payload.title || "Atualização do aluno"),
+      sanitizePersistedText(payload.description || "", { trim: false }) || null,
+      Number(payload.actor_user_id || 0) || null,
+      safeJsonStringify(payload.metadata || {}, "{}"),
+    ]
+  );
+  return created.lastID || null;
+}
+
+async function resolveStudentHubScope(user, viewKey = "") {
+  if (!user) throw new Error("student_hub_access_denied");
+  const requestedView = normalizeStudentHubViewKey(viewKey || "");
+  const requestedArea = getStudentHubAreaByViewKey(requestedView);
+  const hasAttendance = userHasDepartmentAccess(user, "atendimento");
+  const hasCommercial = userHasDepartmentAccess(user, "comercial");
+  const hasFinancial = userHasDepartmentAccess(user, "financeiro");
+  const isAdmin = user.role === "admin";
+
+  const scope = {
+    enabled: isAdmin || hasAttendance || hasCommercial || hasFinancial,
+    kind: isAdmin ? "admin" : (hasCommercial ? "commercial" : (hasFinancial ? "financial" : "attendance")),
+    requested_view_key: requestedView,
+    canSearchStudents: Boolean(isAdmin || hasAttendance || hasCommercial || hasFinancial),
+    canManageCommercial: Boolean(isAdmin || hasCommercial),
+    canManageFinancial: Boolean(isAdmin || hasFinancial || hasCommercial),
+    canManageStudentData: Boolean(isAdmin || hasCommercial),
+    canConvertLead: Boolean(isAdmin || hasCommercial),
+    visible_areas: ["attendance", "commercial", "financial"].filter((item) => (
+      isAdmin
+      || (item === "attendance" && hasAttendance)
+      || (item === "commercial" && hasCommercial)
+      || (item === "financial" && hasFinancial)
+    )),
+  };
+
+  if (!scope.enabled) throw new Error("student_hub_access_denied");
+  if (!isAdmin && !scope.visible_areas.includes(requestedArea)) {
+    throw new Error("student_hub_access_denied");
+  }
+  return scope;
+}
+
+function buildStudentHubSearchWhere(filters = {}) {
+  const clauses = [];
+  const params = [];
+  const search = String(filters.search || "").trim();
+  if (search) {
+    const like = buildAcademicSearchLike(search);
+    const digitsLike = `%${normalizeDigits(search)}%`;
+    clauses.push(`(
+      lower(coalesce(s.full_name, '')) LIKE lower(?)
+      OR lower(coalesce(s.preferred_name, '')) LIKE lower(?)
+      OR lower(coalesce(s.email, '')) LIKE lower(?)
+      OR lower(coalesce(s.phone, '')) LIKE lower(?)
+      OR lower(coalesce(s.whatsapp, '')) LIKE lower(?)
+      OR replace(replace(replace(coalesce(s.cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?
+      OR replace(replace(replace(coalesce(s.rg, ''), '.', ''), '-', ''), '/', '') LIKE ?
+      OR EXISTS (
+        SELECT 1
+          FROM student_guardians sg
+         WHERE sg.student_id=s.id
+           AND (
+             lower(coalesce(sg.name, '')) LIKE lower(?)
+             OR lower(coalesce(sg.email, '')) LIKE lower(?)
+             OR lower(coalesce(sg.phone, '')) LIKE lower(?)
+             OR lower(coalesce(sg.whatsapp, '')) LIKE lower(?)
+             OR replace(replace(replace(coalesce(sg.cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?
+           )
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM enrollments e
+         WHERE e.student_id=s.id
+           AND lower(coalesce(e.enrollment_number, '')) LIKE lower(?)
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM financial_contracts fc
+         WHERE fc.student_id=s.id
+           AND (
+             lower(coalesce(fc.contract_number, '')) LIKE lower(?)
+             OR replace(replace(replace(coalesce(fc.responsible_cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?
+           )
+      )
+    )`);
+    params.push(like, like, like, like, like, digitsLike, digitsLike, like, like, like, like, digitsLike, like, like, digitsLike);
+  }
+  if (filters.status) {
+    clauses.push("lower(coalesce(s.status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+async function listStudentHubStudents(scope, filters = {}) {
+  const where = buildStudentHubSearchWhere(filters);
+  const limit = Math.min(140, Math.max(1, Number(filters.limit || 60)));
+  const params = [brazilDateKey(), ...where.params, limit];
+  const rows = await all(
+    `SELECT s.id, s.full_name, s.preferred_name, s.cpf, s.rg, s.email, s.phone, s.whatsapp, s.status, s.updated_at,
+            (SELECT COUNT(*) FROM student_guardians sg WHERE sg.student_id=s.id) AS guardians_total,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.student_id=s.id) AS enrollments_total,
+            (SELECT COALESCE(e.enrollment_status, '')
+               FROM enrollments e
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS current_enrollment_status,
+            (SELECT COALESCE(c.name, '')
+               FROM enrollments e
+               LEFT JOIN classes c ON c.id = e.class_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS current_class_name,
+            (SELECT COALESCE(ap.language, '')
+               FROM enrollments e
+               LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS current_language,
+            (SELECT COUNT(*) FROM financial_contracts fc WHERE fc.student_id=s.id) AS contracts_total,
+            (SELECT COUNT(*)
+               FROM financial_contracts fc
+               JOIN financial_installments fi ON fi.contract_id = fc.id
+              WHERE fc.student_id=s.id
+                AND (
+                  lower(coalesce(fi.status, ''))='overdue'
+                  OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?)
+                )) AS overdue_installments
+       FROM students s
+       ${where.sql}
+      ORDER BY CASE WHEN lower(coalesce(s.status, ''))='ativo' THEN 0 ELSE 1 END, datetime(s.updated_at) DESC, lower(s.full_name) ASC
+      LIMIT ?`,
+    params
+  );
+  const summary = await get(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN lower(coalesce(s.status, ''))='ativo' THEN 1 ELSE 0 END) AS active_total,
+            SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM student_guardians sg WHERE sg.student_id=s.id) THEN 1 ELSE 0 END) AS no_guardian_total,
+            SUM(CASE WHEN EXISTS (SELECT 1 FROM financial_contracts fc WHERE fc.student_id=s.id) THEN 1 ELSE 0 END) AS students_with_contract_total,
+            SUM(CASE WHEN EXISTS (
+              SELECT 1
+                FROM financial_contracts fc
+                JOIN financial_installments fi ON fi.contract_id = fc.id
+               WHERE fc.student_id=s.id
+                 AND (
+                   lower(coalesce(fi.status, ''))='overdue'
+                   OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?)
+                 )
+            ) THEN 1 ELSE 0 END) AS overdue_students
+       FROM students s
+       ${where.sql}`,
+    [brazilDateKey(), ...where.params]
+  );
+  return {
+    rows: rows.map(mapAcademicStudentRow),
+    summary: {
+      total: Number(summary?.total || 0),
+      active_total: Number(summary?.active_total || 0),
+      no_guardian_total: Number(summary?.no_guardian_total || 0),
+      students_with_contract_total: Number(summary?.students_with_contract_total || 0),
+      overdue_students: Number(summary?.overdue_students || 0),
+    },
+  };
+}
+
+function buildResolvedLeadStageSql(alias = "sr") {
+  return `COALESCE(NULLIF(${alias}.lead_stage, ''), CASE WHEN ${alias}.converted_at IS NOT NULL THEN 'convertido' ELSE 'lead' END)`;
+}
+
+function buildStudentHubLeadWhere(filters = {}) {
+  const clauses = [];
+  const params = [];
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    clauses.push("(lower(coalesce(sr.student_name, '')) LIKE lower(?) OR lower(coalesce(sr.phone, '')) LIKE lower(?) OR lower(coalesce(sr.contact_email, '')) LIKE lower(?) OR lower(coalesce(sr.language, '')) LIKE lower(?) OR lower(coalesce(sr.attendant_name, '')) LIKE lower(?) OR lower(coalesce(sr.media_source, '')) LIKE lower(?) OR lower(coalesce(sr.observations, '')) LIKE lower(?))");
+    params.push(like, like, like, like, like, like, like);
+  }
+  if (filters.leadStage) {
+    clauses.push(`lower(${buildResolvedLeadStageSql("sr")})=lower(?)`);
+    params.push(normalizeLeadStage(filters.leadStage));
+  }
+  if (filters.language) {
+    clauses.push("lower(coalesce(sr.language, ''))=lower(?)");
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    clauses.push("lower(coalesce(sr.modality, ''))=lower(?)");
+    params.push(String(filters.modality).trim());
+  }
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+async function listStudentHubLeads(scope, filters = {}) {
+  const where = buildStudentHubLeadWhere(filters);
+  const limit = Math.min(140, Math.max(1, Number(filters.limit || 60)));
+  const stageSql = buildResolvedLeadStageSql("sr");
+  const rows = await all(
+    `SELECT sr.*, ${stageSql} AS resolved_lead_stage,
+            COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name,
+            s.full_name AS linked_student_name,
+            e.enrollment_number AS linked_enrollment_number
+       FROM sales_records sr
+       LEFT JOIN closers c ON c.id = sr.closer_id
+       LEFT JOIN students s ON s.id = sr.student_id
+       LEFT JOIN enrollments e ON e.id = sr.enrollment_id
+       ${where.sql}
+      ORDER BY CASE WHEN sr.converted_at IS NOT NULL THEN 1 ELSE 0 END ASC, datetime(coalesce(sr.updated_at, sr.created_at)) DESC, sr.id DESC
+      LIMIT ?`,
+    [...where.params, limit]
+  );
+  const summary = await get(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN lower(${stageSql})='lead' THEN 1 ELSE 0 END) AS lead_total,
+            SUM(CASE WHEN lower(${stageSql})='negociacao' THEN 1 ELSE 0 END) AS negotiation_total,
+            SUM(CASE WHEN lower(${stageSql})='fechado' THEN 1 ELSE 0 END) AS closed_total,
+            SUM(CASE WHEN lower(${stageSql})='convertido' THEN 1 ELSE 0 END) AS converted_total,
+            SUM(CASE WHEN sr.student_id IS NULL THEN 1 ELSE 0 END) AS unlinked_total
+       FROM sales_records sr
+       ${where.sql}`,
+    where.params
+  );
+  return {
+    rows: rows.map((row) => ({
+      ...serializeSalesRecord(row),
+      resolved_lead_stage: row.resolved_lead_stage || "lead",
+    })),
+    summary: {
+      total: Number(summary?.total || 0),
+      lead_total: Number(summary?.lead_total || 0),
+      negotiation_total: Number(summary?.negotiation_total || 0),
+      closed_total: Number(summary?.closed_total || 0),
+      converted_total: Number(summary?.converted_total || 0),
+      unlinked_total: Number(summary?.unlinked_total || 0),
+    },
+  };
+}
+
+function buildStudentHubContractWhere(filters = {}) {
+  const clauses = [];
+  const params = [];
+  const search = String(filters.search || "").trim();
+  if (search) {
+    const like = buildAcademicSearchLike(search);
+    const digitsLike = `%${normalizeDigits(search)}%`;
+    clauses.push("(lower(coalesce(s.full_name, '')) LIKE lower(?) OR lower(coalesce(fc.contract_number, '')) LIKE lower(?) OR lower(coalesce(fc.responsible_name, '')) LIKE lower(?) OR replace(replace(replace(coalesce(fc.responsible_cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?)");
+    params.push(like, like, like, digitsLike);
+  }
+  if (filters.contractStatus) {
+    clauses.push("lower(coalesce(fc.contract_status, ''))=lower(?)");
+    params.push(normalizeFinancialContractStatus(filters.contractStatus));
+  }
+  if (filters.onlyDelinquent) {
+    clauses.push(`EXISTS (
+      SELECT 1
+        FROM financial_installments fi
+       WHERE fi.contract_id=fc.id
+         AND (
+           lower(coalesce(fi.status, ''))='overdue'
+           OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?)
+         )
+    )`);
+    params.push(brazilDateKey());
+  }
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+function computeInstallmentEffectiveStatus(installment = {}) {
+  const explicit = normalizeFinancialInstallmentStatus(installment.status || "", "pending");
+  if (["paid", "cancelled", "negotiated", "overdue"].includes(explicit)) return explicit;
+  if (installment.due_date && String(installment.due_date).slice(0, 10) < brazilDateKey()) return "overdue";
+  return "pending";
+}
+
+async function listFinancialInstallmentsByContractId(contractId) {
+  const rows = await all(
+    `SELECT id, contract_id, installment_number, due_date, amount, status, paid_at, payment_method, reference_label, notes, metadata_json, created_at, updated_at
+       FROM financial_installments
+      WHERE contract_id=?
+      ORDER BY installment_number ASC, due_date ASC, id ASC`,
+    [contractId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    amount: Number(row.amount || 0),
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+    effective_status: computeInstallmentEffectiveStatus(row),
+  }));
+}
+
+function summarizeContractInstallments(installments = []) {
+  return (Array.isArray(installments) ? installments : []).reduce((acc, item) => {
+    acc.total += 1;
+    acc.amount_total += Number(item.amount || 0);
+    acc[`${item.effective_status}_total`] = Number(acc[`${item.effective_status}_total`] || 0) + 1;
+    return acc;
+  }, {
+    total: 0,
+    amount_total: 0,
+    pending_total: 0,
+    paid_total: 0,
+    overdue_total: 0,
+    cancelled_total: 0,
+    negotiated_total: 0,
+  });
+}
+
+async function listStudentHubContracts(scope, filters = {}) {
+  const where = buildStudentHubContractWhere(filters);
+  const limit = Math.min(140, Math.max(1, Number(filters.limit || 60)));
+  const todayKey = brazilDateKey();
+  const rows = await all(
+    `SELECT fc.*, s.full_name AS student_name, s.cpf AS student_cpf, s.phone AS student_phone, e.enrollment_number,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id) AS installments_total,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id AND lower(coalesce(fi.status, ''))='paid') AS paid_total,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id AND lower(coalesce(fi.status, ''))='pending') AS pending_total,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id AND (lower(coalesce(fi.status, ''))='overdue' OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?))) AS overdue_total
+       FROM financial_contracts fc
+       JOIN students s ON s.id = fc.student_id
+       LEFT JOIN enrollments e ON e.id = fc.enrollment_id
+       ${where.sql}
+      ORDER BY CASE WHEN lower(coalesce(fc.contract_status, '')) IN ('active', 'signed') THEN 0 ELSE 1 END, datetime(fc.updated_at) DESC, fc.id DESC
+      LIMIT ?`,
+    [todayKey, ...where.params, limit]
+  );
+  const summary = await get(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN lower(coalesce(fc.contract_status, '')) IN ('active', 'signed') THEN 1 ELSE 0 END) AS active_total,
+            SUM(CASE WHEN EXISTS (SELECT 1 FROM financial_installments fi WHERE fi.contract_id=fc.id AND lower(coalesce(fi.status, ''))='pending') THEN 1 ELSE 0 END) AS pending_contracts,
+            SUM(CASE WHEN EXISTS (
+              SELECT 1 FROM financial_installments fi
+               WHERE fi.contract_id=fc.id
+                 AND (lower(coalesce(fi.status, ''))='overdue' OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?))
+            ) THEN 1 ELSE 0 END) AS overdue_contracts
+       FROM financial_contracts fc
+       JOIN students s ON s.id = fc.student_id
+       ${where.sql}`,
+    [todayKey, ...where.params]
+  );
+  return {
+    rows: rows.map((row) => ({
+      ...row,
+      total_amount: Number(row.total_amount || 0),
+    })),
+    summary: {
+      total: Number(summary?.total || 0),
+      active_total: Number(summary?.active_total || 0),
+      pending_contracts: Number(summary?.pending_contracts || 0),
+      overdue_contracts: Number(summary?.overdue_contracts || 0),
+    },
+  };
+}
+
+async function buildStudentHubOptions() {
+  const [languagesRows, modalitiesRows, termsRows, classesRows] = await Promise.all([
+    all(`SELECT DISTINCT language AS value FROM academic_programs WHERE coalesce(language, '')<>'' ORDER BY lower(language) ASC LIMIT 80`),
+    all(`SELECT DISTINCT modality AS value FROM academic_programs WHERE coalesce(modality, '')<>'' ORDER BY lower(modality) ASC LIMIT 80`),
+    all(`SELECT id, code, name FROM school_terms ORDER BY lower(code) DESC, lower(name) DESC LIMIT 40`),
+    all(`SELECT c.id, c.name, c.code, c.language, c.modality, st.code AS school_term_code
+           FROM classes c
+           LEFT JOIN school_terms st ON st.id = c.school_term_id
+          WHERE lower(coalesce(c.status, ''))<>'cancelada'
+          ORDER BY datetime(c.updated_at) DESC, lower(c.name) ASC
+          LIMIT 240`),
+  ]);
+  return {
+    lead_stage_options: STUDENT_HUB_LEAD_STAGE_OPTIONS.slice(),
+    contract_status_options: FINANCIAL_CONTRACT_STATUS_OPTIONS.slice(),
+    installment_status_options: FINANCIAL_INSTALLMENT_STATUS_OPTIONS.slice(),
+    student_status_options: ACADEMIC_STUDENT_STATUS_OPTIONS.slice(),
+    enrollment_status_options: ACADEMIC_ENROLLMENT_STATUS_OPTIONS.slice(),
+    languages: languagesRows.map((item) => item.value).filter(Boolean),
+    modalities: modalitiesRows.map((item) => item.value).filter(Boolean),
+    terms: termsRows,
+    classes: classesRows,
+  };
+}
+
+async function getStudentHubStudentDetail(studentId, scope) {
+  const detail = await getAcademicStudentDetail(studentId, { canViewAll: true, teacherUserId: null });
+  if (!detail?.student) return null;
+  const student = detail.student;
+  const commercialRows = await all(
+    `SELECT sr.*, ${buildResolvedLeadStageSql("sr")} AS resolved_lead_stage,
+            COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
+       FROM sales_records sr
+       LEFT JOIN closers c ON c.id = sr.closer_id
+      WHERE sr.student_id=?
+         OR lower(coalesce(sr.student_name, ''))=lower(?)
+         OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.phone, ''))=lower(?))
+         OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.contact_email, ''))=lower(?))
+      ORDER BY datetime(coalesce(sr.converted_at, sr.updated_at, sr.created_at)) DESC, sr.id DESC
+      LIMIT 20`,
+    [
+      studentId,
+      student.full_name || "",
+      student.phone || null,
+      student.phone || null,
+      student.phone || null,
+      student.email || null,
+      student.email || null,
+      student.email || null,
+    ]
+  );
+  const contracts = await all(
+    `SELECT fc.*, e.enrollment_number
+       FROM financial_contracts fc
+       LEFT JOIN enrollments e ON e.id = fc.enrollment_id
+      WHERE fc.student_id=?
+      ORDER BY datetime(fc.updated_at) DESC, fc.id DESC`,
+    [studentId]
+  );
+  const contractDetails = [];
+  for (const contract of contracts) {
+    const installments = await listFinancialInstallmentsByContractId(contract.id);
+    contractDetails.push({
+      ...contract,
+      total_amount: Number(contract.total_amount || 0),
+      installments,
+      summary: summarizeContractInstallments(installments),
+    });
+  }
+  const primaryContract = contractDetails.find((item) => ["active", "signed", "pending", "draft"].includes(String(item.contract_status || "").toLowerCase()))
+    || contractDetails[0]
+    || null;
+  const timeline = await all(
+    `SELECT st.*, u.name AS actor_name
+       FROM student_timeline st
+       LEFT JOIN users u ON u.id = st.actor_user_id
+      WHERE st.student_id=?
+      ORDER BY datetime(st.created_at) DESC, st.id DESC
+      LIMIT 80`,
+    [studentId]
+  );
+
+  const currentEnrollment = (detail.enrollments || []).find((item) => ["matriculado", "aguardando turma", "pre-matricula"].includes(normalizeAcademicText(item.enrollment_status || "")))
+    || detail.enrollments?.[0]
+    || null;
+  let currentTeachers = [];
+  let currentSchedules = [];
+  if (currentEnrollment?.class_id) {
+    currentTeachers = await listClassTeachersByClassId(currentEnrollment.class_id);
+    currentSchedules = await listClassSchedulesByClassId(currentEnrollment.class_id);
+  }
+
+  return {
+    student: detail.student,
+    guardians: detail.guardians || [],
+    commercial: {
+      records: commercialRows.map((row) => ({
+        ...serializeSalesRecord(row),
+        resolved_lead_stage: row.resolved_lead_stage || "lead",
+      })),
+      latest_record: commercialRows[0] ? {
+        ...serializeSalesRecord(commercialRows[0]),
+        resolved_lead_stage: commercialRows[0].resolved_lead_stage || "lead",
+      } : null,
+    },
+    enrollment_summary: currentEnrollment || null,
+    enrollments: detail.enrollments || [],
+    attendance_summary: detail.attendance_summary || { total: 0, present_total: 0, absent_total: 0 },
+    pedagogical: {
+      current_class_name: currentEnrollment?.class_name || null,
+      current_teacher_names: currentTeachers.map((item) => item.display_name || item.user_name).filter(Boolean),
+      current_schedule_labels: currentSchedules.map((item) => [item.weekday, item.start_time, item.end_time].filter(Boolean).join(" · ")).filter(Boolean),
+      current_status: currentEnrollment?.enrollment_status || detail.student?.status || null,
+    },
+    financial: {
+      contracts: contractDetails,
+      primary_contract: primaryContract,
+      summary: contractDetails.reduce((acc, item) => {
+        acc.contracts_total += 1;
+        acc.amount_total += Number(item.total_amount || 0);
+        acc.installments_total += Number(item.summary?.total || 0);
+        acc.pending_total += Number(item.summary?.pending_total || 0);
+        acc.paid_total += Number(item.summary?.paid_total || 0);
+        acc.overdue_total += Number(item.summary?.overdue_total || 0);
+        return acc;
+      }, { contracts_total: 0, amount_total: 0, installments_total: 0, pending_total: 0, paid_total: 0, overdue_total: 0 }),
+    },
+    timeline: timeline.map((item) => ({
+      ...item,
+      metadata: safeJsonParse(item.metadata_json || "{}") || {},
+    })),
+    scope,
+  };
+}
+
+async function getStudentHubLeadDetail(recordId, scope) {
+  const record = await get(
+    `SELECT sr.*, ${buildResolvedLeadStageSql("sr")} AS resolved_lead_stage,
+            COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
+       FROM sales_records sr
+       LEFT JOIN closers c ON c.id = sr.closer_id
+      WHERE sr.id=?`,
+    [recordId]
+  );
+  if (!record) return null;
+  const history = await getSalesRecordHistory(recordId);
+  const linkedStudent = Number(record.student_id || 0)
+    ? await getStudentHubStudentDetail(Number(record.student_id), scope).catch(() => null)
+    : null;
+  return {
+    record: {
+      ...serializeSalesRecord(record),
+      resolved_lead_stage: record.resolved_lead_stage || "lead",
+    },
+    history,
+    linked_student: linkedStudent,
+  };
+}
+
+async function getStudentHubContractDetail(contractId, scope) {
+  const contract = await get(
+    `SELECT fc.*, s.full_name AS student_name, s.cpf AS student_cpf, s.phone AS student_phone, e.enrollment_number
+       FROM financial_contracts fc
+       JOIN students s ON s.id = fc.student_id
+       LEFT JOIN enrollments e ON e.id = fc.enrollment_id
+      WHERE fc.id=?`,
+    [contractId]
+  );
+  if (!contract) return null;
+  const installments = await listFinancialInstallmentsByContractId(contractId);
+  const studentDetail = await getStudentHubStudentDetail(Number(contract.student_id), scope).catch(() => null);
+  return {
+    contract: {
+      ...contract,
+      total_amount: Number(contract.total_amount || 0),
+    },
+    installments,
+    summary: summarizeContractInstallments(installments),
+    student: studentDetail,
+  };
+}
+
+function generateEnrollmentNumber(studentId, schoolTermCode = "") {
+  const safeCode = sanitizeAcademicIdentifier(schoolTermCode || String(new Date().getFullYear()), "term").toUpperCase();
+  return `MAT-${safeCode}-${String(studentId).padStart(5, "0")}`;
+}
+
+function generateContractNumber(studentId, enrollmentId = 0) {
+  const year = new Date().getFullYear();
+  return `CTR-${year}-${String(studentId || 0).padStart(5, "0")}-${String(enrollmentId || 0).padStart(5, "0")}`;
+}
+
+async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = null) {
+  const actorId = actorUser?.id || actorUser?.sub || null;
+  const fullName = sanitizeAcademicTextValue(payload.student_name, { maxLength: 180 });
+  if (!fullName) throw new Error("missing_student_name");
+  const persisted = {
+    student_name: fullName,
+    phone: sanitizeAcademicTextValue(payload.phone, { maxLength: 40 }) || null,
+    contact_email: sanitizeAcademicTextValue(payload.contact_email, { maxLength: 180 }) || null,
+    course_name: sanitizeAcademicTextValue(payload.course_name, { maxLength: 180 }) || null,
+    level_name: sanitizeAcademicTextValue(payload.level_name, { maxLength: 120 }) || null,
+    teacher_name: sanitizeAcademicTextValue(payload.teacher_name, { maxLength: 120 }) || null,
+    attendant_name: sanitizeAcademicTextValue(payload.attendant_name, { maxLength: 120 }) || null,
+    sale_month: sanitizeAcademicTextValue(payload.sale_month, { maxLength: 32 }) || null,
+    sale_date: normalizeAcademicDateInput(payload.sale_date) || brazilDateKey(),
+    semester_label: sanitizeAcademicTextValue(payload.semester_label, { maxLength: 60 }) || null,
+    availability: sanitizeAcademicTextValue(payload.availability, { maxLength: 180 }) || null,
+    modality: sanitizeAcademicTextValue(payload.modality, { maxLength: 80 }) || null,
+    class_type: sanitizeAcademicTextValue(payload.class_type, { maxLength: 80 }) || null,
+    system_name: sanitizeAcademicTextValue(payload.system_name, { maxLength: 120 }) || null,
+    contract_status: sanitizeAcademicTextValue(payload.contract_status, { maxLength: 80 }) || null,
+    language: sanitizeAcademicTextValue(payload.language, { maxLength: 80 }) || null,
+    media_source: sanitizeAcademicTextValue(payload.media_source, { maxLength: 120 }) || null,
+    profession: sanitizeAcademicTextValue(payload.profession, { maxLength: 120 }) || null,
+    indication: sanitizeAcademicTextValue(payload.indication, { maxLength: 120 }) || null,
+    observations: sanitizeAcademicTextValue(payload.observations, { maxLength: 4000 }) || null,
+    feedback: sanitizeAcademicTextValue(payload.feedback, { maxLength: 4000 }) || null,
+    lead_stage: normalizeLeadStage(payload.lead_stage || "lead"),
+    source_payload_json: safeJsonStringify(payload.source_payload || payload, "{}"),
+  };
+
+  if (existingId) {
+    const existing = await get("SELECT * FROM sales_records WHERE id=? LIMIT 1", [existingId]);
+    if (!existing) throw new Error("lead_not_found");
+    await run(
+      `UPDATE sales_records
+          SET student_name=?, phone=?, contact_email=?, course_name=?, level_name=?, teacher_name=?, attendant_name=?, sale_month=?, sale_date=?, semester_label=?,
+              availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, media_source=?, profession=?, indication=?,
+              observations=?, feedback=?, lead_stage=?, source_payload_json=?, last_modified_by=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        persisted.student_name,
+        persisted.phone,
+        persisted.contact_email,
+        persisted.course_name,
+        persisted.level_name,
+        persisted.teacher_name,
+        persisted.attendant_name,
+        persisted.sale_month,
+        persisted.sale_date,
+        persisted.semester_label,
+        persisted.availability,
+        persisted.modality,
+        persisted.class_type,
+        persisted.system_name,
+        persisted.contract_status,
+        persisted.language,
+        persisted.media_source,
+        persisted.profession,
+        persisted.indication,
+        persisted.observations,
+        persisted.feedback,
+        persisted.lead_stage,
+        persisted.source_payload_json,
+        actorId,
+        existingId,
+      ]
+    );
+    return getStudentHubLeadDetail(existingId, { canViewAll: true });
+  }
+
+  const dedupeHash = hashText(`${fullName}|${persisted.phone || ""}|${persisted.contact_email || ""}|${Date.now()}|${Math.random()}`);
+  const created = await run(
+    `INSERT INTO sales_records
+       (origin_type, source_workbook, source_sheet, dedupe_hash, student_name, phone, contact_email, course_name, level_name, teacher_name, attendant_name,
+        sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, media_source, profession, indication,
+        feedback, observations, lead_stage, source_payload_json, last_modified_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      "manual_lead",
+      "manual_entry",
+      "commercial-leads",
+      dedupeHash,
+      persisted.student_name,
+      persisted.phone,
+      persisted.contact_email,
+      persisted.course_name,
+      persisted.level_name,
+      persisted.teacher_name,
+      persisted.attendant_name,
+      persisted.sale_month,
+      persisted.sale_date,
+      persisted.semester_label,
+      persisted.availability,
+      persisted.modality,
+      persisted.class_type,
+      persisted.system_name,
+      persisted.contract_status,
+      persisted.language,
+      persisted.media_source,
+      persisted.profession,
+      persisted.indication,
+      persisted.feedback,
+      persisted.observations,
+      persisted.lead_stage,
+      persisted.source_payload_json,
+      actorId,
+    ]
+  );
+  await logEntityChange({
+    entityType: "sales_record",
+    entityId: created.lastID,
+    action: "created",
+    actorUserId: actorId,
+    origin: "manual_lead",
+    detail: { lead_stage: persisted.lead_stage },
+  });
+  return getStudentHubLeadDetail(created.lastID, { canViewAll: true });
+}
+
+async function saveFinancialContractRecord(payload = {}, actorUser = null, options = {}) {
+  const actorUserId = actorUser?.id || actorUser?.sub || null;
+  const contractId = Number(payload.id || 0) || null;
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) throw new Error("missing_student_id");
+  const persisted = {
+    student_id: studentId,
+    enrollment_id: Number(payload.enrollment_id || 0) || null,
+    sales_record_id: Number(payload.sales_record_id || 0) || null,
+    responsible_guardian_id: Number(payload.responsible_guardian_id || 0) || null,
+    contract_number: sanitizeAcademicTextValue(payload.contract_number, { maxLength: 80 }) || null,
+    contract_type: sanitizeAcademicTextValue(payload.contract_type, { maxLength: 80 }) || "course_enrollment",
+    contract_status: normalizeFinancialContractStatus(payload.contract_status || "draft"),
+    total_amount: parseMoneyValue(payload.total_amount),
+    currency: sanitizeAcademicTextValue(payload.currency, { maxLength: 12 }) || "BRL",
+    installments_count: Math.max(0, Number(payload.installments_count || 0) || 0),
+    first_due_date: normalizeAcademicDateInput(payload.first_due_date),
+    billing_cycle_day: Number(payload.billing_cycle_day || 0) || null,
+    responsible_name: sanitizeAcademicTextValue(payload.responsible_name, { maxLength: 180 }) || null,
+    responsible_cpf: sanitizeAcademicTextValue(payload.responsible_cpf, { maxLength: 32 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
+    source_payload_json: safeJsonStringify(payload.source_payload || {}, "{}"),
+    metadata_json: safeJsonStringify(payload.metadata || {}, "{}"),
+  };
+
+  let finalId = contractId;
+  if (contractId) {
+    const existing = await get("SELECT * FROM financial_contracts WHERE id=? LIMIT 1", [contractId]);
+    if (!existing) throw new Error("contract_not_found");
+    await run(
+      `UPDATE financial_contracts
+          SET student_id=?, enrollment_id=?, sales_record_id=?, responsible_guardian_id=?, contract_number=?, contract_type=?, contract_status=?, total_amount=?, currency=?,
+              installments_count=?, first_due_date=?, billing_cycle_day=?, responsible_name=?, responsible_cpf=?, notes=?, source_workbook=?, source_sheet=?, source_row_identifier=?,
+              source_payload_json=?, metadata_json=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        persisted.student_id,
+        persisted.enrollment_id,
+        persisted.sales_record_id,
+        persisted.responsible_guardian_id,
+        persisted.contract_number,
+        persisted.contract_type,
+        persisted.contract_status,
+        persisted.total_amount,
+        persisted.currency,
+        persisted.installments_count,
+        persisted.first_due_date,
+        persisted.billing_cycle_day,
+        persisted.responsible_name,
+        persisted.responsible_cpf,
+        persisted.notes,
+        persisted.source_workbook,
+        persisted.source_sheet,
+        persisted.source_row_identifier,
+        persisted.source_payload_json,
+        persisted.metadata_json,
+        contractId,
+      ]
+    );
+  } else {
+    const created = await run(
+      `INSERT INTO financial_contracts
+         (student_id, enrollment_id, sales_record_id, responsible_guardian_id, contract_number, contract_type, contract_status, total_amount, currency, installments_count,
+          first_due_date, billing_cycle_day, responsible_name, responsible_cpf, notes, source_workbook, source_sheet, source_row_identifier, source_payload_json, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        persisted.student_id,
+        persisted.enrollment_id,
+        persisted.sales_record_id,
+        persisted.responsible_guardian_id,
+        persisted.contract_number,
+        persisted.contract_type,
+        persisted.contract_status,
+        persisted.total_amount,
+        persisted.currency,
+        persisted.installments_count,
+        persisted.first_due_date,
+        persisted.billing_cycle_day,
+        persisted.responsible_name,
+        persisted.responsible_cpf,
+        persisted.notes,
+        persisted.source_workbook,
+        persisted.source_sheet,
+        persisted.source_row_identifier,
+        persisted.source_payload_json,
+        persisted.metadata_json,
+      ]
+    );
+    finalId = created.lastID;
+  }
+
+  const contract = await get("SELECT * FROM financial_contracts WHERE id=?", [finalId]);
+  const suppliedInstallments = Array.isArray(payload.installments) ? payload.installments : [];
+  for (let index = 0; index < suppliedInstallments.length; index += 1) {
+    const item = suppliedInstallments[index] || {};
+    const installmentNumber = Math.max(1, Number(item.installment_number || index + 1) || index + 1);
+    const dueDate = normalizeAcademicDateInput(item.due_date || addMonthsToDateKey(contract.first_due_date, index));
+    const amount = parseMoneyValue(item.amount);
+    const existingInstallment = await get("SELECT * FROM financial_installments WHERE contract_id=? AND installment_number=? LIMIT 1", [finalId, installmentNumber]);
+    const baseStatus = normalizeFinancialInstallmentStatus(item.status || existingInstallment?.status || "pending");
+    const finalStatus = baseStatus === "pending" && dueDate && dueDate < brazilDateKey() ? "overdue" : baseStatus;
+    if (existingInstallment?.id) {
+      await run(
+        `UPDATE financial_installments
+            SET due_date=?, amount=?, status=?, paid_at=?, payment_method=?, reference_label=?, notes=?, metadata_json=?, updated_at=datetime('now')
+          WHERE id=?`,
+        [
+          dueDate,
+          amount,
+          finalStatus,
+          normalizeAcademicDateTimeInput(item.paid_at) || existingInstallment.paid_at || null,
+          sanitizeAcademicTextValue(item.payment_method, { maxLength: 80 }) || existingInstallment.payment_method || null,
+          sanitizeAcademicTextValue(item.reference_label, { maxLength: 120 }) || existingInstallment.reference_label || null,
+          sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || existingInstallment.notes || null,
+          safeJsonStringify(item.metadata || {}, "{}"),
+          existingInstallment.id,
+        ]
+      );
+    } else {
+      await run(
+        `INSERT INTO financial_installments
+           (contract_id, installment_number, due_date, amount, status, paid_at, payment_method, reference_label, notes, metadata_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          finalId,
+          installmentNumber,
+          dueDate,
+          amount,
+          finalStatus,
+          normalizeAcademicDateTimeInput(item.paid_at),
+          sanitizeAcademicTextValue(item.payment_method, { maxLength: 80 }) || null,
+          sanitizeAcademicTextValue(item.reference_label, { maxLength: 120 }) || null,
+          sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || null,
+          safeJsonStringify(item.metadata || {}, "{}"),
+        ]
+      );
+    }
+  }
+
+  if (actorUserId && options.createTimeline !== false) {
+    await createStudentTimelineEntry({
+      student_id: persisted.student_id,
+      enrollment_id: persisted.enrollment_id,
+      sales_record_id: persisted.sales_record_id,
+      contract_id: finalId,
+      actor_user_id: actorUserId,
+      event_type: contractId ? "financial_contract_updated" : "financial_contract_created",
+      title: contractId ? "Contrato atualizado" : "Contrato criado",
+      description: `Contrato ${persisted.contract_number || finalId} em status ${persisted.contract_status}.`,
+      metadata: {
+        contract_status: persisted.contract_status,
+        installments_count: persisted.installments_count,
+      },
+    });
+  }
+
+  return getStudentHubContractDetail(finalId, { canViewAll: true });
+}
+
+async function updateFinancialInstallmentRecord(installmentId, payload = {}, actorUser = null) {
+  const actorUserId = actorUser?.id || actorUser?.sub || null;
+  const existing = await get("SELECT * FROM financial_installments WHERE id=? LIMIT 1", [installmentId]);
+  if (!existing) throw new Error("installment_not_found");
+  const dueDate = normalizeAcademicDateInput(payload.due_date || existing.due_date);
+  const baseStatus = normalizeFinancialInstallmentStatus(payload.status || existing.status || "pending");
+  const finalStatus = baseStatus === "pending" && dueDate && dueDate < brazilDateKey() ? "overdue" : baseStatus;
+  await run(
+    `UPDATE financial_installments
+        SET due_date=?, amount=?, status=?, paid_at=?, payment_method=?, reference_label=?, notes=?, metadata_json=?, updated_at=datetime('now')
+      WHERE id=?`,
+    [
+      dueDate,
+      parseMoneyValue(payload.amount ?? existing.amount),
+      finalStatus,
+      normalizeAcademicDateTimeInput(payload.paid_at || existing.paid_at),
+      sanitizeAcademicTextValue(payload.payment_method, { maxLength: 80 }) || existing.payment_method || null,
+      sanitizeAcademicTextValue(payload.reference_label, { maxLength: 120 }) || existing.reference_label || null,
+      sanitizeAcademicTextValue(payload.notes, { maxLength: 1200 }) || existing.notes || null,
+      safeJsonStringify(payload.metadata || safeJsonParse(existing.metadata_json || "{}") || {}, "{}"),
+      installmentId,
+    ]
+  );
+  const contract = await get("SELECT student_id, enrollment_id, id FROM financial_contracts WHERE id=? LIMIT 1", [existing.contract_id]);
+  if (contract?.student_id && actorUserId) {
+    await createStudentTimelineEntry({
+      student_id: contract.student_id,
+      enrollment_id: contract.enrollment_id,
+      contract_id: contract.id,
+      installment_id: installmentId,
+      actor_user_id: actorUserId,
+      event_type: "financial_installment_updated",
+      title: "Parcela atualizada",
+      description: `Parcela ${existing.installment_number} atualizada para ${finalStatus}.`,
+      metadata: { installment_number: existing.installment_number, status: finalStatus, due_date: dueDate },
+    });
+  }
+  return get("SELECT * FROM financial_installments WHERE id=?", [installmentId]);
+}
+
+async function convertLeadToStudentHubRecord(recordId, payload = {}, actorUser = null) {
+  const actorId = actorUser?.id || actorUser?.sub || null;
+  const lead = await getSalesRecordById(recordId);
+  if (!lead) throw new Error("lead_not_found");
+
+  const incomingStudent = payload.student || {};
+  const matchedStudent = lead.student_id
+    ? await get("SELECT * FROM students WHERE id=? LIMIT 1", [lead.student_id])
+    : await findAcademicStudentMatch({
+        fullName: incomingStudent.full_name || lead.student_name,
+        normalizedName: normalizePersonKey(incomingStudent.full_name || lead.student_name || ""),
+        phone: incomingStudent.phone || lead.phone,
+      });
+
+  const savedStudent = await saveAcademicStudentRecord({
+    id: matchedStudent?.id || null,
+    full_name: incomingStudent.full_name || lead.student_name,
+    preferred_name: incomingStudent.preferred_name || matchedStudent?.preferred_name || null,
+    birth_date: incomingStudent.birth_date || matchedStudent?.birth_date || null,
+    cpf: incomingStudent.cpf || matchedStudent?.cpf || null,
+    rg: incomingStudent.rg || matchedStudent?.rg || null,
+    email: incomingStudent.email || lead.contact_email || matchedStudent?.email || null,
+    phone: incomingStudent.phone || lead.phone || matchedStudent?.phone || null,
+    whatsapp: incomingStudent.whatsapp || lead.phone || matchedStudent?.whatsapp || null,
+    notes: incomingStudent.notes || matchedStudent?.notes || lead.observations || null,
+    status: incomingStudent.status || matchedStudent?.status || "ativo",
+  }, actorId);
+
+  const guardians = Array.isArray(payload.guardians) ? payload.guardians : [];
+  if (guardians.length) {
+    await replaceStudentGuardians(savedStudent.id, guardians, actorId);
+  }
+  const savedGuardians = await all(
+    "SELECT id, name, relation_type, cpf, phone, whatsapp, email, financial_responsible, pedagogical_responsible FROM student_guardians WHERE student_id=? ORDER BY financial_responsible DESC, pedagogical_responsible DESC, id ASC",
+    [savedStudent.id]
+  );
+  const financialGuardian = savedGuardians.find((item) => coerceDbBoolean(item.financial_responsible)) || savedGuardians[0] || null;
+
+  const enrollmentPayload = payload.enrollment || {};
+  const schoolTerm = await ensureSchoolTermRecord({
+    code: enrollmentPayload.school_term_code || lead.semester_label,
+    name: enrollmentPayload.school_term_name || lead.semester_label,
+    status: "active",
+  });
+  const program = await ensureAcademicProgramRecord({
+    language: enrollmentPayload.language || lead.language,
+    program_name: enrollmentPayload.program_name || lead.course_name || lead.level_name || lead.language,
+    level_name: enrollmentPayload.level_name || lead.level_name,
+    semester_label: enrollmentPayload.semester_label || lead.semester_label,
+    modality: enrollmentPayload.modality || lead.modality,
+    status: "active",
+  });
+  const enrollment = await saveAcademicEnrollmentRecord({
+    id: Number(lead.enrollment_id || 0) || null,
+    student_id: savedStudent.id,
+    academic_program_id: program?.id || null,
+    school_term_id: schoolTerm?.id || null,
+    class_id: Number(enrollmentPayload.class_id || 0) || null,
+    enrollment_number: enrollmentPayload.enrollment_number || generateEnrollmentNumber(savedStudent.id, schoolTerm?.code || lead.semester_label || ""),
+    enrollment_date: enrollmentPayload.enrollment_date || lead.sale_date || brazilDateKey(),
+    start_date: enrollmentPayload.start_date || lead.sale_date || brazilDateKey(),
+    end_date: enrollmentPayload.end_date || null,
+    enrollment_status: enrollmentPayload.enrollment_status || ((Number(enrollmentPayload.class_id || 0) || 0) ? "matriculado" : "aguardando turma"),
+    contract_status: enrollmentPayload.contract_status || lead.contract_status || "em formalizacao",
+    payment_status: enrollmentPayload.payment_status || "pendente",
+    pedagogical_status: enrollmentPayload.pedagogical_status || "matricula_em_abertura",
+    source_channel: enrollmentPayload.source_channel || lead.media_source || "comercial",
+    source_notes: enrollmentPayload.source_notes || lead.feedback || lead.observations || null,
+    notes: enrollmentPayload.notes || lead.observations || null,
+    source_workbook: "student_hub_conversion",
+    source_sheet: "commercial-conversion",
+    source_row_identifier: `lead:${recordId}`,
+    source_payload: {
+      lead_id: recordId,
+      lead_stage: lead.lead_stage || null,
+    },
+    metadata: {
+      converted_from_sales_record_id: recordId,
+    },
+  }, actorUser);
+
+  const contractPayload = payload.contract || {};
+  const defaultInstallmentsCount = Math.max(0, Number(contractPayload.installments_count || 0) || 0);
+  const totalAmount = parseMoneyValue(contractPayload.total_amount);
+  const installments = Array.isArray(contractPayload.installments) && contractPayload.installments.length
+    ? contractPayload.installments
+    : (defaultInstallmentsCount > 0 && totalAmount && contractPayload.first_due_date
+        ? Array.from({ length: defaultInstallmentsCount }).map((_, index) => ({
+            installment_number: index + 1,
+            due_date: addMonthsToDateKey(contractPayload.first_due_date, index),
+            amount: Number((totalAmount / defaultInstallmentsCount).toFixed(2)),
+            status: "pending",
+            reference_label: `Parcela ${index + 1}/${defaultInstallmentsCount}`,
+          }))
+        : []);
+
+  const contractDetail = await saveFinancialContractRecord({
+    id: Number(lead.financial_contract_id || 0) || null,
+    student_id: savedStudent.id,
+    enrollment_id: enrollment.id,
+    sales_record_id: lead.id,
+    responsible_guardian_id: financialGuardian?.id || null,
+    responsible_name: contractPayload.responsible_name || financialGuardian?.name || null,
+    responsible_cpf: contractPayload.responsible_cpf || financialGuardian?.cpf || null,
+    contract_number: contractPayload.contract_number || generateContractNumber(savedStudent.id, enrollment.id),
+    contract_type: contractPayload.contract_type || "course_enrollment",
+    contract_status: contractPayload.contract_status || "draft",
+    total_amount,
+    currency: contractPayload.currency || "BRL",
+    installments_count: installments.length || defaultInstallmentsCount,
+    first_due_date: contractPayload.first_due_date || installments[0]?.due_date || null,
+    billing_cycle_day: contractPayload.billing_cycle_day || (contractPayload.first_due_date ? Number(String(contractPayload.first_due_date).slice(8, 10)) : null),
+    notes: contractPayload.notes || "Contrato criado a partir da conversão comercial.",
+    installments,
+    metadata: {
+      created_from_lead_id: lead.id,
+    },
+  }, actorUser, { createTimeline: false });
+
+  await run(
+    `UPDATE sales_records
+        SET student_id=?, enrollment_id=?, financial_contract_id=?, contact_email=COALESCE(?, contact_email), lead_stage='convertido',
+            converted_at=COALESCE(converted_at, CURRENT_TIMESTAMP), contract_status=?, updated_at=datetime('now')
+      WHERE id=?`,
+    [
+      savedStudent.id,
+      enrollment.id,
+      contractDetail?.contract?.id || null,
+      incomingStudent.email || lead.contact_email || null,
+      contractDetail?.contract?.contract_status || lead.contract_status || null,
+      recordId,
+    ]
+  );
+
+  await createStudentTimelineEntry({
+    student_id: savedStudent.id,
+    enrollment_id: enrollment.id,
+    sales_record_id: recordId,
+    contract_id: contractDetail?.contract?.id || null,
+    actor_user_id: actorId,
+    event_type: "lead_converted",
+    title: "Lead convertido em aluno",
+    description: `${lead.student_name || savedStudent.full_name} foi convertido do Comercial para cadastro, matrícula e financeiro.`,
+    metadata: {
+      lead_id: recordId,
+      enrollment_id: enrollment.id,
+      contract_id: contractDetail?.contract?.id || null,
+    },
+  });
+
+  return {
+    student: await getStudentHubStudentDetail(savedStudent.id, { canViewAll: true }).catch(() => null),
+    lead: await getStudentHubLeadDetail(recordId, { canViewAll: true }).catch(() => null),
+    contract: contractDetail,
+  };
+}
+
+async function buildStudentHubBootstrap(user, filters = {}) {
+  const viewKey = normalizeStudentHubViewKey(filters.view_key || "");
+  const scope = await resolveStudentHubScope(user, viewKey);
+  const area = getStudentHubAreaByViewKey(viewKey);
+  const options = await buildStudentHubOptions();
+  const payload = {
+    enabled: true,
+    view_key: viewKey,
+    area,
+    scope_kind: scope.kind,
+    scope,
+    options,
+    summary: {},
+    students: [],
+    leads: [],
+    contracts: [],
+  };
+
+  if (area === "commercial") {
+    const commercial = await listStudentHubLeads(scope, {
+      search: filters.search,
+      leadStage: filters.lead_stage,
+      language: filters.language,
+      modality: filters.modality,
+      limit: filters.limit || 60,
+    });
+    payload.summary = commercial.summary;
+    payload.leads = commercial.rows;
+  } else if (area === "financial") {
+    if (viewKey === "financial-student-profile") {
+      const students = await listStudentHubStudents(scope, {
+        search: filters.search,
+        status: filters.student_status,
+        limit: filters.limit || 60,
+      });
+      payload.summary = {
+        total: Number(students.summary?.total || 0),
+        active_total: Number(students.summary?.students_with_contract_total || 0),
+        pending_contracts: Number(students.summary?.no_guardian_total || 0),
+        overdue_contracts: Number(students.summary?.overdue_students || 0),
+      };
+      payload.students = students.rows;
+    } else {
+      const financial = await listStudentHubContracts(scope, {
+        search: filters.search,
+        contractStatus: filters.contract_status,
+        onlyDelinquent: viewKey === "financial-delinquency",
+        limit: filters.limit || 60,
+      });
+      payload.summary = financial.summary;
+      payload.contracts = financial.rows;
+    }
+  } else {
+    const students = await listStudentHubStudents(scope, {
+      search: filters.search,
+      status: filters.student_status,
+      limit: filters.limit || 60,
+    });
+    payload.summary = students.summary;
+    payload.students = students.rows;
+  }
+
+  return payload;
+}
+
 function normalizeAcademicOption(value, allowedValues = [], fallback = "") {
   const safe = String(value || "").trim();
   if (!safe) return fallback;
@@ -3299,12 +4474,13 @@ async function replaceStudentGuardians(studentId, guardians = [], actorUserId = 
     if (!name) continue;
     const created = await run(
       `INSERT INTO student_guardians
-         (student_id, name, relation_type, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+         (student_id, name, relation_type, cpf, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       [
         studentId,
         name,
         sanitizeAcademicTextValue(item.relation_type, { maxLength: 60 }) || null,
+        sanitizeAcademicTextValue(item.cpf, { maxLength: 32 }) || null,
         sanitizeAcademicTextValue(item.phone, { maxLength: 40 }) || null,
         sanitizeAcademicTextValue(item.whatsapp, { maxLength: 40 }) || null,
         sanitizeAcademicTextValue(item.email, { maxLength: 180 }) || null,
@@ -3594,7 +4770,7 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
     const email = await generateAvailableInternalEmail(buildTeacherInternalEmailBase(displayName));
     const passwordHash = await bcrypt.hash(ACADEMIC_TEACHER_TEMP_PASSWORD, 10);
     const created = await run(
-      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'teacher', ?, ?, ?, ?, ?, ?)",
       [
         email,
         displayName,
@@ -3631,7 +4807,7 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
   await run(
     "UPDATE users SET role=?, department=?, can_access_intranet=?, job_title=?, unit_name=?, additional_permissions_json=? WHERE id=?",
     [
-      String(user.role || "").trim() === "admin" ? "admin" : "user",
+      String(user.role || "").trim() === "admin" ? "admin" : "teacher",
       "Professor",
       true,
       normalizeSqlTextValue(user.job_title) || "Professor",
@@ -4868,7 +6044,7 @@ async function getAcademicStudentDetail(studentId, scope) {
   if (!student) return null;
   const [guardians, enrollments, attendanceSummary] = await Promise.all([
     all(
-      "SELECT id, student_id, name, relation_type, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, created_at, updated_at FROM student_guardians WHERE student_id=? ORDER BY financial_responsible DESC, pedagogical_responsible DESC, lower(name) ASC",
+      "SELECT id, student_id, name, relation_type, cpf, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, created_at, updated_at FROM student_guardians WHERE student_id=? ORDER BY financial_responsible DESC, pedagogical_responsible DESC, lower(name) ASC",
       [studentId]
     ),
     all(
@@ -13022,6 +14198,192 @@ app.patch('/api/intranet/sales/records/:id', requireAuth(JWT_SECRET), requireInt
       return res.status(400).json({ error: err.message });
     }
     res.status(400).json({ error: err?.message || 'sales_record_update_failed' });
+  }
+});
+
+function sendStudentHubRouteError(res, err, fallback = "student_hub_request_failed") {
+  const message = err?.message || fallback;
+  if (message === "student_hub_access_denied" || message === "forbidden") {
+    return res.status(403).json({ error: message });
+  }
+  if (
+    message === "not_found"
+    || message === "student_not_found"
+    || message === "lead_not_found"
+    || message === "contract_not_found"
+    || message === "installment_not_found"
+  ) {
+    return res.status(404).json({ error: message === "not_found" ? "not_found" : message });
+  }
+  return res.status(400).json({ error: message || fallback });
+}
+
+function parseStudentHubLimit(value, fallback = 60, max = 160) {
+  const parsed = Number(value || fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(1, Math.round(parsed)));
+}
+
+app.get("/api/intranet/student-hub/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const studentHub = await buildStudentHubBootstrap(user, {
+      view_key: req.query?.view_key,
+      search: req.query?.search,
+      student_status: req.query?.student_status,
+      lead_stage: req.query?.lead_stage,
+      contract_status: req.query?.contract_status,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      limit: parseStudentHubLimit(req.query?.limit, 60, 160),
+    });
+    res.json({ student_hub: studentHub });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_bootstrap_failed");
+  }
+});
+
+app.get("/api/intranet/student-hub/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.query?.view_key || "student-profile");
+    const detail = await getStudentHubStudentDetail(Number(req.params.id), scope);
+    if (!detail) return res.status(404).json({ error: "student_not_found" });
+    res.json(detail);
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_student_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "student-profile");
+    if (!scope.canManageStudentData) return res.status(403).json({ error: "forbidden" });
+    const existing = await get("SELECT * FROM students WHERE id=? LIMIT 1", [Number(req.params.id)]);
+    if (!existing) return res.status(404).json({ error: "student_not_found" });
+    const saved = await saveAcademicStudentRecord({
+      ...existing,
+      ...req.body,
+      id: Number(req.params.id),
+    }, user.id || user.sub);
+    const detail = await getStudentHubStudentDetail(saved.id, scope);
+    res.json({ ok: true, student: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_student_update_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/students/:id/guardians", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "student-profile");
+    if (!scope.canManageStudentData) return res.status(403).json({ error: "forbidden" });
+    const student = await get("SELECT id FROM students WHERE id=? LIMIT 1", [Number(req.params.id)]);
+    if (!student?.id) return res.status(404).json({ error: "student_not_found" });
+    await replaceStudentGuardians(Number(req.params.id), req.body?.guardians || [], user.id || user.sub);
+    const detail = await getStudentHubStudentDetail(Number(req.params.id), scope);
+    res.json({ ok: true, student: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_guardians_update_failed");
+  }
+});
+
+app.get("/api/intranet/student-hub/leads/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.query?.view_key || "commercial-leads");
+    if (!scope.canManageCommercial) return res.status(403).json({ error: "forbidden" });
+    const detail = await getStudentHubLeadDetail(Number(req.params.id), scope);
+    if (!detail) return res.status(404).json({ error: "lead_not_found" });
+    res.json(detail);
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_detail_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/leads", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "commercial-leads");
+    if (!scope.canManageCommercial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveStudentHubLeadRecord(req.body || {}, user, null);
+    res.json({ ok: true, lead: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_create_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/leads/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "commercial-leads");
+    if (!scope.canManageCommercial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveStudentHubLeadRecord(req.body || {}, user, Number(req.params.id));
+    res.json({ ok: true, lead: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_update_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/leads/:id/convert", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "commercial-enrollment-conversion");
+    if (!scope.canConvertLead) return res.status(403).json({ error: "forbidden" });
+    const result = await convertLeadToStudentHubRecord(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_convert_failed");
+  }
+});
+
+app.get("/api/intranet/student-hub/contracts/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.query?.view_key || "financial-contracts");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const detail = await getStudentHubContractDetail(Number(req.params.id), scope);
+    if (!detail) return res.status(404).json({ error: "contract_not_found" });
+    res.json(detail);
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_contract_detail_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/contracts", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "financial-contracts");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveFinancialContractRecord(req.body || {}, user);
+    res.json({ ok: true, contract: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_contract_create_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/contracts/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "financial-contracts");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveFinancialContractRecord({ ...(req.body || {}), id: Number(req.params.id) }, user);
+    res.json({ ok: true, contract: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_contract_update_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/installments/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "financial-installments");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const installment = await updateFinancialInstallmentRecord(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, installment });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_installment_update_failed");
   }
 });
 

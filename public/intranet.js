@@ -106,6 +106,10 @@ let salesState = {
 const ACADEMIC_PEDAGOGICAL_VIEW_KEYS = ['academic-students', 'academic-enrollments', 'academic-classes', 'academic-schedules', 'academic-teachers', 'academic-attendance', 'academic-movements'];
 const ACADEMIC_TEACHER_VIEW_KEYS = ['teacher-classes', 'teacher-attendance', 'teacher-class-students'];
 const ACADEMIC_ALL_VIEW_KEYS = new Set([...ACADEMIC_PEDAGOGICAL_VIEW_KEYS, ...ACADEMIC_TEACHER_VIEW_KEYS]);
+const STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS = ['student-search', 'student-profile', 'student-history'];
+const STUDENT_HUB_COMMERCIAL_VIEW_KEYS = ['commercial-leads', 'commercial-negotiations', 'commercial-enrollment-conversion'];
+const STUDENT_HUB_FINANCIAL_VIEW_KEYS = ['financial-contracts', 'financial-installments', 'financial-receivables', 'financial-delinquency', 'financial-student-profile'];
+const STUDENT_HUB_ALL_VIEW_KEYS = new Set([...STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS, ...STUDENT_HUB_COMMERCIAL_VIEW_KEYS, ...STUDENT_HUB_FINANCIAL_VIEW_KEYS]);
 let academicState = {
   enabled: false,
   loading: false,
@@ -134,6 +138,29 @@ let academicState = {
     modality: '',
     teacher: '',
     termCode: '',
+  },
+};
+let studentHubState = {
+  enabled: false,
+  loading: false,
+  loaded: false,
+  error: '',
+  bootstrap: null,
+  viewKey: '',
+  detailKind: '',
+  detail: null,
+  detailLoading: false,
+  selectedStudentId: null,
+  selectedLeadId: null,
+  selectedContractId: null,
+  notice: null,
+  filters: {
+    search: '',
+    studentStatus: '',
+    leadStage: '',
+    contractStatus: '',
+    language: '',
+    modality: '',
   },
 };
 let trainingState = null;
@@ -1530,6 +1557,12 @@ function isAcademicWorkspace(department, submenu) {
   return ['pedagogico', 'professor'].includes(String(department?.slug || '').trim());
 }
 
+function isStudentHubWorkspace(department, submenu) {
+  const viewKey = String(submenu?.view_key || '').trim();
+  if (!STUDENT_HUB_ALL_VIEW_KEYS.has(viewKey)) return false;
+  return ['atendimento', 'comercial', 'financeiro'].includes(String(department?.slug || '').trim());
+}
+
 function getMarketingIndicatorTabs() {
   return Array.isArray(indicatorState.bootstrap?.tabs) ? indicatorState.bootstrap.tabs : [];
 }
@@ -2628,7 +2661,8 @@ function renderDepartmentWorkspace(intranet) {
   const isIndicatorWorkspace = isMarketingIndicatorWorkspace(department, submenu);
   const isWhatsAppWorkspace = isPedagogicalWhatsAppWorkspace(department, submenu);
   const isAcademicCustomWorkspace = isAcademicWorkspace(department, submenu);
-  const isCustomWorkspace = isInfluencerWorkspace || isIndicatorWorkspace || isWhatsAppWorkspace || isAcademicCustomWorkspace;
+  const isStudentHubCustomWorkspace = isStudentHubWorkspace(department, submenu);
+  const isCustomWorkspace = isInfluencerWorkspace || isIndicatorWorkspace || isWhatsAppWorkspace || isAcademicCustomWorkspace || isStudentHubCustomWorkspace;
   el('departmentWorkspaceDescription').textContent = isInfluencerWorkspace
     ? t('intranet.marketingInfluencer.workspaceDescription', {}, 'Cadastro, lançamentos, relatórios e análise da operação de influencers do Marketing.')
     : isIndicatorWorkspace
@@ -2639,6 +2673,12 @@ function renderDepartmentWorkspace(intranet) {
           ? (String(department?.slug || '') === 'professor'
               ? 'Gestão acadêmica do professor com turmas, alunos, aulas e frequência no escopo permitido.'
               : 'Operação acadêmica com alunos, matrículas, turmas, horários, professores e movimentações escolares.')
+        : isStudentHubCustomWorkspace
+          ? (String(department?.slug || '') === 'financeiro'
+              ? 'Fluxo financeiro do aluno com contratos, parcelas, vencimentos, inadimplência e ficha financeira.'
+              : String(department?.slug || '') === 'comercial'
+                ? 'Fluxo comercial do lead até a matrícula, com conversão em aluno e criação da base financeira.'
+                : 'Busca rápida e ficha 360 do aluno com dados cadastrais, responsáveis, matrícula, comercial e financeiro.')
         : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Área departamental da intranet.'));
 
   const summary = el('departmentWorkspaceSummary');
@@ -2668,6 +2708,12 @@ function renderDepartmentWorkspace(intranet) {
           { title: 'Dashboard acadêmico', description: String(department?.slug || '') === 'professor' ? 'Leitura rápida das turmas e aulas do professor.' : 'Indicadores operacionais do contexto escolar.', badge: t('intranet.departmentSummary.main', {}, 'Principal') },
           { title: 'Listagens operacionais', description: String(department?.slug || '') === 'professor' ? 'Turmas, alunos e frequência dentro do escopo docente.' : 'Alunos, matrículas, turmas, horários e vínculos de professores.', badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
           { title: 'Movimentações e frequência', description: 'Históricos, chamadas e ações acadêmicas com rastreabilidade.', badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
+        ]
+      : isStudentHubCustomWorkspace
+        ? [
+          { title: 'Ficha 360 do aluno', description: 'Dados cadastrais, responsáveis, comercial, matrícula, financeiro e resumo pedagógico no mesmo fluxo.', badge: t('intranet.departmentSummary.main', {}, 'Principal') },
+          { title: 'Busca e operação', description: String(department?.slug || '') === 'comercial' ? 'Leads, negociações, conversão e acompanhamento comercial.' : (String(department?.slug || '') === 'financeiro' ? 'Contratos, parcelas, recebimentos e inadimplência.' : 'Pesquisa rápida por aluno, responsável, matrícula, CPF e contato.'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+          { title: 'Ligação entre áreas', description: 'Fluxo contínuo entre comercial, atendimento, matrícula e financeiro sem duplicar cadastro.', badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
         ]
     : [
       { title: t('intranet.departmentSummary.currentLevel', {}, 'Nível atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissão') },
@@ -2741,6 +2787,12 @@ function renderDepartmentWorkspace(intranet) {
       const nextViewKey = String(submenu?.view_key || '').trim();
       if (!academicState.bootstrap || academicState.viewKey !== nextViewKey || !academicState.loaded) {
         fetchAcademicBootstrap({ viewKey: nextViewKey, preserveSelection: true });
+      }
+    } else if (isStudentHubCustomWorkspace) {
+      renderStudentHubWorkspace();
+      const nextViewKey = String(submenu?.view_key || '').trim();
+      if (!studentHubState.bootstrap || studentHubState.viewKey !== nextViewKey || !studentHubState.loaded) {
+        fetchStudentHubBootstrap({ viewKey: nextViewKey, preserveSelection: true });
       }
     }
     return;
@@ -4419,6 +4471,685 @@ function hydrateSalesWorkspace(intranet) {
   renderSalesSummary(sales);
   renderSalesFilterOptions(sales);
   renderSalesRecordsGrid();
+}
+
+function formatCurrency(value) {
+  const safe = Number(value || 0);
+  return new Intl.NumberFormat(currentLocale(), {
+    style: 'currency',
+    currency: 'BRL',
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(safe) ? safe : 0);
+}
+
+function getStudentHubBootstrap() {
+  return studentHubState.bootstrap || {};
+}
+
+function getStudentHubCurrentViewKey() {
+  const intranet = bootstrapData?.intranet || {};
+  const { submenu } = getDepartmentRouteMeta(intranet, currentViewState.departmentSlug, currentViewState.submenuSlug);
+  const viewKey = String(submenu?.view_key || studentHubState.viewKey || '').trim();
+  return STUDENT_HUB_ALL_VIEW_KEYS.has(viewKey) ? viewKey : (studentHubState.viewKey || 'student-search');
+}
+
+function getStudentHubArea(viewKey = '') {
+  const safe = String(viewKey || '').trim();
+  if (STUDENT_HUB_COMMERCIAL_VIEW_KEYS.includes(safe)) return 'commercial';
+  if (STUDENT_HUB_FINANCIAL_VIEW_KEYS.includes(safe)) return 'financial';
+  return 'attendance';
+}
+
+function isStudentHubFinancialProfileView(viewKey = '') {
+  return String(viewKey || '').trim() === 'financial-student-profile';
+}
+
+function setStudentHubNotice(type = '', text = '') {
+  const safeText = String(text || '').trim();
+  studentHubState.notice = safeText ? { type: type || 'info', text: safeText } : null;
+}
+
+async function selectStudentHubStudent(studentId) {
+  const safeId = Number(studentId || 0) || null;
+  studentHubState.selectedStudentId = safeId;
+  studentHubState.detailKind = safeId ? 'student' : '';
+  studentHubState.detail = null;
+  studentHubState.detailLoading = Boolean(safeId);
+  renderStudentHubWorkspace();
+  if (!safeId) return;
+  try {
+    studentHubState.detail = await api(`/api/intranet/student-hub/students/${safeId}?view_key=${encodeURIComponent(getStudentHubCurrentViewKey())}`);
+    studentHubState.detailKind = 'student';
+  } catch (err) {
+    studentHubState.detail = { error: err.message || 'Não foi possível carregar a ficha do aluno.' };
+    studentHubState.detailKind = 'student';
+  } finally {
+    studentHubState.detailLoading = false;
+    renderStudentHubWorkspace();
+  }
+}
+
+async function selectStudentHubLead(leadId) {
+  const safeId = Number(leadId || 0) || null;
+  studentHubState.selectedLeadId = safeId;
+  studentHubState.detailKind = safeId ? 'lead' : '';
+  studentHubState.detail = null;
+  studentHubState.detailLoading = Boolean(safeId);
+  renderStudentHubWorkspace();
+  if (!safeId) return;
+  try {
+    studentHubState.detail = await api(`/api/intranet/student-hub/leads/${safeId}?view_key=${encodeURIComponent(getStudentHubCurrentViewKey())}`);
+    studentHubState.detailKind = 'lead';
+  } catch (err) {
+    studentHubState.detail = { error: err.message || 'Não foi possível carregar o lead.' };
+    studentHubState.detailKind = 'lead';
+  } finally {
+    studentHubState.detailLoading = false;
+    renderStudentHubWorkspace();
+  }
+}
+
+async function selectStudentHubContract(contractId) {
+  const safeId = Number(contractId || 0) || null;
+  studentHubState.selectedContractId = safeId;
+  studentHubState.detailKind = safeId ? 'contract' : '';
+  studentHubState.detail = null;
+  studentHubState.detailLoading = Boolean(safeId);
+  renderStudentHubWorkspace();
+  if (!safeId) return;
+  try {
+    studentHubState.detail = await api(`/api/intranet/student-hub/contracts/${safeId}?view_key=${encodeURIComponent(getStudentHubCurrentViewKey())}`);
+    studentHubState.detailKind = 'contract';
+  } catch (err) {
+    studentHubState.detail = { error: err.message || 'Não foi possível carregar o contrato.' };
+    studentHubState.detailKind = 'contract';
+  } finally {
+    studentHubState.detailLoading = false;
+    renderStudentHubWorkspace();
+  }
+}
+
+async function fetchStudentHubBootstrap(options = {}) {
+  studentHubState.loading = true;
+  studentHubState.error = '';
+  studentHubState.viewKey = String(options.viewKey || studentHubState.viewKey || getStudentHubCurrentViewKey()).trim() || 'student-search';
+  renderStudentHubWorkspace();
+  try {
+    const params = new URLSearchParams();
+    params.set('view_key', studentHubState.viewKey);
+    params.set('limit', '60');
+    if (studentHubState.filters.search) params.set('search', studentHubState.filters.search);
+    if (studentHubState.filters.studentStatus) params.set('student_status', studentHubState.filters.studentStatus);
+    if (studentHubState.filters.leadStage) params.set('lead_stage', studentHubState.filters.leadStage);
+    if (studentHubState.filters.contractStatus) params.set('contract_status', studentHubState.filters.contractStatus);
+    if (studentHubState.filters.language) params.set('language', studentHubState.filters.language);
+    if (studentHubState.filters.modality) params.set('modality', studentHubState.filters.modality);
+    const { student_hub } = await api(`/api/intranet/student-hub/bootstrap?${params.toString()}`);
+    studentHubState.bootstrap = student_hub || {};
+    studentHubState.enabled = Boolean(student_hub?.enabled);
+    studentHubState.loaded = true;
+    studentHubState.loading = false;
+    const area = getStudentHubArea(studentHubState.viewKey);
+    if (area === 'commercial') {
+      const targetId = options.preserveSelection ? studentHubState.selectedLeadId : null;
+      const fallbackId = (student_hub?.leads || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.leads?.[0]?.id || null;
+      if (fallbackId) {
+        await selectStudentHubLead(fallbackId);
+      } else {
+        studentHubState.selectedLeadId = null;
+        studentHubState.detailKind = '';
+        studentHubState.detail = null;
+        renderStudentHubWorkspace();
+      }
+      return;
+    }
+    if (area === 'financial') {
+      if (isStudentHubFinancialProfileView(studentHubState.viewKey)) {
+        const targetId = options.preserveSelection ? studentHubState.selectedStudentId : null;
+        const fallbackId = (student_hub?.students || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.students?.[0]?.id || null;
+        if (fallbackId) {
+          await selectStudentHubStudent(fallbackId);
+        } else {
+          studentHubState.selectedStudentId = null;
+          studentHubState.detailKind = '';
+          studentHubState.detail = null;
+          renderStudentHubWorkspace();
+        }
+      } else {
+        const targetId = options.preserveSelection ? studentHubState.selectedContractId : null;
+        const fallbackId = (student_hub?.contracts || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.contracts?.[0]?.id || null;
+        if (fallbackId) {
+          await selectStudentHubContract(fallbackId);
+        } else {
+          studentHubState.selectedContractId = null;
+          studentHubState.detailKind = '';
+          studentHubState.detail = null;
+          renderStudentHubWorkspace();
+        }
+      }
+      return;
+    }
+    const targetId = options.preserveSelection ? studentHubState.selectedStudentId : null;
+    const fallbackId = (student_hub?.students || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.students?.[0]?.id || null;
+    if (fallbackId) {
+      await selectStudentHubStudent(fallbackId);
+    } else {
+      studentHubState.selectedStudentId = null;
+      studentHubState.detailKind = '';
+      studentHubState.detail = null;
+      renderStudentHubWorkspace();
+    }
+  } catch (err) {
+    studentHubState.loading = false;
+    studentHubState.loaded = true;
+    studentHubState.error = err.message || 'Não foi possível carregar o fluxo do aluno.';
+    renderStudentHubWorkspace();
+  }
+}
+
+function getStudentHubTone(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (['ativo', 'matriculado', 'convertido', 'fechado', 'signed', 'active', 'paid', 'completed'].includes(safe)) return 'is-success';
+  if (['perdido', 'cancelled', 'cancelado', 'desistente', 'inadimplente'].includes(safe)) return 'is-danger';
+  if (['negociacao', 'pending', 'draft', 'overdue', 'aguardando turma', 'trancado'].includes(safe)) return 'is-warning';
+  if (['lead', 'em andamento', 'in_progress', 'negotiated'].includes(safe)) return 'is-info';
+  return 'is-neutral';
+}
+
+function buildStudentHubInfoGrid(items = []) {
+  return `
+    <div class="intranet-sales-meta">
+      ${items.map(([label, value]) => `
+        <div class="intranet-sales-meta-item">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(value || '-')}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function buildStudentHubSummaryCards(summary = {}, area = 'attendance', viewKey = '') {
+  const cards = area === 'commercial'
+    ? [
+        ['Leads', formatInteger(summary.total || 0)],
+        ['Negociação', formatInteger(summary.negotiation_total || 0)],
+        ['Convertidos', formatInteger(summary.converted_total || 0)],
+        ['Sem vínculo', formatInteger(summary.unlinked_total || 0)],
+      ]
+    : area === 'financial'
+      ? (isStudentHubFinancialProfileView(viewKey)
+          ? [
+              ['Alunos', formatInteger(summary.total || 0)],
+              ['Com contrato', formatInteger(summary.active_total || 0)],
+              ['Sem responsável', formatInteger(summary.pending_contracts || 0)],
+              ['Com atraso', formatInteger(summary.overdue_contracts || 0)],
+            ]
+          : [
+              ['Contratos', formatInteger(summary.total || 0)],
+              ['Ativos', formatInteger(summary.active_total || 0)],
+              ['Pendentes', formatInteger(summary.pending_contracts || 0)],
+              ['Atrasados', formatInteger(summary.overdue_contracts || 0)],
+            ])
+      : [
+          ['Alunos', formatInteger(summary.total || 0)],
+          ['Ativos', formatInteger(summary.active_total || 0)],
+          ['Sem responsável', formatInteger(summary.no_guardian_total || 0)],
+          ['Com atraso', formatInteger(summary.overdue_students || 0)],
+        ];
+  return `<div class="intranet-sales-summary">${cards.map(([label, value]) => `<article class="intranet-sales-card"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join('')}</div>`;
+}
+
+function buildStudentHubStudentDetailMarkup(detail = {}) {
+  const student = detail.student || {};
+  const latestCommercial = detail.commercial?.latest_record || {};
+  const enrollment = detail.enrollment_summary || {};
+  const financialSummary = detail.financial?.summary || {};
+  const primaryContract = detail.financial?.primary_contract || {};
+  const primaryContractSummary = primaryContract.summary || {};
+  return `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Ficha 360</div><h4 class="intranet-section-title">${escapeHtml(student.full_name || 'Aluno')}</h4></div></div>
+      ${buildStudentHubInfoGrid([
+        ['CPF', student.cpf || '-'],
+        ['RG', student.rg || '-'],
+        ['Nascimento', formatAcademicDate(student.birth_date || '')],
+        ['Telefone', student.phone || student.whatsapp || '-'],
+        ['E-mail', student.email || '-'],
+        ['Status', student.status || '-'],
+        ['Endereço', [student.address_street, student.address_number, student.address_neighborhood].filter(Boolean).join(', ') || '-'],
+        ['Cidade/UF', [student.address_city, student.address_state].filter(Boolean).join(' / ') || '-'],
+      ])}
+    </section>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Responsáveis</h5>
+        ${(detail.guardians || []).length ? detail.guardians.map((guardian) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(guardian.name || 'Responsável')}</strong>
+            <div>${escapeHtml([guardian.relation_type, guardian.cpf].filter(Boolean).join(' · ') || '-')}</div>
+            <div>${escapeHtml([guardian.phone || guardian.whatsapp, guardian.email].filter(Boolean).join(' · ') || '-')}</div>
+            <div class="small muted">${escapeHtml([guardian.financial_responsible ? 'Financeiro' : '', guardian.pedagogical_responsible ? 'Pedagógico' : ''].filter(Boolean).join(' · ') || 'Sem marcação')}</div>
+          </div>
+        `).join('') : `<div class="intranet-empty-card">Nenhum responsável cadastrado.</div>`}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Comercial</h5>
+        ${latestCommercial?.id ? `${buildStudentHubInfoGrid([
+          ['Origem', latestCommercial.media_source || '-'],
+          ['Atendente', latestCommercial.attendant_name || '-'],
+          ['Status', latestCommercial.resolved_lead_stage || latestCommercial.operational_status || '-'],
+          ['Idioma', latestCommercial.language || '-'],
+          ['Semestre', latestCommercial.semester_label || '-'],
+          ['Observações', latestCommercial.observations || latestCommercial.feedback || '-'],
+        ])}` : `<div class="intranet-empty-card">Nenhum lead/comercial vinculado ainda.</div>`}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Matrícula</h5>
+        ${buildStudentHubInfoGrid([
+          ['Número', enrollment.enrollment_number || '-'],
+          ['Idioma', enrollment.language || '-'],
+          ['Programa', enrollment.program_name || '-'],
+          ['Nível/Livro', enrollment.level_name || '-'],
+          ['Modalidade', enrollment.modality || '-'],
+          ['Semestre', enrollment.school_term_code || enrollment.semester_label || '-'],
+          ['Status', enrollment.enrollment_status || '-'],
+        ])}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Financeiro</h5>
+        ${buildStudentHubInfoGrid([
+          ['Contrato principal', primaryContract.contract_number || '-'],
+          ['Status do contrato', primaryContract.contract_status || '-'],
+          ['Responsável financeiro', primaryContract.responsible_name || '-'],
+          ['Parcelas', String(financialSummary.installments_total || 0)],
+          ['Pendentes', String(financialSummary.pending_total || 0)],
+          ['Atrasadas', String(financialSummary.overdue_total || 0)],
+          ['Pagas', String(financialSummary.paid_total || 0)],
+          ['Valor total', formatCurrency(financialSummary.amount_total || 0)],
+        ])}
+        ${primaryContract.id ? `<div class="small muted">Contrato selecionado: ${escapeHtml(primaryContract.contract_number || '-')} · ${escapeHtml(String(primaryContractSummary.total || 0))} parcela(s)</div>` : ''}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Pedagógico</h5>
+        ${buildStudentHubInfoGrid([
+          ['Turma atual', detail.pedagogical?.current_class_name || '-'],
+          ['Professor atual', (detail.pedagogical?.current_teacher_names || []).join(', ') || '-'],
+          ['Horário atual', (detail.pedagogical?.current_schedule_labels || []).join(' / ') || '-'],
+          ['Status acadêmico', detail.pedagogical?.current_status || '-'],
+        ])}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Histórico</h5>
+        ${(detail.timeline || []).length ? detail.timeline.map((item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.title || item.event_type || 'Evento')}</strong>
+            <div>${escapeHtml(item.description || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.created_at || ''))} · ${escapeHtml(item.actor_name || 'Sistema')}</div>
+          </div>
+        `).join('') : `<div class="intranet-empty-card">Sem histórico operacional ainda.</div>`}
+      </article>
+    </div>
+  `;
+}
+
+function buildStudentHubLeadDetailMarkup(detail = {}, options = {}) {
+  const record = detail.record || {};
+  const classes = options.classes || [];
+  const terms = options.terms || [];
+  const leadId = record.id || '';
+  return `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Comercial</div><h4 class="intranet-section-title">${escapeHtml(record.student_name || 'Novo lead')}</h4></div></div>
+      <form id="studentHubLeadForm" class="academic-form">
+        <input type="hidden" id="studentHubLeadId" value="${escapeHtml(leadId)}" />
+        <div class="academic-form-grid">
+          <div><label>Nome do lead</label><input id="studentHubLeadStudentName" value="${escapeHtml(record.student_name || '')}" /></div>
+          <div><label>Telefone</label><input id="studentHubLeadPhone" value="${escapeHtml(record.phone || '')}" /></div>
+          <div><label>E-mail</label><input id="studentHubLeadEmail" value="${escapeHtml(record.contact_email || '')}" /></div>
+          <div><label>Idioma</label><input id="studentHubLeadLanguage" value="${escapeHtml(record.language || '')}" /></div>
+          <div><label>Modalidade</label><input id="studentHubLeadModality" value="${escapeHtml(record.modality || '')}" /></div>
+          <div><label>Semestre</label><input id="studentHubLeadSemester" value="${escapeHtml(record.semester_label || '')}" /></div>
+          <div><label>Curso/Programa</label><input id="studentHubLeadCourse" value="${escapeHtml(record.course_name || '')}" /></div>
+          <div><label>Nível/Livro</label><input id="studentHubLeadLevel" value="${escapeHtml(record.level_name || '')}" /></div>
+          <div><label>Atendente</label><input id="studentHubLeadAttendant" value="${escapeHtml(record.attendant_name || '')}" /></div>
+          <div><label>Origem</label><input id="studentHubLeadSource" value="${escapeHtml(record.media_source || '')}" /></div>
+          <div><label>Status da negociação</label><select id="studentHubLeadStage">${(options.leadStages || []).map((item) => `<option value="${escapeHtml(item)}"${item === (record.resolved_lead_stage || 'lead') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+          <div><label>Data</label><input id="studentHubLeadDate" type="date" value="${escapeHtml(record.sale_date || '')}" /></div>
+          <div class="academic-grid-span"><label>Observações</label><textarea id="studentHubLeadObservations" rows="3">${escapeHtml(record.observations || record.feedback || '')}</textarea></div>
+        </div>
+        <div class="academic-form-actions"><button class="btn primary" type="submit">Salvar lead</button>${leadId ? '' : '<span class="small muted">Use este formulário para iniciar o fluxo comercial.</span>'}</div>
+      </form>
+    </section>
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Conversão</div><h5 class="intranet-section-title">Converter em aluno</h5></div></div>
+      <form id="studentHubLeadConversionForm" class="academic-form">
+        <input type="hidden" id="studentHubConversionLeadId" value="${escapeHtml(leadId)}" />
+        <div class="academic-form-grid">
+          <div><label>Nome do aluno</label><input id="studentHubConversionStudentName" value="${escapeHtml(record.student_name || '')}" /></div>
+          <div><label>CPF do aluno</label><input id="studentHubConversionStudentCpf" value="${escapeHtml(detail.linked_student?.student?.cpf || '')}" /></div>
+          <div><label>E-mail do aluno</label><input id="studentHubConversionStudentEmail" value="${escapeHtml(detail.linked_student?.student?.email || record.contact_email || '')}" /></div>
+          <div><label>Responsável</label><input id="studentHubConversionGuardianName" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.name || '')}" /></div>
+          <div><label>CPF responsável</label><input id="studentHubConversionGuardianCpf" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.cpf || '')}" /></div>
+          <div><label>Telefone responsável</label><input id="studentHubConversionGuardianPhone" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.phone || detail.linked_student?.guardians?.[0]?.whatsapp || '')}" /></div>
+          <div><label>Termo letivo</label><select id="studentHubConversionTerm">${terms.map((item) => `<option value="${escapeHtml(item.code || '')}"${String(item.code || '') === String(record.semester_label || '') ? ' selected' : ''}>${escapeHtml(item.code || item.name || '')}</option>`).join('')}</select></div>
+          <div><label>Turma</label><select id="studentHubConversionClassId"><option value="">Aguardando turma</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select></div>
+          <div><label>Início</label><input id="studentHubConversionStartDate" type="date" value="${escapeHtml(record.sale_date || '')}" /></div>
+          <div><label>Valor do contrato</label><input id="studentHubConversionContractAmount" value="" placeholder="Ex.: 1200,00" /></div>
+          <div><label>Qtd. parcelas</label><input id="studentHubConversionInstallments" type="number" min="0" value="0" /></div>
+          <div><label>1º vencimento</label><input id="studentHubConversionFirstDueDate" type="date" value="" /></div>
+        </div>
+        <div class="academic-form-actions"><button class="btn primary" type="submit"${leadId ? '' : ' disabled'}>Converter lead</button></div>
+      </form>
+      ${detail.linked_student?.student?.id ? `<div class="small muted">Este lead já possui aluno vinculado.</div>` : ''}
+    </section>
+    <article class="academic-history-panel">
+      <h5>Histórico comercial</h5>
+      ${(detail.history || []).length ? detail.history.map((item) => `
+        <div class="intranet-sales-history-item">
+          <strong>${escapeHtml(item.action || 'Atualização')}</strong>
+          <div>${escapeHtml(item.field_name || '')}${item.old_value || item.new_value ? `: ${escapeHtml(item.old_value || '-')} -> ${escapeHtml(item.new_value || '-')}` : ''}</div>
+          <div class="small muted">${escapeHtml(formatAcademicDateTime(item.created_at || ''))} · ${escapeHtml(item.actor_name || 'Sistema')}</div>
+        </div>
+      `).join('') : `<div class="intranet-empty-card">Sem histórico comercial ainda.</div>`}
+    </article>
+  `;
+}
+
+function buildStudentHubContractDetailMarkup(detail = {}, options = {}) {
+  const contract = detail.contract || {};
+  const installments = detail.installments || [];
+  return `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Financeiro</div><h4 class="intranet-section-title">${escapeHtml(contract.contract_number || 'Contrato')}</h4></div></div>
+      <form id="studentHubContractForm" class="academic-form">
+        <input type="hidden" id="studentHubContractId" value="${escapeHtml(contract.id || '')}" />
+        <div class="academic-form-grid">
+          <div><label>Aluno</label><input value="${escapeHtml(contract.student_name || '')}" disabled /></div>
+          <div><label>Número do contrato</label><input id="studentHubContractNumber" value="${escapeHtml(contract.contract_number || '')}" /></div>
+          <div><label>Status</label><select id="studentHubContractStatus">${(options.contractStatuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === (contract.contract_status || 'draft') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+          <div><label>Responsável</label><input id="studentHubContractResponsibleName" value="${escapeHtml(contract.responsible_name || '')}" /></div>
+          <div><label>CPF responsável</label><input id="studentHubContractResponsibleCpf" value="${escapeHtml(contract.responsible_cpf || '')}" /></div>
+          <div><label>Valor total</label><input id="studentHubContractAmount" value="${escapeHtml(contract.total_amount || '')}" /></div>
+          <div><label>Qtd. parcelas</label><input id="studentHubContractInstallmentsCount" type="number" min="0" value="${escapeHtml(contract.installments_count || 0)}" /></div>
+          <div><label>1º vencimento</label><input id="studentHubContractFirstDueDate" type="date" value="${escapeHtml(contract.first_due_date || '')}" /></div>
+          <div class="academic-grid-span"><label>Observações</label><textarea id="studentHubContractNotes" rows="3">${escapeHtml(contract.notes || '')}</textarea></div>
+        </div>
+        <div class="academic-form-actions"><button class="btn primary" type="submit">Salvar contrato</button></div>
+      </form>
+    </section>
+    <article class="academic-history-panel">
+      <h5>Parcelas</h5>
+      ${installments.length ? installments.map((item) => `
+        <div class="academic-schedule-row" data-student-hub-installment-row="${escapeHtml(item.id)}" style="grid-template-columns:1fr 1fr 1fr 1.2fr 1.4fr auto;">
+          <input data-installment-field="due_date" type="date" value="${escapeHtml(item.due_date || '')}" />
+          <input data-installment-field="amount" value="${escapeHtml(item.amount || '')}" />
+          <select data-installment-field="status">${(options.installmentStatuses || []).map((status) => `<option value="${escapeHtml(status)}"${status === (item.effective_status || item.status) ? ' selected' : ''}>${escapeHtml(status)}</option>`).join('')}</select>
+          <input data-installment-field="reference_label" value="${escapeHtml(item.reference_label || `Parcela ${item.installment_number}`)}" />
+          <input data-installment-field="notes" value="${escapeHtml(item.notes || '')}" placeholder="Observações" />
+          <button class="btn" type="button" data-save-installment="${escapeHtml(item.id)}">Salvar</button>
+        </div>
+      `).join('') : `<div class="intranet-empty-card">Nenhuma parcela cadastrada ainda.</div>`}
+    </article>
+    ${detail.student?.student?.id ? `<article class="academic-history-panel"><h5>Ficha financeira resumida</h5>${buildStudentHubInfoGrid([
+      ['Aluno', detail.student.student.full_name || '-'],
+      ['CPF', detail.student.student.cpf || '-'],
+      ['Matrícula', detail.contract?.enrollment_number || detail.student.enrollment_summary?.enrollment_number || '-'],
+      ['Turma', detail.student.pedagogical?.current_class_name || '-'],
+      ['Status acadêmico', detail.student.pedagogical?.current_status || '-'],
+    ])}</article>` : ''}
+  `;
+}
+
+async function submitStudentHubLeadForm() {
+  const leadId = Number(el('studentHubLeadId')?.value || 0) || null;
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    student_name: el('studentHubLeadStudentName')?.value || '',
+    phone: el('studentHubLeadPhone')?.value || '',
+    contact_email: el('studentHubLeadEmail')?.value || '',
+    language: el('studentHubLeadLanguage')?.value || '',
+    modality: el('studentHubLeadModality')?.value || '',
+    semester_label: el('studentHubLeadSemester')?.value || '',
+    course_name: el('studentHubLeadCourse')?.value || '',
+    level_name: el('studentHubLeadLevel')?.value || '',
+    attendant_name: el('studentHubLeadAttendant')?.value || '',
+    media_source: el('studentHubLeadSource')?.value || '',
+    lead_stage: el('studentHubLeadStage')?.value || 'lead',
+    sale_date: el('studentHubLeadDate')?.value || '',
+    observations: el('studentHubLeadObservations')?.value || '',
+  };
+  if (leadId) {
+    const response = await api(`/api/intranet/student-hub/leads/${leadId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    studentHubState.selectedLeadId = Number(response?.lead?.record?.id || leadId) || leadId;
+    setStudentHubNotice('success', 'Lead atualizado.');
+  } else {
+    const response = await api('/api/intranet/student-hub/leads', { method: 'POST', body: JSON.stringify(payload) });
+    studentHubState.selectedLeadId = Number(response?.lead?.record?.id || 0) || null;
+    setStudentHubNotice('success', 'Lead criado.');
+  }
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+async function submitStudentHubLeadConversionForm() {
+  const leadId = Number(el('studentHubConversionLeadId')?.value || 0) || null;
+  if (!leadId) return;
+  const guardianName = el('studentHubConversionGuardianName')?.value?.trim() || '';
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    student: {
+      full_name: el('studentHubConversionStudentName')?.value || '',
+      cpf: el('studentHubConversionStudentCpf')?.value || '',
+      email: el('studentHubConversionStudentEmail')?.value || '',
+    },
+    guardians: guardianName ? [{
+      name: guardianName,
+      cpf: el('studentHubConversionGuardianCpf')?.value || '',
+      phone: el('studentHubConversionGuardianPhone')?.value || '',
+      financial_responsible: true,
+      pedagogical_responsible: true,
+      receives_notifications: true,
+    }] : [],
+    enrollment: {
+      school_term_code: el('studentHubConversionTerm')?.value || '',
+      class_id: Number(el('studentHubConversionClassId')?.value || 0) || null,
+      start_date: el('studentHubConversionStartDate')?.value || '',
+    },
+    contract: {
+      total_amount: el('studentHubConversionContractAmount')?.value || '',
+      installments_count: Number(el('studentHubConversionInstallments')?.value || 0) || 0,
+      first_due_date: el('studentHubConversionFirstDueDate')?.value || '',
+      contract_status: 'draft',
+    },
+  };
+  await api(`/api/intranet/student-hub/leads/${leadId}/convert`, { method: 'POST', body: JSON.stringify(payload) });
+  setStudentHubNotice('success', 'Lead convertido em aluno.');
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+async function submitStudentHubContractForm() {
+  const contractId = Number(el('studentHubContractId')?.value || 0) || null;
+  if (!contractId) return;
+  const existing = studentHubState.detail?.contract || {};
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    id: contractId,
+    student_id: existing.student_id,
+    enrollment_id: existing.enrollment_id,
+    sales_record_id: existing.sales_record_id,
+    responsible_guardian_id: existing.responsible_guardian_id,
+    contract_number: el('studentHubContractNumber')?.value || '',
+    contract_status: el('studentHubContractStatus')?.value || 'draft',
+    responsible_name: el('studentHubContractResponsibleName')?.value || '',
+    responsible_cpf: el('studentHubContractResponsibleCpf')?.value || '',
+    total_amount: el('studentHubContractAmount')?.value || '',
+    installments_count: Number(el('studentHubContractInstallmentsCount')?.value || 0) || 0,
+    first_due_date: el('studentHubContractFirstDueDate')?.value || '',
+    notes: el('studentHubContractNotes')?.value || '',
+  };
+  await api(`/api/intranet/student-hub/contracts/${contractId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  setStudentHubNotice('success', 'Contrato atualizado.');
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+async function submitStudentHubInstallmentUpdate(installmentId) {
+  const row = document.querySelector(`[data-student-hub-installment-row="${installmentId}"]`);
+  if (!row) return;
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    due_date: row.querySelector('[data-installment-field="due_date"]')?.value || '',
+    amount: row.querySelector('[data-installment-field="amount"]')?.value || '',
+    status: row.querySelector('[data-installment-field="status"]')?.value || 'pending',
+    reference_label: row.querySelector('[data-installment-field="reference_label"]')?.value || '',
+    notes: row.querySelector('[data-installment-field="notes"]')?.value || '',
+  };
+  await api(`/api/intranet/student-hub/installments/${installmentId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  setStudentHubNotice('success', 'Parcela atualizada.');
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+function renderStudentHubWorkspace() {
+  const customWrap = el('departmentWorkspaceCustom');
+  if (!customWrap || customWrap.hidden) return;
+  const bootstrap = getStudentHubBootstrap();
+  const viewKey = getStudentHubCurrentViewKey();
+  studentHubState.viewKey = viewKey;
+  const area = getStudentHubArea(viewKey);
+  const isFinancialProfile = isStudentHubFinancialProfileView(viewKey);
+
+  if (studentHubState.loading && !bootstrap.enabled) {
+    customWrap.innerHTML = '<div class="intranet-empty-card">Carregando fluxo do aluno...</div>';
+    return;
+  }
+  if (studentHubState.error && !bootstrap.enabled) {
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(studentHubState.error)}</div>`;
+    return;
+  }
+
+  const noticeMarkup = studentHubState.notice?.text
+    ? `<div class="workspace-inline-notice is-${escapeHtml(studentHubState.notice.type || 'info')}"><span>${escapeHtml(studentHubState.notice.text)}</span><button class="btn workspace-inline-notice-close" type="button" id="btnDismissStudentHubNotice">${renderIcon('chevron')}</button></div>`
+    : '';
+  const filtersMarkup = area === 'commercial'
+    ? `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Nome, telefone, idioma, atendente..." /></div>
+        <div><label>Etapa</label><select id="studentHubLeadStageFilter"><option value="">Todas</option>${(bootstrap.options?.lead_stage_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.leadStage ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div><label>Idioma</label><select id="studentHubLanguageFilter"><option value="">Todos</option>${(bootstrap.options?.languages || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.language ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div><label>Modalidade</label><select id="studentHubModalityFilter"><option value="">Todas</option>${(bootstrap.options?.modalities || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.modality ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button><button class="btn primary" type="button" id="btnNewStudentHubLead">Novo lead</button></div>
+      </div>`
+    : area === 'financial' && !isFinancialProfile
+      ? `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Aluno, contrato ou responsável..." /></div>
+        <div><label>Status do contrato</label><select id="studentHubContractStatusFilter"><option value="">Todos</option>${(bootstrap.options?.contract_status_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.contractStatus ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button></div>
+      </div>`
+      : area === 'financial'
+        ? `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Aluno, CPF, matrícula, responsável ou contrato..." /></div>
+        <div><label>Status do aluno</label><select id="studentHubStudentStatusFilter"><option value="">Todos</option>${(bootstrap.options?.student_status_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.studentStatus ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button></div>
+      </div>`
+      : `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Nome, CPF, responsável, telefone, e-mail ou matrícula..." /></div>
+        <div><label>Status</label><select id="studentHubStudentStatusFilter"><option value="">Todos</option>${(bootstrap.options?.student_status_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.studentStatus ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button></div>
+      </div>`;
+
+  const recordsMarkup = area === 'commercial'
+    ? ((bootstrap.leads || []).length ? (bootstrap.leads || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedLeadId || 0) ? ' is-active' : ''}" data-student-hub-lead="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.student_name || 'Lead')}</h4><div class="small muted">${escapeHtml(item.language || '-')} · ${escapeHtml(item.modality || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.resolved_lead_stage)}">${escapeHtml(item.resolved_lead_stage || 'lead')}</span></div>
+          <div class="small muted">${escapeHtml(item.phone || item.contact_email || '-')}</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum lead encontrado.</div>')
+    : area === 'financial' && !isFinancialProfile
+      ? ((bootstrap.contracts || []).length ? (bootstrap.contracts || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedContractId || 0) ? ' is-active' : ''}" data-student-hub-contract="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.student_name || 'Contrato')}</h4><div class="small muted">${escapeHtml(item.contract_number || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.contract_status)}">${escapeHtml(item.contract_status || 'draft')}</span></div>
+          <div class="small muted">${escapeHtml(formatCurrency(item.total_amount || 0))} · ${escapeHtml(String(item.overdue_total || 0))} atraso(s)</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum contrato encontrado.</div>')
+      : area === 'financial'
+        ? ((bootstrap.students || []).length ? (bootstrap.students || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedStudentId || 0) ? ' is-active' : ''}" data-student-hub-student="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.full_name || 'Aluno')}</h4><div class="small muted">${escapeHtml(item.current_class_name || item.current_language || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.status || item.current_enrollment_status)}">${escapeHtml(item.status || item.current_enrollment_status || 'ativo')}</span></div>
+          <div class="small muted">${escapeHtml(String(item.contracts_total || 0))} contrato(s) · ${escapeHtml(String(item.overdue_installments || 0))} parcela(s) em atraso</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum aluno encontrado.</div>')
+      : ((bootstrap.students || []).length ? (bootstrap.students || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedStudentId || 0) ? ' is-active' : ''}" data-student-hub-student="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.full_name || 'Aluno')}</h4><div class="small muted">${escapeHtml(item.current_class_name || item.current_language || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.status || item.current_enrollment_status)}">${escapeHtml(item.status || item.current_enrollment_status || 'ativo')}</span></div>
+          <div class="small muted">${escapeHtml(item.phone || item.email || '-')}</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum aluno encontrado.</div>');
+
+  let detailMarkup = '<div class="intranet-empty-card">Selecione um item da lista para ver os detalhes.</div>';
+  if (studentHubState.detailLoading) {
+    detailMarkup = '<div class="small muted">Carregando detalhes...</div>';
+  } else if (studentHubState.detail?.error) {
+    detailMarkup = `<div class="intranet-empty-card">${escapeHtml(studentHubState.detail.error)}</div>`;
+  } else if (area === 'commercial') {
+    detailMarkup = buildStudentHubLeadDetailMarkup(studentHubState.detail || {}, {
+      leadStages: bootstrap.options?.lead_stage_options || [],
+      classes: bootstrap.options?.classes || [],
+      terms: bootstrap.options?.terms || [],
+    });
+  } else if (area === 'financial' && !isFinancialProfile) {
+    detailMarkup = buildStudentHubContractDetailMarkup(studentHubState.detail || {}, {
+      contractStatuses: bootstrap.options?.contract_status_options || [],
+      installmentStatuses: bootstrap.options?.installment_status_options || [],
+    });
+  } else if (studentHubState.detail) {
+    detailMarkup = buildStudentHubStudentDetailMarkup(studentHubState.detail || {});
+  }
+
+  customWrap.innerHTML = `
+    ${noticeMarkup}
+    ${buildStudentHubSummaryCards(bootstrap.summary || {}, area, viewKey)}
+    ${filtersMarkup}
+    <div class="academic-layout">
+      <div class="academic-list-panel">${recordsMarkup}</div>
+      <div class="academic-detail-panel">${detailMarkup}</div>
+    </div>
+  `;
+
+  el('btnDismissStudentHubNotice')?.addEventListener('click', () => { setStudentHubNotice('', ''); renderStudentHubWorkspace(); });
+  el('btnRefreshStudentHub')?.addEventListener('click', async () => {
+    studentHubState.filters.search = el('studentHubSearchInput')?.value?.trim() || '';
+    studentHubState.filters.studentStatus = el('studentHubStudentStatusFilter')?.value || '';
+    studentHubState.filters.leadStage = el('studentHubLeadStageFilter')?.value || '';
+    studentHubState.filters.contractStatus = el('studentHubContractStatusFilter')?.value || '';
+    studentHubState.filters.language = el('studentHubLanguageFilter')?.value || '';
+    studentHubState.filters.modality = el('studentHubModalityFilter')?.value || '';
+    await fetchStudentHubBootstrap({ viewKey, preserveSelection: true });
+  });
+  el('studentHubSearchInput')?.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    el('btnRefreshStudentHub')?.click();
+  });
+  el('studentHubStudentStatusFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubLeadStageFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubContractStatusFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubLanguageFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubModalityFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('btnNewStudentHubLead')?.addEventListener('click', () => {
+    studentHubState.selectedLeadId = null;
+    studentHubState.detailKind = 'lead';
+    studentHubState.detail = { record: {} };
+    renderStudentHubWorkspace();
+  });
+  Array.from(customWrap.querySelectorAll('[data-student-hub-student]')).forEach((item) => item.addEventListener('click', () => selectStudentHubStudent(item.getAttribute('data-student-hub-student'))));
+  Array.from(customWrap.querySelectorAll('[data-student-hub-lead]')).forEach((item) => item.addEventListener('click', () => selectStudentHubLead(item.getAttribute('data-student-hub-lead'))));
+  Array.from(customWrap.querySelectorAll('[data-student-hub-contract]')).forEach((item) => item.addEventListener('click', () => selectStudentHubContract(item.getAttribute('data-student-hub-contract'))));
+  el('studentHubLeadForm')?.addEventListener('submit', async (event) => { event.preventDefault(); await submitStudentHubLeadForm(); });
+  el('studentHubLeadConversionForm')?.addEventListener('submit', async (event) => { event.preventDefault(); await submitStudentHubLeadConversionForm(); });
+  el('studentHubContractForm')?.addEventListener('submit', async (event) => { event.preventDefault(); await submitStudentHubContractForm(); });
+  Array.from(customWrap.querySelectorAll('[data-save-installment]')).forEach((button) => button.addEventListener('click', async () => submitStudentHubInstallmentUpdate(button.getAttribute('data-save-installment'))));
 }
 
 function getAcademicBootstrap() {

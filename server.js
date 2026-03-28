@@ -156,7 +156,7 @@ const PEDAGOGICAL_WHATSAPP_GROUP_STATUSES = new Set(["active", "inactive"]);
 const PEDAGOGICAL_WHATSAPP_CAMPAIGN_STATUSES = new Set(["draft", "prepared", "running", "completed", "error", "cancelled"]);
 const PEDAGOGICAL_WHATSAPP_ITEM_STATUSES = new Set(["queued", "sending", "sent", "error", "pending_provider", "cancelled"]);
 const PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS = 30;
-const ACADEMIC_IMPORT_SOURCE_KEY = "academic-home-school";
+const ACADEMIC_IMPORT_SOURCE_KEY = "academic-consolidated";
 const ACADEMIC_TEACHER_TEMP_PASSWORD = String(process.env.ACADEMIC_TEACHER_TEMP_PASSWORD || "Professor#2026!").trim() || "Professor#2026!";
 const ACADEMIC_STUDENT_STATUS_OPTIONS = ["ativo", "inativo", "aguardando", "cancelado", "trancado", "desistente"];
 const ACADEMIC_ENROLLMENT_STATUS_OPTIONS = ["pre-matricula", "matriculado", "aguardando turma", "transferido", "trancado", "cancelado", "concluido", "desistente"];
@@ -2956,12 +2956,16 @@ function mapAcademicEnrollmentRow(row) {
   return {
     ...row,
     source_payload: safeJsonParse(row.source_payload_json || "{}") || null,
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
   };
 }
 
 function mapAcademicClassRow(row) {
   if (!row) return null;
-  return row;
+  return {
+    ...row,
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+  };
 }
 
 function buildTeacherInternalEmailBase(displayName = "") {
@@ -3086,7 +3090,7 @@ async function listClassTeachersByClassId(classId) {
 async function getClassBasicById(classId) {
   const row = await get(
     `SELECT c.id, c.code, c.name, c.school_term_id, c.academic_program_id, c.language, c.modality, c.level_name, c.semester_label,
-            c.age_group, c.capacity, c.min_students, c.status, c.room_name, c.unit_name, c.notes, c.source_sheet, c.source_block_ref,
+            c.age_group, c.capacity, c.min_students, c.status, c.room_name, c.unit_name, c.notes, c.class_kind, c.source_workbook, c.source_sheet, c.source_block_ref, c.metadata_json,
             c.created_at, c.updated_at, st.name AS school_term_name, st.code AS school_term_code, ap.program_name, ap.material_name
        FROM classes c
        LEFT JOIN school_terms st ON st.id = c.school_term_id
@@ -3172,6 +3176,7 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
     school_name: sanitizeAcademicTextValue(payload.school_name, { maxLength: 180 }) || null,
     school_grade: sanitizeAcademicTextValue(payload.school_grade, { maxLength: 80 }) || null,
     status,
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
     source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
     source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
     source_payload_json: safeJsonStringify(payload.source_payload || payload.source_payload_json || {}, "{}"),
@@ -3185,7 +3190,7 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
           SET full_name=?, normalized_name=?, preferred_name=?, birth_date=?, age=?, gender=?, cpf=?, rg=?, email=?, phone=?, whatsapp=?,
               emergency_contact_name=?, emergency_contact_phone=?, address_zipcode=?, address_street=?, address_number=?, address_complement=?,
               address_neighborhood=?, address_city=?, address_state=?, notes=?, allergies=?, medical_notes=?, school_name=?, school_grade=?,
-              status=?, source_sheet=?, source_row_identifier=?, source_payload_json=?, updated_at=datetime('now')
+              status=?, source_workbook=?, source_sheet=?, source_row_identifier=?, source_payload_json=?, updated_at=datetime('now')
         WHERE id=?`,
       [
         persisted.full_name,
@@ -3214,6 +3219,7 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
         persisted.school_name,
         persisted.school_grade,
         persisted.status,
+        persisted.source_workbook,
         persisted.source_sheet,
         persisted.source_row_identifier,
         persisted.source_payload_json,
@@ -3237,8 +3243,8 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
     `INSERT INTO students
        (full_name, normalized_name, preferred_name, birth_date, age, gender, cpf, rg, email, phone, whatsapp, emergency_contact_name,
         emergency_contact_phone, address_zipcode, address_street, address_number, address_complement, address_neighborhood, address_city,
-        address_state, notes, allergies, medical_notes, school_name, school_grade, status, source_sheet, source_row_identifier, source_payload_json, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        address_state, notes, allergies, medical_notes, school_name, school_grade, status, source_workbook, source_sheet, source_row_identifier, source_payload_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     [
       persisted.full_name,
       persisted.normalized_name,
@@ -3266,6 +3272,7 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
       persisted.school_name,
       persisted.school_grade,
       persisted.status,
+      persisted.source_workbook,
       persisted.source_sheet,
       persisted.source_row_identifier,
       persisted.source_payload_json,
@@ -3424,6 +3431,8 @@ async function ensureAcademicClassRecord(payload = {}) {
     room_name: sanitizeAcademicTextValue(payload.room_name, { maxLength: 120 }) || null,
     unit_name: sanitizeAcademicTextValue(payload.unit_name, { maxLength: 120 }) || null,
     notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    class_kind: sanitizeAcademicTextValue(payload.class_kind, { maxLength: 40 }) || "regular",
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
     source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
     source_block_ref: sanitizeAcademicTextValue(payload.source_block_ref, { maxLength: 180 }) || null,
   };
@@ -3447,12 +3456,14 @@ async function ensureAcademicClassRecord(payload = {}) {
       [prepared.name, prepared.school_term_id, prepared.academic_program_id, prepared.language || ""]
     );
   }
+  prepared.metadata_json = safeJsonStringify(mergeAcademicMetadata(existing?.metadata_json, payload.metadata || payload.metadata_json || {}), "{}");
   if (existing) {
     await run(
       `UPDATE classes
           SET code=?, name=?, school_term_id=?, academic_program_id=?, language=?, modality=?, level_name=?, semester_label=?, age_group=?,
               capacity=COALESCE(?, capacity), min_students=COALESCE(?, min_students), status=?, room_name=?, unit_name=?, notes=COALESCE(?, notes),
-              source_sheet=COALESCE(?, source_sheet), source_block_ref=COALESCE(?, source_block_ref), updated_at=datetime('now')
+              class_kind=?, source_workbook=COALESCE(?, source_workbook), source_sheet=COALESCE(?, source_sheet), source_block_ref=COALESCE(?, source_block_ref),
+              metadata_json=?, updated_at=datetime('now')
         WHERE id=?`,
       [
         prepared.code || existing.code,
@@ -3470,8 +3481,11 @@ async function ensureAcademicClassRecord(payload = {}) {
         prepared.room_name,
         prepared.unit_name,
         prepared.notes,
+        prepared.class_kind,
+        prepared.source_workbook,
         prepared.source_sheet,
         prepared.source_block_ref,
+        prepared.metadata_json,
         existing.id,
       ]
     );
@@ -3479,8 +3493,8 @@ async function ensureAcademicClassRecord(payload = {}) {
   }
   const created = await run(
     `INSERT INTO classes
-       (code, name, school_term_id, academic_program_id, language, modality, level_name, semester_label, age_group, capacity, min_students, status, room_name, unit_name, notes, source_sheet, source_block_ref, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+       (code, name, school_term_id, academic_program_id, language, modality, level_name, semester_label, age_group, capacity, min_students, status, room_name, unit_name, notes, class_kind, source_workbook, source_sheet, source_block_ref, metadata_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     [
       prepared.code,
       prepared.name,
@@ -3497,8 +3511,11 @@ async function ensureAcademicClassRecord(payload = {}) {
       prepared.room_name,
       prepared.unit_name,
       prepared.notes,
+      prepared.class_kind,
+      prepared.source_workbook,
       prepared.source_sheet,
       prepared.source_block_ref,
+      prepared.metadata_json,
     ]
   );
   return getClassBasicById(created.lastID);
@@ -3556,6 +3573,8 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
 
   let profile = await getTeacherProfileByNormalizedName(normalizedName);
   let user = profile?.user_id ? await getUserById(profile.user_id).catch(() => null) : null;
+  let createdUser = false;
+  let createdProfile = false;
 
   if (!user) {
     const existingTeacherUser = await get(
@@ -3594,6 +3613,7 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
       ]
     );
     user = await getUserById(created.lastID);
+    createdUser = true;
     if (actorUserId) {
       await logEvent(actorUserId, "academic_teacher_user_created", {
         teacher_name: displayName,
@@ -3623,11 +3643,11 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
 
   const aliases = mergeUniqueStrings(teacher.aliases || [], [displayName]);
   const specialties = mergeUniqueStrings(teacher.specialties || []);
-  const metadata = mergeAcademicMetadata(profile?.metadata, {
+  const metadata = mergeAcademicMetadata(profile?.metadata, mergeAcademicMetadata(teacher.metadata || {}, {
     imported_from: "academic_workbook",
     alias_count: aliases.length,
     specialties_count: specialties.length,
-  });
+  }));
   if (profile?.id) {
     await run(
       `UPDATE teacher_profiles
@@ -3644,7 +3664,7 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
       ]
     );
   } else {
-    const createdProfile = await run(
+    const createdProfileRow = await run(
       `INSERT INTO teacher_profiles
          (user_id, display_name, normalized_name, aliases_json, specialties_json, metadata_json, active, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
@@ -3658,8 +3678,9 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
         true,
       ]
     );
+    createdProfile = true;
     profile = await getTeacherProfileByNormalizedName(normalizedName);
-    if (!profile?.id && createdProfile?.lastID) {
+    if (!profile?.id && createdProfileRow?.lastID) {
       profile = await getTeacherProfileByUserId(user.id || user.sub);
     }
   }
@@ -3667,6 +3688,8 @@ async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
   return {
     user: await getUserById(user.id || user.sub),
     profile: await getTeacherProfileByNormalizedName(normalizedName),
+    created_user: createdUser,
+    created_profile: createdProfile,
   };
 }
 
@@ -3690,6 +3713,7 @@ async function upsertAcademicStudentFromImport(record = {}, actorUserId = null) 
     school_name: existing?.school_name || null,
     school_grade: existing?.school_grade || null,
     status: normalizeStudentStatus(record.status || existing?.status || "ativo"),
+    source_workbook: record.source_workbook || existing?.source_workbook || null,
     source_sheet: record.source_sheet,
     source_row_identifier: record.source_row_identifier,
     source_payload: record.source_payload || {},
@@ -3761,9 +3785,11 @@ async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
     source_channel: sanitizeAcademicTextValue(payload.source_channel, { maxLength: 120 }) || null,
     source_notes: sanitizeAcademicTextValue(payload.source_notes, { maxLength: 2000 }) || null,
     notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
     source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
     source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
     source_payload_json: safeJsonStringify(payload.source_payload || payload.source_payload_json || {}, "{}"),
+    metadata_json: safeJsonStringify(mergeAcademicMetadata(payload.metadata_json, payload.metadata || {}), "{}"),
   };
 
   if (enrollmentId) {
@@ -3773,7 +3799,7 @@ async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
       `UPDATE enrollments
           SET student_id=?, academic_program_id=?, school_term_id=?, class_id=?, enrollment_number=?, enrollment_date=?, start_date=?, end_date=?,
               enrollment_status=?, contract_status=?, payment_status=?, pedagogical_status=?, source_channel=?, source_notes=?, notes=?,
-              source_sheet=?, source_row_identifier=?, source_payload_json=?, updated_at=datetime('now')
+              source_workbook=?, source_sheet=?, source_row_identifier=?, source_payload_json=?, metadata_json=?, updated_at=datetime('now')
         WHERE id=?`,
       [
         prepared.student_id,
@@ -3791,9 +3817,11 @@ async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
         prepared.source_channel,
         prepared.source_notes,
         prepared.notes,
+        prepared.source_workbook,
         prepared.source_sheet,
         prepared.source_row_identifier,
         prepared.source_payload_json,
+        prepared.metadata_json,
         enrollmentId,
       ]
     );
@@ -3812,8 +3840,8 @@ async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
   const created = await run(
     `INSERT INTO enrollments
        (student_id, academic_program_id, school_term_id, class_id, enrollment_number, enrollment_date, start_date, end_date, enrollment_status,
-        contract_status, payment_status, pedagogical_status, source_channel, source_notes, notes, source_sheet, source_row_identifier, source_payload_json, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        contract_status, payment_status, pedagogical_status, source_channel, source_notes, notes, source_workbook, source_sheet, source_row_identifier, source_payload_json, metadata_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     [
       prepared.student_id,
       prepared.academic_program_id,
@@ -3830,9 +3858,11 @@ async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
       prepared.source_channel,
       prepared.source_notes,
       prepared.notes,
+      prepared.source_workbook,
       prepared.source_sheet,
       prepared.source_row_identifier,
       prepared.source_payload_json,
+      prepared.metadata_json,
     ]
   );
   if (actorUserId) {
@@ -3880,241 +3910,813 @@ async function upsertAcademicEnrollmentFromImport(student, payload = {}, actorUs
   return saved;
 }
 
-async function importAcademicWorkbookBatch({ workbookPath, workbookName = "", actorUserId = null }) {
-  if (!workbookPath || !fs.existsSync(workbookPath)) {
-    throw new Error("missing_academic_workbook");
+function getAcademicWorkbookPriority(workbookName = "") {
+  const raw = String(workbookName || "").trim();
+  const normalized = normalizeAcademicText(raw);
+  if (!normalized) return 0;
+  let score = 0;
+  if (normalized.includes("2026 1")) score += 120;
+  if (normalized.includes("presencial")) score += 90;
+  if (normalized.includes("home school")) score += 60;
+  if (normalized.includes("time table")) score += 20;
+  if (/\(\d+\)/.test(raw)) score -= 10;
+  return score;
+}
+
+function countAcademicDefinedValues(value, seen = new WeakSet()) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "string") return String(value).trim() ? 1 : 0;
+  if (typeof value === "number") return Number.isFinite(value) ? 1 : 0;
+  if (typeof value === "boolean") return 1;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? 0 : 1;
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + countAcademicDefinedValues(item, seen), 0);
   }
+  if (typeof value === "object") {
+    if (seen.has(value)) return 0;
+    seen.add(value);
+    return Object.values(value).reduce((total, item) => total + countAcademicDefinedValues(item, seen), 0);
+  }
+  return 0;
+}
 
-  const workbook = readAcademicWorkbookFromFile(workbookPath);
-  const parsed = parseAcademicWorkbook(workbook, {
-    workbookName: workbookName || path.basename(workbookPath),
-  });
+function choosePreferredAcademicImportRecord(existing, incoming) {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const existingScore = countAcademicDefinedValues(existing) + getAcademicWorkbookPriority(existing.source_workbook || "");
+  const incomingScore = countAcademicDefinedValues(incoming) + getAcademicWorkbookPriority(incoming.source_workbook || "");
+  return incomingScore >= existingScore ? incoming : existing;
+}
 
-  const teacherProvisioned = [];
-  for (const teacher of parsed.teachers || []) {
-    const provisioned = await ensureAcademicTeacherUser(teacher, actorUserId);
-    if (provisioned?.user?.id) {
-      teacherProvisioned.push({
-        teacher_name: provisioned.profile?.display_name || provisioned.user.name,
-        user_id: provisioned.user.id,
-        email: provisioned.user.email,
+function buildAcademicEnrollmentImportKey(record = {}) {
+  if (record.dedupe_hash) return String(record.dedupe_hash);
+  const parts = [
+    normalizePersonKey(record.full_name || record.student_name || ""),
+    sanitizeAcademicIdentifier(record.phone || record.whatsapp || "", "no-phone"),
+    normalizeAcademicText(record.language || ""),
+    normalizeAcademicText(record.semester_label || record.school_term_code || ""),
+    normalizeAcademicText(record.class_kind || record.class_type || ""),
+    normalizeAcademicText(record.requested_class_label || record.level_name || record.program_name || ""),
+  ];
+  return hashText(parts.join("|"));
+}
+
+function buildAcademicClassBlockKey(block = {}) {
+  const parts = [
+    normalizeAcademicText(block.class_name || ""),
+    normalizeAcademicText(block.teacher_normalized_name || block.teacher_display_name || ""),
+    normalizeAcademicText(block.semester_label || block.school_term_code || ""),
+    normalizeAcademicText(block.modality || ""),
+    normalizeAcademicText(block.class_kind || "regular"),
+    normalizeAcademicText(block.source_sheet || ""),
+  ];
+  return hashText(parts.join("|"));
+}
+
+function mergeAcademicSchedules(existing = [], incoming = []) {
+  const map = new Map();
+  for (const schedule of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const key = [
+      normalizeAcademicText(schedule?.weekday || ""),
+      normalizeAcademicText(schedule?.start_time || ""),
+      normalizeAcademicText(schedule?.end_time || ""),
+      normalizeAcademicText(schedule?.notes || ""),
+    ].join("|");
+    if (!key.replace(/\|/g, "").trim()) continue;
+    map.set(key, {
+      weekday: sanitizeAcademicTextValue(schedule?.weekday, { maxLength: 60 }) || "",
+      start_time: sanitizeAcademicTextValue(schedule?.start_time, { maxLength: 16 }) || "",
+      end_time: sanitizeAcademicTextValue(schedule?.end_time, { maxLength: 16 }) || "",
+      timezone: sanitizeAcademicTextValue(schedule?.timezone, { maxLength: 60 }) || "America/Sao_Paulo",
+      notes: sanitizeAcademicTextValue(schedule?.notes, { maxLength: 400 }) || null,
+      is_primary: schedule?.is_primary === true,
+    });
+  }
+  return Array.from(map.values());
+}
+
+function mergeAcademicStudentEntries(existing = [], incoming = []) {
+  const map = new Map();
+  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const key = [
+      normalizePersonKey(item?.full_name || ""),
+      normalizeAcademicText(item?.source_sheet || ""),
+      normalizeAcademicText(item?.source_row_identifier || ""),
+    ].join("|");
+    if (!key.replace(/\|/g, "").trim()) continue;
+    map.set(key, choosePreferredAcademicImportRecord(map.get(key), item));
+  }
+  return Array.from(map.values());
+}
+
+function mergeAcademicClassBlockRecords(existing = {}, incoming = {}) {
+  const preferred = choosePreferredAcademicImportRecord(existing, incoming) || {};
+  const fallback = preferred === existing ? incoming : existing;
+  return {
+    ...fallback,
+    ...preferred,
+    source_workbook: preferred.source_workbook || fallback?.source_workbook || null,
+    source_sheet: preferred.source_sheet || fallback?.source_sheet || null,
+    source_block_ref: preferred.source_block_ref || fallback?.source_block_ref || null,
+    class_name: preferred.class_name || fallback?.class_name || null,
+    class_kind: preferred.class_kind || fallback?.class_kind || "regular",
+    language: preferred.language || fallback?.language || "",
+    modality: preferred.modality || fallback?.modality || "",
+    level_name: preferred.level_name || fallback?.level_name || "",
+    semester_label: preferred.semester_label || fallback?.semester_label || "",
+    school_term_code: preferred.school_term_code || fallback?.school_term_code || "",
+    teacher_display_name: preferred.teacher_display_name || fallback?.teacher_display_name || "",
+    teacher_normalized_name: preferred.teacher_normalized_name || fallback?.teacher_normalized_name || "",
+    teacher_aliases: mergeUniqueStrings(existing.teacher_aliases || [], incoming.teacher_aliases || []),
+    teacher_specialties: mergeUniqueStrings(existing.teacher_specialties || [], incoming.teacher_specialties || []),
+    descriptor_lines: mergeUniqueStrings(existing.descriptor_lines || [], incoming.descriptor_lines || []),
+    notes_lines: mergeUniqueStrings(existing.notes_lines || [], incoming.notes_lines || []),
+    schedules: mergeAcademicSchedules(existing.schedules || [], incoming.schedules || []),
+    students: mergeAcademicStudentEntries(existing.students || [], incoming.students || []),
+  };
+}
+
+function consolidateAcademicParsedWorkbooks(parsedEntries = []) {
+  const workbookNames = [];
+  const relevantSheets = new Set();
+  const ignoredSheets = new Set();
+  const auxiliarySheets = [];
+  const sheetKinds = [];
+  const teacherMap = new Map();
+  const enrollmentMap = new Map();
+  const classBlockMap = new Map();
+  const trancadosMap = new Map();
+  const desistentesMap = new Map();
+  const cancelamentosMap = new Map();
+  const movementsMap = new Map();
+  const rawTotals = {
+    matriculas_rows: 0,
+    class_blocks: 0,
+    trancados_rows: 0,
+    desistentes_rows: 0,
+    cancelamentos_rows: 0,
+    movements_rows: 0,
+  };
+
+  for (const entry of Array.isArray(parsedEntries) ? parsedEntries : []) {
+    const parsed = entry?.parsed;
+    if (!parsed) continue;
+    workbookNames.push(parsed.workbook_name);
+    (parsed.relevant_sheets || []).forEach((item) => relevantSheets.add(item));
+    (parsed.ignored_sheets || []).forEach((item) => ignoredSheets.add(item));
+    (parsed.auxiliary_sheets || []).forEach((item) => auxiliarySheets.push({ workbook_name: parsed.workbook_name, ...item }));
+    (parsed.sheet_kinds || []).forEach((item) => sheetKinds.push({ workbook_name: parsed.workbook_name, ...item }));
+
+    rawTotals.matriculas_rows += Number(parsed.matriculas?.length || 0);
+    rawTotals.class_blocks += Number(parsed.class_blocks?.length || 0);
+    rawTotals.trancados_rows += Number(parsed.trancados?.length || 0);
+    rawTotals.desistentes_rows += Number(parsed.desistentes?.length || 0);
+    rawTotals.cancelamentos_rows += Number(parsed.cancelamentos?.length || 0);
+    rawTotals.movements_rows += Number(parsed.movements?.length || 0);
+
+    for (const teacher of parsed.teachers || []) {
+      const key = normalizeAcademicText(teacher.normalized_name || teacher.display_name || "");
+      if (!key) continue;
+      const current = teacherMap.get(key);
+      const preferred = choosePreferredAcademicImportRecord(current, teacher) || teacher;
+      teacherMap.set(key, {
+        ...current,
+        ...preferred,
+        display_name: preferred.display_name || current?.display_name || "",
+        normalized_name: key,
+        aliases: mergeUniqueStrings(current?.aliases || [], teacher.aliases || [], [teacher.display_name]),
+        specialties: mergeUniqueStrings(current?.specialties || [], teacher.specialties || []),
+        metadata: mergeAcademicMetadata(current?.metadata || {}, {
+          source_workbooks: mergeUniqueStrings(current?.metadata?.source_workbooks || [], [parsed.workbook_name]),
+        }),
       });
     }
-  }
 
-  let studentsInserted = 0;
-  let studentsUpdated = 0;
-  let enrollmentsInserted = 0;
-  let enrollmentsUpdated = 0;
-  let classesUpserted = 0;
-  let schedulesInserted = 0;
-  let statusesUpdated = 0;
-  const classIdsTouched = new Set();
-
-  for (const row of parsed.matriculas || []) {
-    const student = await upsertAcademicStudentFromImport({
-      full_name: row.full_name,
-      phone: row.phone,
-      notes: row.source_notes || row.notes,
-      source_sheet: row.source_sheet,
-      source_row_identifier: row.source_row_identifier,
-      source_payload: row.source_payload,
-      status: "ativo",
-    }, actorUserId);
-    if (!student?.id) continue;
-    const existedEnrollment = await findAcademicEnrollmentMatch(student.id, row);
-    const schoolTerm = await ensureSchoolTermRecord({
-      code: row.school_term_code || row.semester_label,
-      name: deriveSchoolTermName(row.school_term_code || row.semester_label),
-      status: "active",
-    });
-    const program = await ensureAcademicProgramRecord({
-      language: row.language || detectAcademicLanguageFromText(`${row.program_name || ""} ${row.level_name || ""}`),
-      program_name: row.program_name,
-      level_name: row.level_name,
-      semester_label: row.semester_label || row.school_term_code,
-      modality: row.modality || detectAcademicModalityFromText(row.requested_class_label || ""),
-      material_name: row.material_name,
-      status: "active",
-    });
-    const enrollment = await upsertAcademicEnrollmentFromImport(student, {
-      academic_program_id: program?.id || null,
-      school_term_id: schoolTerm?.id || null,
-      class_id: null,
-      enrollment_number: row.enrollment_number || null,
-      enrollment_date: row.enrollment_date,
-      start_date: row.start_date || row.enrollment_date,
-      enrollment_status: "aguardando turma",
-      contract_status: row.contract_status,
-      source_channel: row.source_channel,
-      source_notes: row.source_notes,
-      notes: row.notes,
-      source_sheet: row.source_sheet,
-      source_row_identifier: row.source_row_identifier,
-      source_payload: row.source_payload,
-    }, actorUserId);
-    if (existedEnrollment?.id) enrollmentsUpdated += 1;
-    else enrollmentsInserted += 1;
-    if (student.created_at === student.updated_at) studentsInserted += 1;
-    else studentsUpdated += 1;
-  }
-
-  for (const block of parsed.class_blocks || []) {
-    const teacher = await ensureAcademicTeacherUser({
-      display_name: block.teacher_display_name,
-      normalized_name: block.teacher_normalized_name,
-      aliases: block.teacher_aliases,
-      specialties: block.teacher_specialties,
-    }, actorUserId);
-    const schoolTerm = await ensureSchoolTermRecord({
-      code: block.school_term_code || block.semester_label,
-      name: deriveSchoolTermName(block.school_term_code || block.semester_label),
-      status: "active",
-    });
-    const program = await ensureAcademicProgramRecord({
-      language: block.language || detectAcademicLanguageFromText(`${block.class_name || ""} ${(block.teacher_specialties || []).join(" ")}`),
-      program_name: block.class_name,
-      level_name: block.level_name,
-      semester_label: block.semester_label || block.school_term_code,
-      modality: block.modality || "online",
-      status: "active",
-    });
-    const classRow = await ensureAcademicClassRecord({
-      name: block.class_name,
-      class_name: block.class_name,
-      school_term_id: schoolTerm?.id || null,
-      academic_program_id: program?.id || null,
-      language: block.language,
-      modality: block.modality || "online",
-      level_name: block.level_name,
-      semester_label: block.semester_label || block.school_term_code,
-      status: "ativa",
-      source_sheet: block.source_sheet,
-      source_block_ref: block.source_block_ref,
-      notes: mergeUniqueStrings(block.descriptor_lines || [], block.notes_lines || []).join(" | "),
-      unit_name: "Home School",
-    });
-    classesUpserted += 1;
-    classIdsTouched.add(Number(classRow.id));
-    const schedules = await syncAcademicClassSchedules(classRow.id, block.schedules || []);
-    schedulesInserted += Math.max(0, (schedules || []).length);
-    if (teacher?.user?.id) {
-      await ensureClassTeacherLink(classRow.id, teacher.user.id, {
-        role_in_class: "teacher",
-        is_active: true,
+    for (const record of parsed.matriculas || []) {
+      const key = buildAcademicEnrollmentImportKey(record);
+      const current = enrollmentMap.get(key);
+      const preferred = choosePreferredAcademicImportRecord(current, record);
+      const fallback = preferred === current ? record : current;
+      enrollmentMap.set(key, {
+        ...fallback,
+        ...preferred,
+        source_workbook: preferred?.source_workbook || fallback?.source_workbook || null,
+        notes: preferred?.notes || fallback?.notes || null,
+        source_notes: preferred?.source_notes || fallback?.source_notes || null,
       });
     }
 
-    for (const studentEntry of block.students || []) {
-      const student = await upsertAcademicStudentFromImport({
-        full_name: studentEntry.full_name,
-        notes: studentEntry.raw_value,
-        source_sheet: studentEntry.source_sheet,
-        source_row_identifier: studentEntry.source_row_identifier,
-        source_payload: studentEntry,
-        status: "ativo",
-      }, actorUserId);
-      if (!student?.id) continue;
-      const existingEnrollment = await findAcademicEnrollmentMatch(student.id, {
-        academic_program_id: program?.id || null,
-        school_term_id: schoolTerm?.id || null,
-      });
-      const enrollment = await upsertAcademicEnrollmentFromImport(student, {
-        id: existingEnrollment?.id || null,
-        academic_program_id: program?.id || null,
-        school_term_id: schoolTerm?.id || null,
-        class_id: classRow.id,
-        enrollment_status: "matriculado",
-        source_channel: "academic_workbook",
-        source_notes: mergeUniqueStrings(block.descriptor_lines || [], [studentEntry.raw_value || ""]).join(" | "),
-        source_sheet: block.source_sheet,
-        source_row_identifier: studentEntry.source_row_identifier || `${block.source_sheet}:${student.id}`,
-        source_payload: {
-          block,
-          student: studentEntry,
-        },
-      }, actorUserId);
-      if (!existingEnrollment?.id) enrollmentsInserted += 1;
-      else if (Number(existingEnrollment.class_id || 0) !== Number(enrollment.class_id || 0)) enrollmentsUpdated += 1;
+    for (const block of parsed.class_blocks || []) {
+      const key = buildAcademicClassBlockKey(block);
+      classBlockMap.set(key, mergeAcademicClassBlockRecords(classBlockMap.get(key) || {}, block));
     }
-  }
 
-  for (const item of parsed.trancados || []) {
-    const student = await findAcademicStudentMatch({
-      fullName: item.full_name,
-      normalizedName: item.normalized_name,
-      phone: item.phone,
-    });
-    if (!student?.id) continue;
-    const enrollment = await get(
-      "SELECT * FROM enrollments WHERE student_id=? ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1",
-      [student.id]
-    );
-    if (!enrollment?.id) continue;
-    await run(
-      "UPDATE enrollments SET enrollment_status='trancado', pedagogical_status=?, source_notes=COALESCE(?, source_notes), updated_at=datetime('now') WHERE id=?",
-      [item.notes || "Trancado importado da planilha", item.notes || null, enrollment.id]
-    );
-    await run("UPDATE students SET status='trancado', updated_at=datetime('now') WHERE id=?", [student.id]);
-    statusesUpdated += 1;
-  }
-
-  for (const item of parsed.desistentes || []) {
-    const student = await findAcademicStudentMatch({
-      fullName: item.full_name,
-      normalizedName: item.normalized_name,
-      phone: item.phone,
-    });
-    if (!student?.id) continue;
-    const enrollment = await get(
-      "SELECT * FROM enrollments WHERE student_id=? ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1",
-      [student.id]
-    );
-    if (!enrollment?.id) continue;
-    await run(
-      "UPDATE enrollments SET enrollment_status='desistente', pedagogical_status=?, source_notes=COALESCE(?, source_notes), updated_at=datetime('now') WHERE id=?",
-      [item.notes || "Desistente importado da planilha", item.notes || null, enrollment.id]
-    );
-    await run("UPDATE students SET status='desistente', updated_at=datetime('now') WHERE id=?", [student.id]);
-    statusesUpdated += 1;
-  }
-
-  if (actorUserId) {
-    await logEvent(actorUserId, "academic_import_completed", {
-      workbook: sanitizeAcademicWorkbookName(workbookName || workbookPath),
-      sheets: parsed.relevant_sheets,
-      ignored_sheets: parsed.ignored_sheets,
-      teachers: teacherProvisioned,
-      students_inserted: studentsInserted,
-      students_updated: studentsUpdated,
-      enrollments_inserted: enrollmentsInserted,
-      enrollments_updated: enrollmentsUpdated,
-      classes_upserted: classesUpserted,
-      statuses_updated: statusesUpdated,
-    });
+    for (const item of parsed.trancados || []) {
+      const key = [normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.level_name || ""), normalizeAcademicText(item.status_date || ""), "trancado"].join("|");
+      trancadosMap.set(key, choosePreferredAcademicImportRecord(trancadosMap.get(key), item));
+    }
+    for (const item of parsed.desistentes || []) {
+      const key = [normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.level_name || ""), normalizeAcademicText(item.status_date || ""), "desistente"].join("|");
+      desistentesMap.set(key, choosePreferredAcademicImportRecord(desistentesMap.get(key), item));
+    }
+    for (const item of parsed.cancelamentos || []) {
+      const key = [normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.language || ""), normalizeAcademicText(item.notes || ""), "cancelado"].join("|");
+      cancelamentosMap.set(key, choosePreferredAcademicImportRecord(cancelamentosMap.get(key), item));
+    }
+    for (const item of parsed.movements || []) {
+      const key = [normalizeAcademicText(item.movement_type || ""), normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.target_class_label || item.level_name || ""), normalizeAcademicText(item.status_date || ""), normalizeAcademicText(item.notes || "")].join("|");
+      movementsMap.set(key, choosePreferredAcademicImportRecord(movementsMap.get(key), item));
+    }
   }
 
   return {
-    workbook_name: parsed.workbook_name,
-    imported_sheets: parsed.relevant_sheets,
-    ignored_sheets: parsed.ignored_sheets,
-    teachers_found: parsed.teachers.map((item) => item.display_name),
-    provisioned_teachers: teacherProvisioned,
-    totals: {
-      matriculas_rows: parsed.matriculas.length,
-      class_blocks: parsed.class_blocks.length,
-      trancados_rows: parsed.trancados.length,
-      desistentes_rows: parsed.desistentes.length,
-      students_inserted: studentsInserted,
-      students_updated: studentsUpdated,
-      enrollments_inserted: enrollmentsInserted,
-      enrollments_updated: enrollmentsUpdated,
-      classes_upserted: classesUpserted,
-      schedules_synced: schedulesInserted,
-      statuses_updated: statusesUpdated,
-    },
-    touched_class_ids: Array.from(classIdsTouched),
+    source_key: ACADEMIC_IMPORT_SOURCE_KEY,
+    workbook_names: workbookNames,
+    relevant_sheets: Array.from(relevantSheets),
+    ignored_sheets: Array.from(ignoredSheets),
+    auxiliary_sheets: auxiliarySheets,
+    sheet_kinds: sheetKinds,
+    matriculas: Array.from(enrollmentMap.values()),
+    class_blocks: Array.from(classBlockMap.values()),
+    trancados: Array.from(trancadosMap.values()),
+    desistentes: Array.from(desistentesMap.values()),
+    cancelamentos: Array.from(cancelamentosMap.values()),
+    movements: Array.from(movementsMap.values()),
+    teachers: Array.from(teacherMap.values()),
+    raw_totals: rawTotals,
   };
+}
+
+async function createAcademicImportRun({ workbookNames = [], actorUserId = null } = {}) {
+  const created = await run(
+    `INSERT INTO academic_import_runs
+       (source_key, status, workbook_names_json, actor_user_id, updated_at)
+     VALUES (?, 'running', ?, ?, datetime('now'))`,
+    [
+      ACADEMIC_IMPORT_SOURCE_KEY,
+      safeJsonStringify(workbookNames, "[]"),
+      actorUserId || null,
+    ]
+  );
+  return Number(created?.lastID || 0) || null;
+}
+
+async function appendAcademicImportLog(runId, payload = {}) {
+  if (!Number(runId || 0)) return null;
+  return run(
+    `INSERT INTO academic_import_logs
+       (run_id, workbook_name, sheet_name, log_level, stage, message, payload_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      Number(runId),
+      sanitizeAcademicTextValue(payload.workbook_name, { maxLength: 180 }) || null,
+      sanitizeAcademicTextValue(payload.sheet_name, { maxLength: 120 }) || null,
+      sanitizeAcademicTextValue(payload.log_level, { maxLength: 20 }) || "info",
+      sanitizeAcademicTextValue(payload.stage, { maxLength: 80 }) || null,
+      sanitizeAcademicTextValue(payload.message, { maxLength: 1000 }) || "academic_import_log",
+      safeJsonStringify(payload.payload || {}, "{}"),
+    ]
+  );
+}
+
+async function finalizeAcademicImportRun(runId, payload = {}) {
+  if (!Number(runId || 0)) return null;
+  return run(
+    `UPDATE academic_import_runs
+        SET status=?, imported_sheets_json=?, ignored_sheets_json=?, summary_json=?, updated_at=datetime('now')
+      WHERE id=?`,
+    [
+      sanitizeAcademicTextValue(payload.status, { maxLength: 40 }) || "completed",
+      safeJsonStringify(payload.imported_sheets || [], "[]"),
+      safeJsonStringify(payload.ignored_sheets || [], "[]"),
+      safeJsonStringify(payload.summary || {}, "{}"),
+      Number(runId),
+    ]
+  );
+}
+
+async function refreshAcademicStudentStatus(studentId) {
+  const safeStudentId = Number(studentId || 0) || null;
+  if (!safeStudentId) return null;
+  const rows = await all(
+    `SELECT enrollment_status
+       FROM enrollments
+      WHERE student_id=?
+      ORDER BY datetime(updated_at) DESC, id DESC`,
+    [safeStudentId]
+  );
+  const statuses = (rows || []).map((row) => normalizeAcademicText(row.enrollment_status || ""));
+  let nextStatus = "ativo";
+  if (statuses.some((item) => ["matriculado", "transferido"].includes(item))) nextStatus = "ativo";
+  else if (statuses.some((item) => ["aguardando turma", "pre matricula"].includes(item))) nextStatus = "aguardando";
+  else if (statuses.some((item) => item === "trancado")) nextStatus = "trancado";
+  else if (statuses.some((item) => item === "desistente")) nextStatus = "desistente";
+  else if (statuses.some((item) => item === "cancelado")) nextStatus = "cancelado";
+  else if (statuses.length) nextStatus = "inativo";
+  await run("UPDATE students SET status=?, updated_at=datetime('now') WHERE id=?", [nextStatus, safeStudentId]);
+  return get("SELECT * FROM students WHERE id=? LIMIT 1", [safeStudentId]);
+}
+
+async function findBestEnrollmentForAcademicStatus(studentId, item = {}) {
+  const safeStudentId = Number(studentId || 0) || null;
+  if (!safeStudentId) return null;
+  const rows = await all(
+    `SELECT e.*, st.code AS school_term_code, ap.language, ap.level_name, ap.modality, c.name AS class_name
+       FROM enrollments e
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN classes c ON c.id = e.class_id
+      WHERE e.student_id=?
+      ORDER BY datetime(e.updated_at) DESC, e.id DESC`,
+    [safeStudentId]
+  );
+  if (!rows.length) return null;
+  const termKey = normalizeAcademicText(item.semester_label || item.school_term_code || "");
+  const languageKey = normalizeAcademicText(item.language || "");
+  const levelKey = normalizeAcademicText(item.level_name || "");
+  const classKey = normalizeAcademicText(item.target_class_label || "");
+  let best = null;
+  let bestScore = -1;
+  rows.forEach((row, index) => {
+    let score = 0;
+    if (termKey && normalizeAcademicText(row.school_term_code || "") === termKey) score += 5;
+    if (languageKey && normalizeAcademicText(row.language || "") === languageKey) score += 3;
+    if (levelKey && normalizeAcademicText(row.level_name || "") === levelKey) score += 2;
+    if (classKey) {
+      const classNameKey = normalizeAcademicText(row.class_name || "");
+      if (classNameKey && (classNameKey.includes(classKey) || classKey.includes(classNameKey))) score += 2;
+    }
+    if (normalizeAcademicText(row.enrollment_status || "") === "matriculado") score += 1;
+    score += Math.max(0, 100 - index);
+    if (score > bestScore) {
+      bestScore = score;
+      best = row;
+    }
+  });
+  return best ? mapAcademicEnrollmentRow(best) : null;
+}
+
+async function recordAcademicTransferEvent(payload = {}) {
+  const enrollmentId = Number(payload.enrollment_id || 0) || null;
+  if (!enrollmentId) return null;
+  const transferType = sanitizeAcademicTextValue(payload.transfer_type, { maxLength: 80 }) || "movimentacao";
+  const oldValueJson = safeJsonStringify(payload.old_value || payload.old_value_json || {}, "{}");
+  const newValueJson = safeJsonStringify(payload.new_value || payload.new_value_json || {}, "{}");
+  const reason = sanitizeAcademicTextValue(payload.reason, { maxLength: 800 }) || null;
+  const notes = sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null;
+  const existing = await get(
+    `SELECT id
+       FROM student_transfers
+      WHERE enrollment_id=?
+        AND lower(coalesce(transfer_type, ''))=lower(?)
+        AND coalesce(old_value_json, '')=coalesce(?, '')
+        AND coalesce(new_value_json, '')=coalesce(?, '')
+        AND lower(coalesce(reason, ''))=lower(coalesce(?, ''))
+      LIMIT 1`,
+    [enrollmentId, transferType, oldValueJson, newValueJson, reason]
+  );
+  if (existing?.id) return existing.id;
+  const created = await run(
+    `INSERT INTO student_transfers
+       (enrollment_id, transfer_type, old_value_json, new_value_json, reason, changed_by_user_id, changed_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
+    [
+      enrollmentId,
+      transferType,
+      oldValueJson,
+      newValueJson,
+      reason,
+      Number(payload.changed_by_user_id || 0) || null,
+      notes,
+    ]
+  );
+  return created?.lastID || null;
+}
+
+async function applyAcademicStatusImport(item = {}, statusOverride = "", actorUserId = null, runId = null) {
+  const statusType = normalizeAcademicText(statusOverride || item.status_type || "");
+  if (!["trancado", "desistente", "cancelado"].includes(statusType)) return false;
+  const student = await findAcademicStudentMatch({
+    fullName: item.full_name,
+    normalizedName: item.normalized_name,
+    phone: item.phone,
+  });
+  if (!student?.id) {
+    await appendAcademicImportLog(runId, {
+      workbook_name: item.source_workbook,
+      sheet_name: item.source_sheet,
+      log_level: "warn",
+      stage: "status",
+      message: "Aluno de status nao encontrado para consolidacao.",
+      payload: { full_name: item.full_name, status_type: statusType },
+    });
+    return false;
+  }
+  const enrollment = await findBestEnrollmentForAcademicStatus(student.id, item);
+  if (enrollment?.id) {
+    await saveAcademicEnrollmentRecord({
+      ...enrollment,
+      id: enrollment.id,
+      student_id: enrollment.student_id,
+      academic_program_id: enrollment.academic_program_id,
+      school_term_id: enrollment.school_term_id,
+      class_id: enrollment.class_id,
+      enrollment_number: enrollment.enrollment_number,
+      enrollment_date: enrollment.enrollment_date,
+      start_date: enrollment.start_date,
+      end_date: enrollment.end_date,
+      enrollment_status: statusType,
+      contract_status: enrollment.contract_status,
+      payment_status: enrollment.payment_status,
+      pedagogical_status: enrollment.pedagogical_status || toAcademicTitleCase(statusType),
+      source_channel: enrollment.source_channel || "academic_import",
+      source_notes: mergeUniqueStrings([enrollment.source_notes || ""], [item.notes || ""]).join(" | ") || enrollment.source_notes || item.notes || null,
+      notes: enrollment.notes,
+      source_workbook: item.source_workbook || enrollment.source_workbook || null,
+      source_sheet: item.source_sheet || enrollment.source_sheet || null,
+      source_row_identifier: item.source_row_identifier || enrollment.source_row_identifier || null,
+      source_payload: item.source_payload || safeJsonParse(enrollment.source_payload_json || "{}") || {},
+      metadata: mergeAcademicMetadata(enrollment.metadata || enrollment.metadata_json || {}, {
+        latest_imported_status: statusType,
+        latest_imported_status_date: item.status_date || brazilDateKey(),
+      }),
+    }, actorUserId ? { id: actorUserId } : null);
+  }
+  await refreshAcademicStudentStatus(student.id);
+  return true;
+}
+
+function inferAcademicUnitName(value = "") {
+  const normalized = normalizeAcademicText(value);
+  if (!normalized) return "Academico";
+  if (normalized.includes("home school")) return "Home School";
+  if (normalized.includes("presencial")) return "Presencial";
+  if (normalized.includes("online")) return "Online";
+  return "Academico";
+}
+
+async function importAcademicWorkbookBatch({ workbookPath, workbookName = "", actorUserId = null }) {
+  return importAcademicWorkbooksBatch({
+    workbookFiles: [
+      {
+        path: workbookPath,
+        originalname: workbookName || path.basename(workbookPath || ""),
+      },
+    ],
+    actorUserId,
+  });
+}
+
+async function importAcademicWorkbooksBatch({ workbookFiles = [], actorUserId = null }) {
+  const safeFiles = (Array.isArray(workbookFiles) ? workbookFiles : [])
+    .filter((item) => item?.path && fs.existsSync(item.path));
+  if (!safeFiles.length) {
+    throw new Error("missing_academic_workbook");
+  }
+
+  const runId = await createAcademicImportRun({
+    workbookNames: safeFiles.map((item) => sanitizeAcademicWorkbookName(item.originalname || item.workbookName || path.basename(item.path))),
+    actorUserId,
+  });
+
+  try {
+    const parsedEntries = [];
+    for (const workbookFile of safeFiles) {
+      const workbookName = sanitizeAcademicWorkbookName(workbookFile.originalname || workbookFile.workbookName || path.basename(workbookFile.path));
+      const workbook = readAcademicWorkbookFromFile(workbookFile.path);
+      const parsed = parseAcademicWorkbook(workbook, { workbookName });
+      parsedEntries.push({ workbook_name: workbookName, parsed });
+      await appendAcademicImportLog(runId, {
+        workbook_name: workbookName,
+        stage: "parse",
+        message: "Planilha academica lida com sucesso.",
+        payload: {
+          workbook_type: parsed.workbook_type,
+          relevant_sheets: parsed.relevant_sheets,
+          ignored_sheets: parsed.ignored_sheets,
+          totals: {
+            matriculas_rows: parsed.matriculas.length,
+            class_blocks: parsed.class_blocks.length,
+            trancados_rows: parsed.trancados.length,
+            desistentes_rows: parsed.desistentes.length,
+            cancelamentos_rows: parsed.cancelamentos.length,
+            movements_rows: parsed.movements.length,
+          },
+        },
+      });
+    }
+
+    const consolidated = consolidateAcademicParsedWorkbooks(parsedEntries);
+    const teacherProvisioned = [];
+    let studentsInserted = 0;
+    let studentsUpdated = 0;
+    let enrollmentsInserted = 0;
+    let enrollmentsUpdated = 0;
+    let classesUpserted = 0;
+    let schedulesSynced = 0;
+    let statusesUpdated = 0;
+    let movementsRegistered = 0;
+    const touchedClassIds = new Set();
+
+    for (const teacher of consolidated.teachers || []) {
+      const provisioned = await ensureAcademicTeacherUser({
+        ...teacher,
+        metadata: mergeAcademicMetadata(teacher.metadata || {}, {
+          source_workbooks: consolidated.workbook_names,
+        }),
+      }, actorUserId);
+      if (provisioned?.user?.id) {
+        teacherProvisioned.push({
+          teacher_name: provisioned.profile?.display_name || provisioned.user.name,
+          user_id: provisioned.user.id,
+          email: provisioned.user.email,
+          created_user: Boolean(provisioned.created_user),
+          created_profile: Boolean(provisioned.created_profile),
+        });
+      }
+    }
+
+    for (const row of consolidated.matriculas || []) {
+      const student = await upsertAcademicStudentFromImport({
+        full_name: row.full_name,
+        phone: row.phone,
+        whatsapp: row.whatsapp,
+        notes: row.source_notes || row.notes,
+        school_name: row.school_name,
+        school_grade: row.school_grade,
+        source_workbook: row.source_workbook,
+        source_sheet: row.source_sheet,
+        source_row_identifier: row.source_row_identifier,
+        source_payload: row.source_payload,
+        status: row.status || "ativo",
+      }, actorUserId);
+      if (!student?.id) continue;
+      const existedEnrollment = await findAcademicEnrollmentMatch(student.id, row);
+      const schoolTermCode = row.school_term_code || row.semester_label || "";
+      const schoolTerm = schoolTermCode
+        ? await ensureSchoolTermRecord({
+            code: schoolTermCode,
+            name: deriveSchoolTermName(schoolTermCode),
+            status: "active",
+          })
+        : null;
+      const program = await ensureAcademicProgramRecord({
+        language: row.language || detectAcademicLanguageFromText(`${row.program_name || ""} ${row.level_name || ""}`),
+        program_name: row.program_name || buildProgramName(row.language, row.level_name, row.modality),
+        level_name: row.level_name,
+        semester_label: row.semester_label || schoolTermCode,
+        modality: row.modality || detectAcademicModalityFromText(row.requested_class_label || ""),
+        material_name: row.material_name,
+        status: "active",
+      });
+      await upsertAcademicEnrollmentFromImport(student, {
+        academic_program_id: program?.id || null,
+        school_term_id: schoolTerm?.id || null,
+        class_id: null,
+        enrollment_number: row.enrollment_number || null,
+        enrollment_date: row.enrollment_date,
+        start_date: row.start_date || row.enrollment_date,
+        enrollment_status: row.enrollment_status || (["vip", "semi_vip", "intensive"].includes(String(row.class_kind || "")) ? "matriculado" : "aguardando turma"),
+        contract_status: row.contract_status,
+        payment_status: row.payment_status,
+        pedagogical_status: row.pedagogical_status || null,
+        source_channel: row.source_channel || "academic_import",
+        source_notes: row.source_notes,
+        notes: row.notes,
+        source_workbook: row.source_workbook,
+        source_sheet: row.source_sheet,
+        source_row_identifier: row.source_row_identifier,
+        source_payload: row.source_payload,
+        metadata: {
+          class_kind: row.class_kind || "regular",
+          requested_class_label: row.requested_class_label || null,
+          class_type: row.class_type || null,
+          system_name: row.system_name || null,
+          attendant_name: row.attendant_name || null,
+          media_source: row.media_source || null,
+          source_workbooks: consolidated.workbook_names,
+        },
+      }, actorUserId);
+      if (existedEnrollment?.id) enrollmentsUpdated += 1;
+      else enrollmentsInserted += 1;
+      if (student.created_at === student.updated_at) studentsInserted += 1;
+      else studentsUpdated += 1;
+    }
+
+    for (const block of consolidated.class_blocks || []) {
+      const teacher = await ensureAcademicTeacherUser({
+        display_name: block.teacher_display_name,
+        normalized_name: block.teacher_normalized_name,
+        aliases: block.teacher_aliases,
+        specialties: block.teacher_specialties,
+        metadata: {
+          source_workbooks: mergeUniqueStrings([block.source_workbook], consolidated.workbook_names),
+        },
+      }, actorUserId);
+      const schoolTermCode = block.school_term_code || block.semester_label || "";
+      const schoolTerm = schoolTermCode
+        ? await ensureSchoolTermRecord({
+            code: schoolTermCode,
+            name: deriveSchoolTermName(schoolTermCode),
+            status: "active",
+          })
+        : null;
+      const program = await ensureAcademicProgramRecord({
+        language: block.language || detectAcademicLanguageFromText(`${block.class_name || ""} ${(block.teacher_specialties || []).join(" ")}`),
+        program_name: block.class_name,
+        level_name: block.level_name,
+        semester_label: block.semester_label || schoolTermCode,
+        modality: block.modality || detectAcademicModalityFromText(block.source_sheet || ""),
+        status: "active",
+      });
+      const classRow = await ensureAcademicClassRecord({
+        name: block.class_name,
+        class_name: block.class_name,
+        school_term_id: schoolTerm?.id || null,
+        academic_program_id: program?.id || null,
+        language: block.language,
+        modality: block.modality || "online",
+        level_name: block.level_name,
+        semester_label: block.semester_label || schoolTermCode,
+        status: "ativa",
+        class_kind: block.class_kind || "regular",
+        source_workbook: block.source_workbook,
+        source_sheet: block.source_sheet,
+        source_block_ref: block.source_block_ref,
+        notes: mergeUniqueStrings(block.descriptor_lines || [], block.notes_lines || []).join(" | "),
+        unit_name: inferAcademicUnitName(`${block.modality || ""} ${block.source_sheet || ""} ${block.source_workbook || ""}`),
+        metadata: {
+          descriptors: block.descriptor_lines || [],
+          notes_lines: block.notes_lines || [],
+          teacher_display_name: block.teacher_display_name || null,
+          teacher_aliases: block.teacher_aliases || [],
+          teacher_specialties: block.teacher_specialties || [],
+          source_workbooks: mergeUniqueStrings([block.source_workbook], consolidated.workbook_names),
+        },
+      });
+      classesUpserted += 1;
+      touchedClassIds.add(Number(classRow.id));
+      const schedules = await syncAcademicClassSchedules(classRow.id, block.schedules || []);
+      schedulesSynced += Number((schedules || []).length || 0);
+      if (teacher?.user?.id) {
+        await ensureClassTeacherLink(classRow.id, teacher.user.id, {
+          role_in_class: "teacher",
+          is_active: true,
+        });
+      }
+
+      for (const studentEntry of block.students || []) {
+        const student = await upsertAcademicStudentFromImport({
+          full_name: studentEntry.full_name,
+          phone: studentEntry.phone,
+          notes: studentEntry.raw_value,
+          source_workbook: block.source_workbook,
+          source_sheet: studentEntry.source_sheet || block.source_sheet,
+          source_row_identifier: studentEntry.source_row_identifier,
+          source_payload: studentEntry,
+          status: "ativo",
+        }, actorUserId);
+        if (!student?.id) continue;
+        const existingEnrollment = await findAcademicEnrollmentMatch(student.id, {
+          academic_program_id: program?.id || null,
+          school_term_id: schoolTerm?.id || null,
+          source_sheet: studentEntry.source_sheet || block.source_sheet,
+          source_row_identifier: studentEntry.source_row_identifier,
+        });
+        const enrollment = await upsertAcademicEnrollmentFromImport(student, {
+          id: existingEnrollment?.id || null,
+          academic_program_id: program?.id || null,
+          school_term_id: schoolTerm?.id || null,
+          class_id: classRow.id,
+          enrollment_status: "matriculado",
+          source_channel: "academic_workbook",
+          source_notes: mergeUniqueStrings(block.descriptor_lines || [], [studentEntry.raw_value || ""]).join(" | "),
+          notes: existingEnrollment?.notes || null,
+          source_workbook: block.source_workbook,
+          source_sheet: block.source_sheet,
+          source_row_identifier: studentEntry.source_row_identifier || `${block.source_sheet}:${student.id}`,
+          source_payload: {
+            block,
+            student: studentEntry,
+          },
+          metadata: {
+            class_kind: block.class_kind || "regular",
+            teacher_display_name: block.teacher_display_name || null,
+            source_workbooks: mergeUniqueStrings([block.source_workbook], consolidated.workbook_names),
+          },
+        }, actorUserId);
+        if (!existingEnrollment?.id) enrollmentsInserted += 1;
+        else if (Number(existingEnrollment.class_id || 0) !== Number(enrollment.class_id || 0)) enrollmentsUpdated += 1;
+      }
+    }
+
+    for (const item of consolidated.trancados || []) {
+      if (await applyAcademicStatusImport(item, "trancado", actorUserId, runId)) statusesUpdated += 1;
+    }
+    for (const item of consolidated.desistentes || []) {
+      if (await applyAcademicStatusImport(item, "desistente", actorUserId, runId)) statusesUpdated += 1;
+    }
+    for (const item of consolidated.cancelamentos || []) {
+      if (await applyAcademicStatusImport(item, "cancelado", actorUserId, runId)) statusesUpdated += 1;
+    }
+
+    for (const item of consolidated.movements || []) {
+      const student = await findAcademicStudentMatch({
+        fullName: item.full_name,
+        normalizedName: item.normalized_name,
+      });
+      if (!student?.id) continue;
+      const enrollment = await findBestEnrollmentForAcademicStatus(student.id, item);
+      if (!enrollment?.id) continue;
+      const oldClass = enrollment.class_id ? await getClassBasicById(enrollment.class_id).catch(() => null) : null;
+      const transferType = sanitizeAcademicTextValue(item.movement_type, { maxLength: 80 }) || "movimentacao";
+      await recordAcademicTransferEvent({
+        enrollment_id: enrollment.id,
+        transfer_type: transferType,
+        old_value: {
+          class_id: enrollment.class_id || null,
+          class_name: oldClass?.name || null,
+          schedule_snapshot: enrollment.class_id ? await listClassSchedulesByClassId(enrollment.class_id) : [],
+        },
+        new_value: {
+          target_class_label: item.target_class_label || null,
+          level_name: item.level_name || null,
+          teacher_name: item.teacher_name || null,
+          status_date: item.status_date || null,
+          source_sheet: item.source_sheet || null,
+        },
+        reason: item.notes || toAcademicTitleCase(item.movement_type || "movimentacao"),
+        changed_by_user_id: actorUserId,
+        notes: item.notes || null,
+      });
+      if (transferType === "remanejamento" || transferType === "reversao_pedagogica") {
+        await saveAcademicEnrollmentRecord({
+          ...enrollment,
+          id: enrollment.id,
+          student_id: enrollment.student_id,
+          metadata: mergeAcademicMetadata(enrollment.metadata || enrollment.metadata_json || {}, {
+            latest_movement_type: transferType,
+            latest_movement_sheet: item.source_sheet || null,
+          }),
+          pedagogical_status: enrollment.pedagogical_status || "remanejado",
+        }, actorUserId ? { id: actorUserId } : null);
+      }
+      movementsRegistered += 1;
+    }
+
+    const summary = {
+      workbook_names: consolidated.workbook_names,
+      imported_sheets: consolidated.relevant_sheets,
+      ignored_sheets: consolidated.ignored_sheets,
+      teachers_found: consolidated.teachers.map((item) => item.display_name),
+      provisioned_teachers: teacherProvisioned,
+      raw_totals: consolidated.raw_totals,
+      totals: {
+        matriculas_rows: consolidated.matriculas.length,
+        class_blocks: consolidated.class_blocks.length,
+        trancados_rows: consolidated.trancados.length,
+        desistentes_rows: consolidated.desistentes.length,
+        cancelamentos_rows: consolidated.cancelamentos.length,
+        movements_rows: consolidated.movements.length,
+        students_inserted: studentsInserted,
+        students_updated: studentsUpdated,
+        enrollments_inserted: enrollmentsInserted,
+        enrollments_updated: enrollmentsUpdated,
+        classes_upserted: classesUpserted,
+        schedules_synced: schedulesSynced,
+        statuses_updated: statusesUpdated,
+        movements_registered: movementsRegistered,
+      },
+      touched_class_ids: Array.from(touchedClassIds),
+    };
+
+    await finalizeAcademicImportRun(runId, {
+      status: "completed",
+      imported_sheets: consolidated.relevant_sheets,
+      ignored_sheets: consolidated.ignored_sheets,
+      summary,
+    });
+
+    if (actorUserId) {
+      await logEvent(actorUserId, "academic_import_completed", summary);
+    }
+
+    return summary;
+  } catch (err) {
+    await appendAcademicImportLog(runId, {
+      log_level: "error",
+      stage: "import",
+      message: err?.message || "academic_import_failed",
+      payload: { stack: err?.stack ? String(err.stack).slice(0, 2000) : "" },
+    });
+    await finalizeAcademicImportRun(runId, {
+      status: "failed",
+      imported_sheets: [],
+      ignored_sheets: [],
+      summary: { error: err?.message || "academic_import_failed" },
+    });
+    throw err;
+  }
 }
 
 function buildAcademicSearchLike(value = "") {
@@ -4381,7 +4983,7 @@ async function getAcademicEnrollmentDetail(enrollmentId, scope) {
   const rows = await listAcademicEnrollments(scope, { limit: 400 });
   const enrollment = rows.find((item) => Number(item.id) === Number(enrollmentId));
   if (!enrollment) return null;
-  const [classHistory, scheduleHistory] = await Promise.all([
+  const [classHistory, scheduleHistory, transferHistory] = await Promise.all([
     all(
       `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
          FROM enrollment_class_history h
@@ -4402,6 +5004,14 @@ async function getAcademicEnrollmentDetail(enrollmentId, scope) {
         ORDER BY datetime(h.changed_at) DESC, h.id DESC`,
       [enrollmentId]
     ),
+    all(
+      `SELECT st.*, u.name AS changed_by_name
+         FROM student_transfers st
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        WHERE st.enrollment_id=?
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC`,
+      [enrollmentId]
+    ),
   ]);
   return {
     enrollment,
@@ -4414,6 +5024,11 @@ async function getAcademicEnrollmentDetail(enrollmentId, scope) {
       ...row,
       old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
       new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+    })),
+    transfer_history: transferHistory.map((row) => ({
+      ...row,
+      old_value: safeJsonParse(row.old_value_json || "null"),
+      new_value: safeJsonParse(row.new_value_json || "null"),
     })),
   };
 }
@@ -4559,6 +5174,18 @@ async function buildAcademicDashboard(scope) {
             JOIN class_teachers ct ON ct.class_id=e.class_id
            WHERE e.id=h.enrollment_id
              AND ct.user_id=?
+           AND ${buildDbTruthySql("is_active", "ct")}
+        )`;
+  const transferMovementsSql = scope.canViewAll
+    ? "SELECT COUNT(*) AS total FROM student_transfers st"
+    : `SELECT COUNT(*) AS total
+         FROM student_transfers st
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=st.enrollment_id
+             AND ct.user_id=?
              AND ${buildDbTruthySql("is_active", "ct")}
         )`;
   const todaySessionsWhereSql = scope.canViewAll
@@ -4569,7 +5196,7 @@ async function buildAcademicDashboard(scope) {
             AND ct.user_id=?
             AND ${buildDbTruthySql("is_active", "ct")}
        ) AND cs.class_date=?`;
-  const [studentsRow, enrollmentsRow, classesRow, classMovementsRow, scheduleMovementsRow, todaySessionsRow] = await Promise.all([
+  const [studentsRow, enrollmentsRow, classesRow, classMovementsRow, scheduleMovementsRow, transferMovementsRow, todaySessionsRow, importRunsRow] = await Promise.all([
     get(
       `SELECT COUNT(DISTINCT s.id) AS total
          FROM students s
@@ -4595,7 +5222,10 @@ async function buildAcademicDashboard(scope) {
     ),
     get(
       `SELECT COUNT(DISTINCT c.id) AS total,
-              SUM(CASE WHEN lower(coalesce(c.status, ''))='ativa' THEN 1 ELSE 0 END) AS active_total
+              SUM(CASE WHEN lower(coalesce(c.status, ''))='ativa' THEN 1 ELSE 0 END) AS active_total,
+              SUM(CASE WHEN lower(coalesce(c.class_kind, ''))='vip' THEN 1 ELSE 0 END) AS vip_total,
+              SUM(CASE WHEN lower(coalesce(c.class_kind, ''))='semi_vip' THEN 1 ELSE 0 END) AS semi_vip_total,
+              SUM(CASE WHEN lower(coalesce(c.class_kind, ''))='intensive' THEN 1 ELSE 0 END) AS intensive_total
          FROM classes c
          ${scope.canViewAll ? "" : `WHERE EXISTS (
             SELECT 1 FROM class_teachers ct
@@ -4607,12 +5237,16 @@ async function buildAcademicDashboard(scope) {
     ),
     get(classMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
     get(scheduleMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    get(transferMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
     get(
       `SELECT COUNT(*) AS total
          FROM class_sessions cs
          ${todaySessionsWhereSql}`,
       scope.canViewAll ? [brazilDateKey()] : [scope.teacherUserId, brazilDateKey()]
     ),
+    scope.canImport
+      ? get("SELECT COUNT(*) AS total FROM academic_import_runs WHERE datetime(created_at) >= datetime('now', '-30 day')")
+      : Promise.resolve({ total: 0 }),
   ]);
 
   let byTeacher = [];
@@ -4641,8 +5275,11 @@ async function buildAcademicDashboard(scope) {
     inactive_total: Number(enrollmentsRow?.inactive_total || 0),
     total_classes: Number(classesRow?.total || 0),
     active_classes: Number(classesRow?.active_total || 0),
-    recent_movements: Number(classMovementsRow?.total || 0) + Number(scheduleMovementsRow?.total || 0),
+    vip_classes: Number(classesRow?.vip_total || 0) + Number(classesRow?.semi_vip_total || 0),
+    intensive_classes: Number(classesRow?.intensive_total || 0),
+    recent_movements: Number(classMovementsRow?.total || 0) + Number(scheduleMovementsRow?.total || 0) + Number(transferMovementsRow?.total || 0),
     classes_today: Number(todaySessionsRow?.total || 0),
+    recent_imports: Number(importRunsRow?.total || 0),
     by_teacher: byTeacher.map((row) => ({
       teacher_name: row.teacher_name,
       classes_total: Number(row.classes_total || 0),
@@ -4693,44 +5330,75 @@ async function listSchoolTermCatalog() {
 async function buildAcademicBootstrap(user, query = {}) {
   const scope = await resolveAcademicScope(user);
   const classMovementsSql = scope.canViewAll
-    ? `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+    ? `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
          FROM enrollment_class_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
          LEFT JOIN users u ON u.id = h.changed_by_user_id
         ORDER BY datetime(h.changed_at) DESC, h.id DESC
         LIMIT 20`
-    : `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+    : `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
          FROM enrollment_class_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
          LEFT JOIN users u ON u.id = h.changed_by_user_id
         WHERE EXISTS (
           SELECT 1
-            FROM enrollments e
-            JOIN class_teachers ct ON ct.class_id=e.class_id
-           WHERE e.id=h.enrollment_id
+            FROM enrollments e_scope
+            JOIN class_teachers ct ON ct.class_id=e_scope.class_id
+           WHERE e_scope.id=h.enrollment_id
              AND ct.user_id=?
              AND ${buildDbTruthySql("is_active", "ct")}
         )
         ORDER BY datetime(h.changed_at) DESC, h.id DESC
         LIMIT 20`;
   const scheduleMovementsSql = scope.canViewAll
-    ? `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+    ? `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
          FROM enrollment_schedule_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
          LEFT JOIN users u ON u.id = h.changed_by_user_id
         ORDER BY datetime(h.changed_at) DESC, h.id DESC
         LIMIT 20`
-    : `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name
+    : `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
          FROM enrollment_schedule_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
          LEFT JOIN users u ON u.id = h.changed_by_user_id
         WHERE EXISTS (
           SELECT 1
-            FROM enrollments e
-            JOIN class_teachers ct ON ct.class_id=e.class_id
-           WHERE e.id=h.enrollment_id
+            FROM enrollments e_scope
+            JOIN class_teachers ct ON ct.class_id=e_scope.class_id
+           WHERE e_scope.id=h.enrollment_id
              AND ct.user_id=?
              AND ${buildDbTruthySql("is_active", "ct")}
         )
         ORDER BY datetime(h.changed_at) DESC, h.id DESC
         LIMIT 20`;
-  const [dashboard, students, enrollments, classes, filters, classMovements, scheduleMovements, teacherProfiles, programs, schoolTerms] = await Promise.all([
+  const transferMovementsSql = scope.canViewAll
+    ? `SELECT st.transfer_type AS movement_type, st.id, st.enrollment_id, NULL AS old_class_id, NULL AS new_class_id, st.reason, st.changed_at, st.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM student_transfers st
+         LEFT JOIN enrollments e ON e.id = st.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC
+        LIMIT 20`
+    : `SELECT st.transfer_type AS movement_type, st.id, st.enrollment_id, NULL AS old_class_id, NULL AS new_class_id, st.reason, st.changed_at, st.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM student_transfers st
+         LEFT JOIN enrollments e ON e.id = st.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e_scope
+            JOIN class_teachers ct ON ct.class_id=e_scope.class_id
+           WHERE e_scope.id=st.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC
+        LIMIT 20`;
+  const [dashboard, students, enrollments, classes, filters, classMovements, scheduleMovements, transferMovements, teacherProfiles, programs, schoolTerms, importRuns] = await Promise.all([
     buildAcademicDashboard(scope),
     listAcademicStudents(scope, { search: query.search, status: query.student_status, language: query.language, modality: query.modality, termCode: query.term_code, limit: 30 }),
     listAcademicEnrollments(scope, { search: query.search, status: query.enrollment_status, language: query.language, modality: query.modality, teacherName: query.teacher, termCode: query.term_code, limit: 30 }),
@@ -4738,11 +5406,20 @@ async function buildAcademicBootstrap(user, query = {}) {
     listAcademicFilterOptions(scope),
     all(classMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
     all(scheduleMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    all(transferMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
     listAcademicTeacherProfiles(scope),
     listAcademicProgramCatalog(),
     listSchoolTermCatalog(),
+    scope.canImport
+      ? all(
+          `SELECT id, source_key, status, workbook_names_json, imported_sheets_json, ignored_sheets_json, summary_json, actor_user_id, created_at, updated_at
+             FROM academic_import_runs
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT 8`
+        )
+      : Promise.resolve([]),
   ]);
-  const movements = [...(classMovements || []), ...(scheduleMovements || [])]
+  const movements = [...(classMovements || []), ...(scheduleMovements || []), ...(transferMovements || [])]
     .sort((left, right) => String(right?.changed_at || "").localeCompare(String(left?.changed_at || "")))
     .slice(0, 30);
   return {
@@ -4760,6 +5437,13 @@ async function buildAcademicBootstrap(user, query = {}) {
     enrollments,
     classes,
     movements,
+    recent_import_runs: (importRuns || []).map((row) => ({
+      ...row,
+      workbook_names: Array.isArray(safeJsonParse(row.workbook_names_json || "[]")) ? safeJsonParse(row.workbook_names_json || "[]") : [],
+      imported_sheets: Array.isArray(safeJsonParse(row.imported_sheets_json || "[]")) ? safeJsonParse(row.imported_sheets_json || "[]") : [],
+      ignored_sheets: Array.isArray(safeJsonParse(row.ignored_sheets_json || "[]")) ? safeJsonParse(row.ignored_sheets_json || "[]") : [],
+      summary: safeJsonParse(row.summary_json || "{}") || {},
+    })),
     submenu_view_keys: {
       pedagogical: ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS.slice(),
       teacher: ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS.slice(),
@@ -4776,6 +5460,10 @@ async function transferAcademicEnrollmentClass(enrollmentId, payload = {}, actor
   if (!newClassId) throw new Error("missing_new_class_id");
   const reason = sanitizeAcademicTextValue(payload.reason, { maxLength: 800 }) || "Troca de turma";
   const notes = sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null;
+  const [oldClass, newClass] = await Promise.all([
+    enrollment.class_id ? getClassBasicById(enrollment.class_id).catch(() => null) : null,
+    newClassId ? getClassBasicById(newClassId).catch(() => null) : null,
+  ]);
   await run(
     "UPDATE enrollments SET class_id=?, enrollment_status=?, updated_at=datetime('now') WHERE id=?",
     [newClassId, normalizeEnrollmentStatus(payload.enrollment_status || "transferido"), enrollmentId]
@@ -4786,6 +5474,21 @@ async function transferAcademicEnrollmentClass(enrollmentId, payload = {}, actor
      VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
     [enrollmentId, enrollment.class_id || null, newClassId, reason, actorUser.id || actorUser.sub, notes]
   );
+  await recordAcademicTransferEvent({
+    enrollment_id: enrollmentId,
+    transfer_type: "class_transfer",
+    old_value: {
+      class_id: enrollment.class_id || null,
+      class_name: oldClass?.name || null,
+    },
+    new_value: {
+      class_id: newClassId,
+      class_name: newClass?.name || null,
+    },
+    reason,
+    changed_by_user_id: actorUser.id || actorUser.sub,
+    notes,
+  });
   await logEntityChange({
     entityType: "academic_enrollment",
     entityId: enrollmentId,
@@ -4828,6 +5531,21 @@ async function changeAcademicEnrollmentSchedule(enrollmentId, payload = {}, acto
       notes,
     ]
   );
+  await recordAcademicTransferEvent({
+    enrollment_id: enrollmentId,
+    transfer_type: "schedule_change",
+    old_value: {
+      class_id: enrollment.class_id || null,
+      schedules: oldSchedules,
+    },
+    new_value: {
+      class_id: newClassId,
+      schedules: newSchedules,
+    },
+    reason,
+    changed_by_user_id: actorUser.id || actorUser.sub,
+    notes,
+  });
   await logEntityChange({
     entityType: "academic_enrollment",
     entityId: enrollmentId,
@@ -11019,9 +11737,11 @@ const salesImportUpload = upload.fields([
   { name: "post_sale_workbook", maxCount: 1 },
 ]);
 const academicImportUpload = upload.fields([
-  { name: "academic_workbook", maxCount: 1 },
-  { name: "workbook", maxCount: 1 },
-  { name: "file", maxCount: 1 },
+  { name: "academic_workbook", maxCount: 6 },
+  { name: "academic_workbooks", maxCount: 6 },
+  { name: "workbook", maxCount: 6 },
+  { name: "file", maxCount: 6 },
+  { name: "files", maxCount: 6 },
 ]);
 
 function ragUploadMiddleware(req, res, next) {
@@ -11042,6 +11762,9 @@ function academicImportUploadMiddleware(req, res, next) {
     if (!err) return next();
     if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
       return res.status(400).json({ error: "file_too_large" });
+    }
+    if (err instanceof multer.MulterError && (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_PART_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE")) {
+      return res.status(400).json({ error: "academic_batch_too_large" });
     }
     return res.status(400).json({ error: err?.message || "academic_upload_failed" });
   });
@@ -12334,25 +13057,38 @@ app.get("/api/intranet/academic/bootstrap", requireAuth(JWT_SECRET), requireIntr
 });
 
 app.post("/api/intranet/academic/import", requireAuth(JWT_SECRET), requireIntranetAccess, academicImportUploadMiddleware, async (req, res) => {
+  const uploaded = [
+    ...(Array.isArray(req.files?.academic_workbook) ? req.files.academic_workbook : []),
+    ...(Array.isArray(req.files?.academic_workbooks) ? req.files.academic_workbooks : []),
+    ...(Array.isArray(req.files?.workbook) ? req.files.workbook : []),
+    ...(Array.isArray(req.files?.file) ? req.files.file : []),
+    ...(Array.isArray(req.files?.files) ? req.files.files : []),
+  ].filter((item) => item?.path);
   try {
     const user = req.currentUser || await getUserById(req.user.sub);
     const scope = await resolveAcademicScope(user);
     if (!scope.canImport) {
       return res.status(403).json({ error: "forbidden" });
     }
-    const uploaded = req.files?.academic_workbook?.[0] || req.files?.workbook?.[0] || req.files?.file?.[0] || null;
-    if (!uploaded?.path) {
+    if (!uploaded.length) {
       return res.status(400).json({ error: "missing_academic_workbook" });
     }
-    const result = await importAcademicWorkbookBatch({
-      workbookPath: uploaded.path,
-      workbookName: uploaded.originalname || path.basename(uploaded.path),
+    const result = await importAcademicWorkbooksBatch({
+      workbookFiles: uploaded.map((item) => ({
+        path: item.path,
+        originalname: item.originalname || path.basename(item.path),
+      })),
       actorUserId: user.id || user.sub || null,
     });
     const academic = await buildAcademicBootstrap(user, {});
     res.json({ ok: true, result, academic });
   } catch (err) {
     sendAcademicRouteError(res, err, "academic_import_failed");
+  } finally {
+    for (const file of uploaded) {
+      if (!file?.path) continue;
+      fs.promises.unlink(file.path).catch(() => {});
+    }
   }
 });
 

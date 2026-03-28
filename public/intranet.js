@@ -4487,7 +4487,29 @@ function buildAcademicSummaryCards(dashboard = {}, isTeacher = false) {
         { label: 'Aguardando turma', value: Number(dashboard.waiting_for_class || 0) },
         { label: 'Trancados', value: Number(dashboard.trancados || 0) },
         { label: 'Desistentes / cancelados', value: Number(dashboard.inactive_total || 0) },
+        { label: 'VIPs / Semi VIP', value: Number(dashboard.vip_classes || 0) },
+        { label: 'Intensivos', value: Number(dashboard.intensive_classes || 0) },
       ];
+}
+
+function formatAcademicMovementTypeLabel(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (safe === 'class') return 'Troca de turma';
+  if (safe === 'schedule') return 'Mudança de horário';
+  if (safe === 'remanejamento') return 'Remanejamento';
+  if (safe === 'reversao_pedagogica') return 'Reversão pedagógica';
+  if (safe === 'class_transfer') return 'Transferência manual de turma';
+  if (safe === 'schedule_change') return 'Ajuste manual de horário';
+  return safe ? safe.replace(/_/g, ' ') : 'Movimentação acadêmica';
+}
+
+function formatAcademicClassKindLabel(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (safe === 'semi_vip') return 'Semi VIP';
+  if (safe === 'vip') return 'VIP';
+  if (safe === 'intensive') return 'Intensivo';
+  if (safe === 'special_project') return 'Projeto especial';
+  return safe ? safe.replace(/_/g, ' ') : 'Regular';
 }
 
 function buildAcademicGuardiansMarkup(guardians = []) {
@@ -4774,20 +4796,20 @@ async function handleAcademicImportSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const fileInput = form.querySelector('input[type="file"]');
-  const file = fileInput?.files?.[0] || null;
-  if (!file) {
-    window.alert('Selecione a planilha acadêmica para importar.');
+  const files = Array.from(fileInput?.files || []).filter(Boolean);
+  if (!files.length) {
+    window.alert('Selecione pelo menos uma planilha acadêmica para importar.');
     return;
   }
   const formData = new FormData();
-  formData.append('academic_workbook', file);
+  files.forEach((file) => formData.append('academic_workbook', file));
   try {
     const response = await api('/api/intranet/academic/import', {
       method: 'POST',
       body: formData,
       headers: {},
     });
-    setAcademicNotice('success', `Importação concluída: ${response?.result?.totals?.students_inserted || 0} aluno(s) novos, ${response?.result?.totals?.classes_upserted || 0} turma(s) sincronizada(s).`);
+    setAcademicNotice('success', `Importação consolidada concluída: ${response?.result?.workbook_names?.length || files.length} arquivo(s), ${response?.result?.totals?.students_inserted || 0} aluno(s) novos, ${response?.result?.totals?.classes_upserted || 0} turma(s) sincronizada(s).`);
     academicState.bootstrap = response?.academic || academicState.bootstrap;
     await fetchAcademicBootstrap({ viewKey: academicState.viewKey, preserveSelection: true });
   } catch (err) {
@@ -5052,7 +5074,7 @@ function renderAcademicWorkspace() {
     ? `<div class="workspace-inline-notice is-${escapeHtml(academicState.notice.type || 'info')}"><span>${escapeHtml(academicState.notice.text)}</span><button class="btn workspace-inline-notice-close" type="button" id="btnDismissAcademicNotice">${renderIcon('chevron')}</button></div>`
     : '';
   const importMarkup = bootstrap.can_import
-    ? `<form id="academicImportForm" class="academic-import-form"><input type="file" id="academicImportFile" accept=".xlsx,.xls" /><button class="btn" type="submit">Importar planilha acadêmica</button></form>`
+    ? `<form id="academicImportForm" class="academic-import-form"><input type="file" id="academicImportFile" accept=".xlsx,.xls" multiple /><button class="btn" type="submit">Importar planilhas acadêmicas</button></form>`
     : '';
   const summaryMarkup = `
     <div class="academic-summary-grid">
@@ -5105,7 +5127,7 @@ function renderAcademicWorkspace() {
       </div>
     `;
   } else if (viewKey === 'academic-movements') {
-    sectionMarkup = `<section class="workspace-section-panel"><div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${isTeacherView ? 'Professor' : 'Pedagógico'}</div><h4 class="intranet-section-title">Movimentações acadêmicas</h4></div></div><div class="academic-history-grid">${movements.length ? movements.map((item) => `<article class="intranet-sales-history-item"><strong>${escapeHtml(item.movement_type === 'schedule' ? 'Mudança de horário' : 'Troca de turma')}</strong><div>${escapeHtml(item.reason || 'Sem motivo informado')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma movimentação recente.</div>`}</div></section>`;
+    sectionMarkup = `<section class="workspace-section-panel"><div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${isTeacherView ? 'Professor' : 'Pedagógico'}</div><h4 class="intranet-section-title">Movimentações acadêmicas</h4></div></div><div class="academic-history-grid">${movements.length ? movements.map((item) => `<article class="intranet-sales-history-item"><strong>${escapeHtml(formatAcademicMovementTypeLabel(item.movement_type))}</strong><div>${escapeHtml(item.student_name || 'Aluno não identificado')}</div><div>${escapeHtml(item.reason || item.notes || 'Sem motivo informado')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma movimentação recente.</div>`}</div></section>`;
   } else {
     const schedules = Array.isArray(classDetail.schedules) && classDetail.schedules.length ? classDetail.schedules : [{ weekday: '', start_time: '', end_time: '', notes: '' }];
     sectionMarkup = `
@@ -5113,7 +5135,7 @@ function renderAcademicWorkspace() {
         <section class="academic-list-panel">
           <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${isTeacherView ? 'Professor' : 'Pedagógico'}</div><h4 class="intranet-section-title">${isTeacherView ? 'Minhas turmas' : 'Turmas'}</h4></div>${!isTeacherView ? `<button class="btn" type="button" id="btnNewAcademicClass">Nova turma</button>` : ''}</div>
           <div class="academic-list">
-            ${classes.length ? classes.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedClassId || 0) ? ' is-active' : ''}" data-academic-class="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.name || item.code || 'Turma')}</h4><div class="small muted">${escapeHtml(item.language || '-')} · ${escapeHtml(item.modality || '-')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.status)}">${escapeHtml(item.status || 'planejada')}</span></div><div class="small muted">${escapeHtml((item.teachers || []).map((teacher) => teacher.display_name).join(', ') || 'Sem professor')} · ${escapeHtml(String(item.enrolled_total || 0))} aluno(s)</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma turma encontrada.</div>`}
+            ${classes.length ? classes.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedClassId || 0) ? ' is-active' : ''}" data-academic-class="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.name || item.code || 'Turma')}</h4><div class="small muted">${escapeHtml(formatAcademicClassKindLabel(item.class_kind || 'regular'))} · ${escapeHtml(item.language || '-')} · ${escapeHtml(item.modality || '-')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.status)}">${escapeHtml(item.status || 'planejada')}</span></div><div class="small muted">${escapeHtml((item.teachers || []).map((teacher) => teacher.display_name).join(', ') || 'Sem professor')} · ${escapeHtml(String(item.enrolled_total || 0))} aluno(s)</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma turma encontrada.</div>`}
           </div>
         </section>
         <aside class="academic-detail-panel">

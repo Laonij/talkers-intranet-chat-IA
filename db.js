@@ -1444,6 +1444,7 @@ async function migrateSqlite() {
       school_name TEXT,
       school_grade TEXT,
       status TEXT NOT NULL DEFAULT 'ativo',
+      source_workbook TEXT,
       source_sheet TEXT,
       source_row_identifier TEXT,
       source_payload_json TEXT,
@@ -1518,8 +1519,11 @@ async function migrateSqlite() {
       room_name TEXT,
       unit_name TEXT,
       notes TEXT,
+      class_kind TEXT NOT NULL DEFAULT 'regular',
+      source_workbook TEXT,
       source_sheet TEXT,
       source_block_ref TEXT,
+      metadata_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -1588,9 +1592,11 @@ async function migrateSqlite() {
       source_channel TEXT,
       source_notes TEXT,
       notes TEXT,
+      source_workbook TEXT,
       source_sheet TEXT,
       source_row_identifier TEXT,
       source_payload_json TEXT,
+      metadata_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -1654,6 +1660,73 @@ async function migrateSqlite() {
       notes TEXT
     );
   `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS student_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      enrollment_id INTEGER NOT NULL,
+      transfer_type TEXT NOT NULL,
+      old_value_json TEXT,
+      new_value_json TEXT,
+      reason TEXT,
+      changed_by_user_id INTEGER,
+      changed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      notes TEXT
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS academic_import_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_key TEXT NOT NULL DEFAULT 'academic-consolidated',
+      status TEXT NOT NULL DEFAULT 'running',
+      workbook_names_json TEXT,
+      imported_sheets_json TEXT,
+      ignored_sheets_json TEXT,
+      summary_json TEXT,
+      actor_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  await execSqlite(`
+    CREATE TABLE IF NOT EXISTS academic_import_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      workbook_name TEXT,
+      sheet_name TEXT,
+      log_level TEXT NOT NULL DEFAULT 'info',
+      stage TEXT,
+      message TEXT NOT NULL,
+      payload_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  const studentColumns = await allSqlite("PRAGMA table_info(students)");
+  if (!studentColumns.some((column) => column.name === "source_workbook")) {
+    await execSqlite("ALTER TABLE students ADD COLUMN source_workbook TEXT;");
+  }
+
+  const classColumns = await allSqlite("PRAGMA table_info(classes)");
+  if (!classColumns.some((column) => column.name === "class_kind")) {
+    await execSqlite("ALTER TABLE classes ADD COLUMN class_kind TEXT NOT NULL DEFAULT 'regular';");
+  }
+  if (!classColumns.some((column) => column.name === "source_workbook")) {
+    await execSqlite("ALTER TABLE classes ADD COLUMN source_workbook TEXT;");
+  }
+  if (!classColumns.some((column) => column.name === "metadata_json")) {
+    await execSqlite("ALTER TABLE classes ADD COLUMN metadata_json TEXT;");
+  }
+
+  const enrollmentColumns = await allSqlite("PRAGMA table_info(enrollments)");
+  if (!enrollmentColumns.some((column) => column.name === "source_workbook")) {
+    await execSqlite("ALTER TABLE enrollments ADD COLUMN source_workbook TEXT;");
+  }
+  if (!enrollmentColumns.some((column) => column.name === "metadata_json")) {
+    await execSqlite("ALTER TABLE enrollments ADD COLUMN metadata_json TEXT;");
+  }
 
   await execSqlite(`
     CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
@@ -1731,6 +1804,7 @@ async function migrateSqlite() {
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_school_terms_code ON school_terms(code, status);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_classes_term_program ON classes(school_term_id, academic_program_id, status);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_classes_source ON classes(source_sheet, source_block_ref);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_classes_kind ON classes(class_kind, modality, semester_label);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_class_schedules_class ON class_schedules(class_id, weekday, start_time);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_name ON teacher_profiles(normalized_name, active);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_user ON teacher_profiles(user_id, active);");
@@ -1746,6 +1820,9 @@ async function migrateSqlite() {
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_attendance_enrollment_date ON attendance_records(enrollment_id, class_date, attendance_status);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollment_class_history_enrollment ON enrollment_class_history(enrollment_id, changed_at);");
   await execSqlite("CREATE INDEX IF NOT EXISTS idx_enrollment_schedule_history_enrollment ON enrollment_schedule_history(enrollment_id, changed_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_student_transfers_enrollment ON student_transfers(enrollment_id, changed_at);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_academic_import_runs_created ON academic_import_runs(created_at, status);");
+  await execSqlite("CREATE INDEX IF NOT EXISTS idx_academic_import_logs_run ON academic_import_logs(run_id, created_at);");
 
   await execSqlite(`
     CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
@@ -2417,6 +2494,7 @@ async function migratePostgres() {
       school_name TEXT,
       school_grade TEXT,
       status TEXT NOT NULL DEFAULT 'ativo',
+      source_workbook TEXT,
       source_sheet TEXT,
       source_row_identifier TEXT,
       source_payload_json TEXT,
@@ -2491,8 +2569,11 @@ async function migratePostgres() {
       room_name TEXT,
       unit_name TEXT,
       notes TEXT,
+      class_kind TEXT NOT NULL DEFAULT 'regular',
+      source_workbook TEXT,
       source_sheet TEXT,
       source_block_ref TEXT,
+      metadata_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -2561,9 +2642,11 @@ async function migratePostgres() {
       source_channel TEXT,
       source_notes TEXT,
       notes TEXT,
+      source_workbook TEXT,
       source_sheet TEXT,
       source_row_identifier TEXT,
       source_payload_json TEXT,
+      metadata_json TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -2628,6 +2711,49 @@ async function migratePostgres() {
     );
   `);
 
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS student_transfers (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      enrollment_id INTEGER NOT NULL,
+      transfer_type TEXT NOT NULL,
+      old_value_json TEXT,
+      new_value_json TEXT,
+      reason TEXT,
+      changed_by_user_id INTEGER,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS academic_import_runs (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      source_key TEXT NOT NULL DEFAULT 'academic-consolidated',
+      status TEXT NOT NULL DEFAULT 'running',
+      workbook_names_json TEXT,
+      imported_sheets_json TEXT,
+      ignored_sheets_json TEXT,
+      summary_json TEXT,
+      actor_user_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS academic_import_logs (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      run_id INTEGER NOT NULL,
+      workbook_name TEXT,
+      sheet_name TEXT,
+      log_level TEXT NOT NULL DEFAULT 'info',
+      stage TEXT,
+      message TEXT NOT NULL,
+      payload_json TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS can_access_intranet BOOLEAN NOT NULL DEFAULT FALSE;");
   await pgPool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_locale TEXT NOT NULL DEFAULT 'pt-BR';");
@@ -2666,6 +2792,12 @@ async function migratePostgres() {
   await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS processing_state_json TEXT;");
   await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;");
   await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS hit_count INTEGER NOT NULL DEFAULT 0;");
+  await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS source_workbook TEXT;");
+  await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS class_kind TEXT NOT NULL DEFAULT 'regular';");
+  await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS source_workbook TEXT;");
+  await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS metadata_json TEXT;");
+  await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS source_workbook TEXT;");
+  await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS metadata_json TEXT;");
 
   await pgPool.query(`
     CREATE TABLE IF NOT EXISTS knowledge_processing_logs (
@@ -2789,6 +2921,7 @@ async function migratePostgres() {
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_school_terms_code ON school_terms(code, status);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_classes_term_program ON classes(school_term_id, academic_program_id, status);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_classes_source ON classes(source_sheet, source_block_ref);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_classes_kind ON classes(class_kind, modality, semester_label);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_class_schedules_class ON class_schedules(class_id, weekday, start_time);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_name ON teacher_profiles(normalized_name, active);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_teacher_profiles_user ON teacher_profiles(user_id, active);");
@@ -2804,6 +2937,9 @@ async function migratePostgres() {
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_attendance_enrollment_date ON attendance_records(enrollment_id, class_date, attendance_status);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollment_class_history_enrollment ON enrollment_class_history(enrollment_id, changed_at);");
   await pgPool.query("CREATE INDEX IF NOT EXISTS idx_enrollment_schedule_history_enrollment ON enrollment_schedule_history(enrollment_id, changed_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_student_transfers_enrollment ON student_transfers(enrollment_id, changed_at);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_academic_import_runs_created ON academic_import_runs(created_at, status);");
+  await pgPool.query("CREATE INDEX IF NOT EXISTS idx_academic_import_logs_run ON academic_import_logs(run_id, created_at);");
 }
 async function postgresHasData() {
   const tables = [
@@ -2855,7 +2991,7 @@ async function importLegacySqliteIntoPostgres() {
     legacyDb = await openLegacySqlite(sqlitePath);
     const tableRows = await sqliteAllFrom(
       legacyDb,
-      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','department_submenus','intranet_announcements','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','knowledge_processing_logs','memory_entries','ai_training_events','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log','calendar_event_types','calendar_events','calendar_event_participants','calendar_event_logs','marketing_influencers','marketing_influencer_metrics','marketing_indicator_tabs','marketing_indicator_rows','pedagogical_whatsapp_groups','pedagogical_whatsapp_campaigns','pedagogical_whatsapp_campaign_items','pedagogical_whatsapp_campaign_logs','pedagogical_whatsapp_settings','students','student_guardians','academic_programs','school_terms','classes','class_schedules','teacher_profiles','class_teachers','enrollments','class_sessions','attendance_records','enrollment_class_history','enrollment_schedule_history')"
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','department_submenus','intranet_announcements','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','knowledge_processing_logs','memory_entries','ai_training_events','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log','calendar_event_types','calendar_events','calendar_event_participants','calendar_event_logs','marketing_influencers','marketing_influencer_metrics','marketing_indicator_tabs','marketing_indicator_rows','pedagogical_whatsapp_groups','pedagogical_whatsapp_campaigns','pedagogical_whatsapp_campaign_items','pedagogical_whatsapp_campaign_logs','pedagogical_whatsapp_settings','students','student_guardians','academic_programs','school_terms','classes','class_schedules','teacher_profiles','class_teachers','enrollments','class_sessions','attendance_records','enrollment_class_history','enrollment_schedule_history','student_transfers','academic_import_runs','academic_import_logs')"
     );
 
     if (!Array.isArray(tableRows) || !tableRows.length) {
@@ -2925,6 +3061,9 @@ async function importLegacySqliteIntoPostgres() {
         { name: "attendance_records", pk: "id", orderBy: "id" },
         { name: "enrollment_class_history", pk: "id", orderBy: "id" },
         { name: "enrollment_schedule_history", pk: "id", orderBy: "id" },
+        { name: "student_transfers", pk: "id", orderBy: "id" },
+        { name: "academic_import_runs", pk: "id", orderBy: "id" },
+        { name: "academic_import_logs", pk: "id", orderBy: "id" },
       ];
 
       const availableTables = new Set(tableRows.map((row) => row.name));
@@ -3026,6 +3165,9 @@ async function importLegacySqliteIntoPostgres() {
       await setPostgresSequence(client, "attendance_records", "id");
       await setPostgresSequence(client, "enrollment_class_history", "id");
       await setPostgresSequence(client, "enrollment_schedule_history", "id");
+      await setPostgresSequence(client, "student_transfers", "id");
+      await setPostgresSequence(client, "academic_import_runs", "id");
+      await setPostgresSequence(client, "academic_import_logs", "id");
 
       await client.query("COMMIT");
       console.log("Resumo da migracao SQLite -> Postgres:", migrationSummary);

@@ -71,6 +71,7 @@ const {
   DEFAULT_CLOSER_ALIAS_SEEDS,
   SALES_PRIMARY_SHEET,
   extractCloserSheetNames,
+  listCommercialSalesSheetNames,
   normalizeSalesText,
   parseMatriculasWorkbook,
   parsePostSaleWorkbook,
@@ -158,6 +159,7 @@ const PEDAGOGICAL_WHATSAPP_ITEM_STATUSES = new Set(["queued", "sending", "sent",
 const PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS = 30;
 const ACADEMIC_IMPORT_SOURCE_KEY = "academic-consolidated";
 const ACADEMIC_TEACHER_TEMP_PASSWORD = String(process.env.ACADEMIC_TEACHER_TEMP_PASSWORD || "Professor#2026!").trim() || "Professor#2026!";
+const OPERATIONAL_USER_SEED_PASSWORD = String(process.env.OPERATIONAL_USER_SEED_PASSWORD || "Talkers#2026!").trim() || "Talkers#2026!";
 const ACADEMIC_STUDENT_STATUS_OPTIONS = ["ativo", "inativo", "aguardando", "cancelado", "trancado", "desistente"];
 const ACADEMIC_ENROLLMENT_STATUS_OPTIONS = ["pre-matricula", "matriculado", "aguardando turma", "transferido", "trancado", "cancelado", "concluido", "desistente"];
 const ACADEMIC_CLASS_STATUS_OPTIONS = ["planejada", "ativa", "encerrada", "cancelada"];
@@ -646,6 +648,145 @@ function buildPostSaleCloserPermissions() {
     commercial_role: "post_sale_closer",
     intranet_scope: "restricted_post_sale",
   };
+}
+
+function buildOperationalDepartmentPermissions(departmentName = "") {
+  const departmentKey = normalizeDepartmentValue(departmentName);
+  if (departmentKey === "atendimento") {
+    return {
+      allowed_department_slugs: ["atendimento"],
+      allowed_submenu_view_keys: STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS.slice(),
+      allowed_global_views: ["student_hub"],
+      intranet_scope: "attendance_student_hub",
+    };
+  }
+  if (departmentKey === "financeiro") {
+    return {
+      allowed_department_slugs: ["financeiro"],
+      allowed_submenu_view_keys: STUDENT_HUB_FINANCIAL_VIEW_KEYS.slice(),
+      allowed_global_views: ["student_hub", "financial"],
+      intranet_scope: "finance_student_hub",
+    };
+  }
+  if (departmentKey === "comercial") {
+    return {
+      allowed_department_slugs: ["comercial"],
+      allowed_submenu_view_keys: [...STUDENT_HUB_COMMERCIAL_VIEW_KEYS, POST_SALE_SUBMENU_VIEW_KEY],
+      allowed_global_views: ["student_hub", "sales"],
+      intranet_scope: "commercial_student_hub",
+    };
+  }
+  return {
+    allowed_department_slugs: departmentKey ? [departmentKey] : [],
+    allowed_submenu_view_keys: [],
+    allowed_global_views: [],
+    intranet_scope: "",
+  };
+}
+
+async function ensureOperationalDepartmentUser(seed = {}, actorUserId = null) {
+  const departmentName = String(seed.department || "").trim();
+  const email = String(seed.email || "").trim().toLowerCase();
+  const name = String(seed.name || "").trim();
+  if (!departmentName || !email || !name) return null;
+
+  const permissions = buildOperationalDepartmentPermissions(departmentName);
+  let user = await get(
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name FROM users WHERE lower(email)=lower(?) LIMIT 1",
+    [email]
+  );
+  if (!user) {
+    user = await get(
+      "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name FROM users WHERE lower(name)=lower(?) AND lower(coalesce(department, ''))=lower(?) LIMIT 1",
+      [name, departmentName]
+    );
+  }
+
+  let created = false;
+  if (!user?.id) {
+    const passwordHash = await bcrypt.hash(OPERATIONAL_USER_SEED_PASSWORD, 10);
+    const result = await run(
+      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?)",
+      [
+        email,
+        name,
+        passwordHash,
+        departmentName,
+        true,
+        String(seed.job_title || departmentName).trim() || departmentName,
+        String(seed.unit_name || departmentName).trim() || departmentName,
+        safeJsonStringify(permissions, "{}"),
+      ]
+    );
+    created = true;
+    user = await get(
+      "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name FROM users WHERE id=? LIMIT 1",
+      [result.lastID]
+    );
+  }
+
+  if (!user?.id) return null;
+  await syncUserDepartments(user.id, [departmentName]);
+  await run(
+    "UPDATE users SET role=?, department=?, can_access_intranet=?, job_title=?, unit_name=?, additional_permissions_json=? WHERE id=?",
+    [
+      String(user.role || "").trim() === "admin" ? "admin" : "user",
+      departmentName,
+      true,
+      String(seed.job_title || user.job_title || departmentName).trim() || departmentName,
+      String(seed.unit_name || user.unit_name || departmentName).trim() || departmentName,
+      safeJsonStringify(permissions, "{}"),
+      user.id,
+    ]
+  );
+
+  if (actorUserId) {
+    await logEvent(actorUserId, created ? "admin_seed_operational_user" : "admin_sync_operational_user", {
+      user_id: user.id,
+      email,
+      department: departmentName,
+    });
+  }
+
+  return {
+    user_id: user.id,
+    email,
+    name,
+    department: departmentName,
+    created,
+  };
+}
+
+async function ensureOperationalDepartmentUsers(actorUserId = null) {
+  const seeds = [
+    {
+      department: "Atendimento",
+      email: "atendimento@talkers.local",
+      name: "Equipe Atendimento",
+      job_title: "Atendimento",
+      unit_name: "Atendimento",
+    },
+    {
+      department: "Comercial",
+      email: "comercial@talkers.local",
+      name: "Equipe Comercial",
+      job_title: "Consultor comercial",
+      unit_name: "Comercial",
+    },
+    {
+      department: "Financeiro",
+      email: "financeiro@talkers.local",
+      name: "Equipe Financeiro",
+      job_title: "Financeiro",
+      unit_name: "Financeiro",
+    },
+  ];
+  const results = [];
+  for (const seed of seeds) {
+    const ensured = await ensureOperationalDepartmentUser(seed, actorUserId);
+    if (ensured) results.push(ensured);
+  }
+  return results;
 }
 
 function hasRestrictedPostSaleScope(user = {}) {
@@ -1693,6 +1834,9 @@ function mergeImportedSalesRecord(existing = null, prepared = {}) {
     teacher_name: prepared.teacher_name || null,
     attendant_name: prepared.attendant_name || null,
     feedback: prepared.feedback || null,
+    contact_email: prepared.contact_email || null,
+    observations: prepared.observations || null,
+    lead_stage: normalizeLeadStage(prepared.lead_stage || (prepared.sale_date ? "fechado" : "lead")),
     post_sale_rating: null,
   };
 
@@ -1704,7 +1848,9 @@ function mergeImportedSalesRecord(existing = null, prepared = {}) {
   merged.follow_up_notes = existing.follow_up_notes || null;
   merged.next_action = existing.next_action || null;
   merged.next_action_date = existing.next_action_date || null;
-  merged.observations = existing.observations || null;
+  merged.observations = normalizeSqlTextValue(existing.observations) ? existing.observations : (prepared.observations || null);
+  merged.contact_email = normalizeSqlTextValue(existing.contact_email) ? existing.contact_email : (prepared.contact_email || null);
+  merged.lead_stage = normalizeLeadStage(existing.lead_stage || prepared.lead_stage || (existing.converted_at ? "convertido" : "lead"));
   merged.post_sale_rating = existing.post_sale_rating || null;
   merged.last_modified_by = existing.last_modified_by || null;
   merged.custom_fields_json = existing.custom_fields_json || null;
@@ -1727,6 +1873,7 @@ function listSalesImportedFields() {
   return [
     'student_name',
     'phone',
+    'contact_email',
     'course_name',
     'level_name',
     'teacher_name',
@@ -1748,6 +1895,8 @@ function listSalesImportedFields() {
     'profession',
     'indication',
     'feedback',
+    'observations',
+    'lead_stage',
     'source_payload_json',
     'row_hash',
     'source_workbook',
@@ -2526,12 +2675,13 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
     const workbook = readWorkbookFromFile(input.filePath);
     const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames : [];
     const hasSalesPrimarySheet = sheetNames.includes(SALES_PRIMARY_SHEET);
+    const supportedCommercialSheets = hasSalesPrimarySheet ? [SALES_PRIMARY_SHEET] : listCommercialSalesSheetNames(workbook);
     const closerSheets = extractCloserSheetNames(workbook);
 
-    if (hasSalesPrimarySheet) {
+    for (const salesSheetName of supportedCommercialSheets) {
       const salesParsed = parseMatriculasWorkbook(workbook, {
         workbookName: input.workbookName,
-        sheetName: SALES_PRIMARY_SHEET,
+        sheetName: salesSheetName,
       });
       if (salesParsed.records.length) {
         parsedDatasets.push({
@@ -2613,6 +2763,7 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
       closer_normalized: match.normalizedName || item.closer_original,
       closer_id: match.closer?.id || null,
       user_id: match.closer?.user_id || null,
+      lead_stage: normalizeLeadStage(item.lead_stage || (item.origin_type === 'post_sale_import' ? 'convertido' : (item.sale_date ? 'fechado' : 'lead'))),
       source_payload_json: safeJsonStringify(item.source_payload || {}, "{}"),
       last_synced_at: new Date().toISOString(),
     };
@@ -2626,8 +2777,7 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
     const persisted = mergeImportedSalesRecord(existing, prepared);
     if (!existing) {
       const created = await run(
-        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, phone, course_name, level_name, teacher_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, feedback, post_sale_rating, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, phone, course_name, level_name, teacher_name, attendant_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, feedback, post_sale_rating, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, phone, contact_email, course_name, level_name, teacher_name, attendant_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, feedback, observations, lead_stage, post_sale_rating, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
         [
           persisted.source_id,
           persisted.import_run_id,
@@ -2640,6 +2790,7 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
           persisted.row_hash,
           persisted.student_name,
           persisted.phone,
+          persisted.contact_email,
           persisted.course_name,
           persisted.level_name,
           persisted.teacher_name,
@@ -2661,6 +2812,8 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
           persisted.profession,
           persisted.indication,
           persisted.feedback,
+          persisted.observations,
+          persisted.lead_stage,
           persisted.post_sale_rating,
           persisted.source_payload_json,
           persisted.last_synced_at,
@@ -2691,7 +2844,7 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
 
     await recordSalesImportChange(existing, persisted, actorUserId, 'spreadsheet_sync');
     await run(
-      "UPDATE sales_records SET source_id=?, import_run_id=?, origin_type=?, source_workbook=?, source_sheet=?, source_row_number=?, source_row_identifier=?, row_hash=?, student_name=?, phone=?, course_name=?, level_name=?, teacher_name=?, attendant_name=?, sale_month=?, sale_date=?, semester_label=?, availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, closer_id=?, user_id=?, media_source=?, profession=?, indication=?, feedback=?, source_payload_json=?, last_synced_at=?, updated_at=datetime('now') WHERE id=?",
+      "UPDATE sales_records SET source_id=?, import_run_id=?, origin_type=?, source_workbook=?, source_sheet=?, source_row_number=?, source_row_identifier=?, row_hash=?, student_name=?, phone=?, contact_email=?, course_name=?, level_name=?, teacher_name=?, attendant_name=?, sale_month=?, sale_date=?, semester_label=?, availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, closer_id=?, user_id=?, media_source=?, profession=?, indication=?, feedback=?, observations=?, lead_stage=?, source_payload_json=?, last_synced_at=?, updated_at=datetime('now') WHERE id=?",
       [
         persisted.source_id,
         persisted.import_run_id,
@@ -2703,6 +2856,7 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
         persisted.row_hash,
         persisted.student_name,
         persisted.phone,
+        persisted.contact_email,
         persisted.course_name,
         persisted.level_name,
         persisted.teacher_name,
@@ -2724,6 +2878,8 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
         persisted.profession,
         persisted.indication,
         persisted.feedback,
+        persisted.observations,
+        persisted.lead_stage,
         persisted.source_payload_json,
         persisted.last_synced_at,
         existing.id,
@@ -2732,6 +2888,8 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
     updatedRows += 1;
     importedRecordIds.push(existing.id);
   }
+
+  const reconciliation = await reconcileSalesImportRun(importRunId, actorUserId);
 
   const summary = {
     synced_closers: uniqueCloserNames,
@@ -2744,6 +2902,7 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
       sheet_names: dataset.sheet_names || [],
       total_records: Number((dataset.records || []).length || 0),
     })),
+    reconciliation,
   };
 
   await run(
@@ -2777,6 +2936,7 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
     ignored_rows: ignoredRows,
     synced_closers: uniqueCloserNames,
     provisioned_users: closerUsersProvisioned,
+    reconciliation,
     workbook: sourceWorkbookLabel,
     sheet_name: primaryDataset?.sheet_name || null,
     sources: summary.imported_sources,
@@ -2889,8 +3049,8 @@ async function createStudentTimelineEntry(payload = {}) {
   if (!studentId) return null;
   const created = await run(
     `INSERT INTO student_timeline
-       (student_id, enrollment_id, sales_record_id, contract_id, installment_id, event_type, title, description, actor_user_id, metadata_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (student_id, enrollment_id, sales_record_id, contract_id, installment_id, event_type, title, description, actor_user_id, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, coalesce(?, datetime('now')))`,
     [
       studentId,
       Number(payload.enrollment_id || 0) || null,
@@ -2902,9 +3062,417 @@ async function createStudentTimelineEntry(payload = {}) {
       sanitizePersistedText(payload.description || "", { trim: false }) || null,
       Number(payload.actor_user_id || 0) || null,
       safeJsonStringify(payload.metadata || {}, "{}"),
+      normalizeAcademicDateTimeInput(payload.created_at || "") || null,
     ]
   );
   return created.lastID || null;
+}
+
+async function ensureStudentTimelineEntry(payload = {}) {
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) return null;
+  const enrollmentId = Number(payload.enrollment_id || 0) || null;
+  const salesRecordId = Number(payload.sales_record_id || 0) || null;
+  const contractId = Number(payload.contract_id || 0) || null;
+  const installmentId = Number(payload.installment_id || 0) || null;
+  const eventType = sanitizePersistedText(payload.event_type || "note");
+  const title = sanitizePersistedText(payload.title || "Atualizacao do aluno");
+  const description = sanitizePersistedText(payload.description || "", { trim: false }) || null;
+  const existing = await get(
+    `SELECT id
+       FROM student_timeline
+      WHERE student_id=?
+        AND coalesce(enrollment_id, 0)=coalesce(?, 0)
+        AND coalesce(sales_record_id, 0)=coalesce(?, 0)
+        AND coalesce(contract_id, 0)=coalesce(?, 0)
+        AND coalesce(installment_id, 0)=coalesce(?, 0)
+        AND event_type=?
+        AND coalesce(title, '')=?
+        AND coalesce(description, '')=?
+      LIMIT 1`,
+    [studentId, enrollmentId, salesRecordId, contractId, installmentId, eventType, title, description || ""]
+  );
+  if (existing?.id) return existing.id;
+  return createStudentTimelineEntry({
+    ...payload,
+    student_id: studentId,
+    enrollment_id: enrollmentId,
+    sales_record_id: salesRecordId,
+    contract_id: contractId,
+    installment_id: installmentId,
+    event_type: eventType,
+    title,
+    description,
+    created_at: payload.created_at || null,
+  });
+}
+
+function inferLeadStageFromImportedRecord(record = {}) {
+  const currentStage = normalizeLeadStage(record.lead_stage || "", "");
+  if (currentStage) return currentStage;
+  if (String(record.origin_type || "").trim().toLowerCase() === "post_sale_import") return "convertido";
+  return record.sale_date ? "fechado" : "lead";
+}
+
+function normalizeSalesContractSignal(value = "") {
+  return normalizeBusinessText(String(value || "").trim()).replace(/\s+/g, " ").trim();
+}
+
+function inferContractStatusFromSalesRecord(record = {}) {
+  const raw = normalizeSalesContractSignal(record.contract_status || "");
+  const leadStage = normalizeLeadStage(record.lead_stage || inferLeadStageFromImportedRecord(record), "lead");
+  if (raw.includes("cancel") || raw.includes("desist")) return "cancelled";
+  if (raw.includes("pendente") || raw.includes("pend")) return "pending";
+  if (raw && (raw.includes("ok") || raw.includes("sim") || raw.includes("plataforma") || raw.includes("empresa"))) {
+    return "active";
+  }
+  if (leadStage === "convertido") return "active";
+  if (leadStage === "fechado") return "pending";
+  return "draft";
+}
+
+async function findEnrollmentMatchForSalesRecord(studentId, record = {}) {
+  const safeStudentId = Number(studentId || 0) || null;
+  if (!safeStudentId) return null;
+  const semester = String(record.semester_label || "").trim();
+  const language = String(record.language || "").trim();
+  const modality = String(record.modality || "").trim();
+  return get(
+    `SELECT e.id, e.class_id, e.enrollment_number, e.enrollment_status, e.contract_status, e.payment_status, e.pedagogical_status,
+            ap.language, ap.modality, ap.semester_label,
+            st.code AS school_term_code
+       FROM enrollments e
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+      WHERE e.student_id=?
+      ORDER BY
+        CASE
+          WHEN ? <> '' AND (lower(coalesce(st.code, ''))=lower(?) OR lower(coalesce(ap.semester_label, ''))=lower(?)) THEN 0
+          ELSE 1
+        END ASC,
+        CASE
+          WHEN ? <> '' AND lower(coalesce(ap.language, ''))=lower(?) THEN 0
+          ELSE 1
+        END ASC,
+        CASE
+          WHEN ? <> '' AND lower(coalesce(ap.modality, ''))=lower(?) THEN 0
+          ELSE 1
+        END ASC,
+        CASE
+          WHEN lower(coalesce(e.enrollment_status, '')) IN ('matriculado', 'aguardando turma', 'pre-matricula') THEN 0
+          ELSE 1
+        END ASC,
+        CASE WHEN e.class_id IS NOT NULL THEN 0 ELSE 1 END ASC,
+        datetime(e.updated_at) DESC,
+        e.id DESC
+      LIMIT 1`,
+    [safeStudentId, semester, semester, semester, language, language, modality, modality]
+  );
+}
+
+async function findExistingContractForSalesContext(studentId, enrollmentId = null, salesRecordId = null) {
+  if (salesRecordId) {
+    const bySalesRecord = await get("SELECT * FROM financial_contracts WHERE sales_record_id=? ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1", [salesRecordId]);
+    if (bySalesRecord) return bySalesRecord;
+  }
+  if (!studentId) return null;
+  return get(
+    "SELECT * FROM financial_contracts WHERE student_id=? AND coalesce(enrollment_id, 0)=coalesce(?, 0) ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1",
+    [studentId, Number(enrollmentId || 0) || null]
+  );
+}
+
+async function reconcileImportedSalesRecord(record = {}, actorUserId = null) {
+  const safeRecordId = Number(record.id || 0) || null;
+  if (!safeRecordId) {
+    return { linked_student: false, linked_enrollment: false, contract_created: false, timeline_events: 0 };
+  }
+
+  const actorUser = actorUserId ? { id: actorUserId, sub: actorUserId } : null;
+  let student = null;
+  if (Number(record.student_id || 0)) {
+    student = await get("SELECT id, full_name, cpf, phone, whatsapp, email FROM students WHERE id=? LIMIT 1", [record.student_id]);
+  }
+  if (!student) {
+    student = await findAcademicStudentMatch({
+      fullName: record.student_name,
+      normalizedName: normalizePersonKey(record.student_name || ""),
+      phone: record.phone,
+    });
+  }
+  if (!student?.id) {
+    return { linked_student: false, linked_enrollment: false, contract_created: false, timeline_events: 0 };
+  }
+
+  const enrollment = Number(record.enrollment_id || 0)
+    ? await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [record.enrollment_id])
+    : await findEnrollmentMatchForSalesRecord(student.id, record);
+  const leadStage = normalizeLeadStage(
+    record.lead_stage
+      || (enrollment?.id ? "convertido" : inferLeadStageFromImportedRecord(record)),
+    enrollment?.id ? "convertido" : inferLeadStageFromImportedRecord(record)
+  );
+
+  await run(
+    "UPDATE sales_records SET student_id=?, enrollment_id=?, lead_stage=?, updated_at=datetime('now') WHERE id=?",
+    [student.id, enrollment?.id || null, leadStage, safeRecordId]
+  );
+
+  let timelineEvents = 0;
+  if (leadStage === "convertido") {
+    const eventId = await ensureStudentTimelineEntry({
+      student_id: student.id,
+      enrollment_id: enrollment?.id || null,
+      sales_record_id: safeRecordId,
+      actor_user_id: actorUserId,
+      event_type: "commercial_linked",
+      title: "Lead vinculado ao aluno",
+      description: `${record.student_name || student.full_name} foi relacionado ao fluxo comercial importado.`,
+      metadata: {
+        source_workbook: record.source_workbook || null,
+        source_sheet: record.source_sheet || null,
+        closer_name: record.closer_normalized || record.closer_original || null,
+      },
+    });
+    if (eventId) timelineEvents += 1;
+  }
+
+  let contract = await findExistingContractForSalesContext(student.id, enrollment?.id || null, safeRecordId);
+  let contractCreated = false;
+  if (!contract?.id && (leadStage === "convertido" || leadStage === "fechado" || String(record.origin_type || "").trim().toLowerCase() === "post_sale_import")) {
+    const contractDetail = await saveFinancialContractRecord({
+      student_id: student.id,
+      enrollment_id: enrollment?.id || null,
+      sales_record_id: safeRecordId,
+      responsible_name: null,
+      responsible_cpf: null,
+      contract_number: generateContractNumber(student.id, enrollment?.id || 0),
+      contract_type: "course_enrollment",
+      contract_status: inferContractStatusFromSalesRecord({ ...record, lead_stage: leadStage }),
+      total_amount: null,
+      installments_count: 0,
+      first_due_date: null,
+      notes: "Contrato inicial criado a partir da consolidacao comercial. Parcelas dependem de preenchimento operacional/manual.",
+      source_workbook: record.source_workbook || null,
+      source_sheet: record.source_sheet || null,
+      source_row_identifier: record.source_row_identifier || `sales_record:${safeRecordId}`,
+      source_payload: {
+        imported_from_sales_record_id: safeRecordId,
+        workbook: record.source_workbook || null,
+        sheet: record.source_sheet || null,
+      },
+      metadata: {
+        auto_created_from_sales_import: true,
+      },
+    }, actorUser, { createTimeline: true });
+    contract = contractDetail?.contract || null;
+    contractCreated = Boolean(contract?.id);
+  }
+
+  if (contract?.id && Number(record.financial_contract_id || 0) !== Number(contract.id)) {
+    await run(
+      "UPDATE sales_records SET financial_contract_id=?, lead_stage=?, converted_at=COALESCE(converted_at, CURRENT_TIMESTAMP), updated_at=datetime('now') WHERE id=?",
+      [contract.id, leadStage === "lead" ? "fechado" : leadStage, safeRecordId]
+    );
+  }
+
+  return {
+    linked_student: true,
+    linked_enrollment: Boolean(enrollment?.id),
+    contract_created: contractCreated,
+    timeline_events: timelineEvents,
+  };
+}
+
+async function reconcileSalesImportRun(importRunId, actorUserId = null) {
+  const safeImportRunId = Number(importRunId || 0) || null;
+  if (!safeImportRunId) {
+    return { linked_students: 0, linked_enrollments: 0, contracts_created: 0, timeline_events: 0 };
+  }
+  const rows = await all("SELECT * FROM sales_records WHERE import_run_id=? ORDER BY id ASC", [safeImportRunId]);
+  const totals = { linked_students: 0, linked_enrollments: 0, contracts_created: 0, timeline_events: 0 };
+  for (const row of rows) {
+    const result = await reconcileImportedSalesRecord(row, actorUserId);
+    if (result.linked_student) totals.linked_students += 1;
+    if (result.linked_enrollment) totals.linked_enrollments += 1;
+    if (result.contract_created) totals.contracts_created += 1;
+    totals.timeline_events += Number(result.timeline_events || 0);
+  }
+  return totals;
+}
+
+function normalizeWeekdayValue(value = "") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return "";
+  if (safe.startsWith("seg")) return "segunda";
+  if (safe.startsWith("ter")) return "terca";
+  if (safe.startsWith("qua")) return "quarta";
+  if (safe.startsWith("qui")) return "quinta";
+  if (safe.startsWith("sex")) return "sexta";
+  if (safe.startsWith("sab")) return "sabado";
+  if (safe.startsWith("dom")) return "domingo";
+  return "";
+}
+
+function weekdayToIndex(value = "") {
+  const safe = normalizeWeekdayValue(value);
+  if (safe === "domingo") return 0;
+  if (safe === "segunda") return 1;
+  if (safe === "terca") return 2;
+  if (safe === "quarta") return 3;
+  if (safe === "quinta") return 4;
+  if (safe === "sexta") return 5;
+  if (safe === "sabado") return 6;
+  return null;
+}
+
+function iterateDateKeys(startDate = "", endDate = "") {
+  const start = normalizeAcademicDateInput(startDate);
+  const end = normalizeAcademicDateInput(endDate);
+  if (!start || !end) return [];
+  const current = new Date(`${start}T12:00:00`);
+  const finish = new Date(`${end}T12:00:00`);
+  const out = [];
+  while (current <= finish) {
+    out.push(current.toISOString().slice(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+  return out;
+}
+
+async function ensureAcademicClassSessionsSeed(actorUserId = null) {
+  const today = new Date();
+  const windowStart = new Date(today);
+  windowStart.setDate(windowStart.getDate() - 45);
+  const windowEnd = new Date(today);
+  windowEnd.setDate(windowEnd.getDate() + 120);
+  const rows = await all(
+    `SELECT cs.id AS schedule_id, cs.class_id, cs.weekday, cs.start_time, cs.end_time, cs.notes AS schedule_notes,
+            c.name AS class_name, c.status AS class_status,
+            st.start_date AS term_start_date, st.end_date AS term_end_date
+       FROM class_schedules cs
+       JOIN classes c ON c.id = cs.class_id
+       LEFT JOIN school_terms st ON st.id = c.school_term_id
+      WHERE lower(coalesce(c.status, '')) <> 'cancelada'
+      ORDER BY cs.class_id ASC, cs.id ASC`
+  );
+  let created = 0;
+  for (const row of rows) {
+    const weekdayIndex = weekdayToIndex(row.weekday);
+    if (weekdayIndex === null) continue;
+    const startDate = normalizeAcademicDateInput(row.term_start_date) || windowStart.toISOString().slice(0, 10);
+    const endDate = normalizeAcademicDateInput(row.term_end_date) || windowEnd.toISOString().slice(0, 10);
+    const boundedStart = startDate < windowStart.toISOString().slice(0, 10) ? windowStart.toISOString().slice(0, 10) : startDate;
+    const boundedEnd = endDate > windowEnd.toISOString().slice(0, 10) ? windowEnd.toISOString().slice(0, 10) : endDate;
+    for (const dateKey of iterateDateKeys(boundedStart, boundedEnd)) {
+      const probe = new Date(`${dateKey}T12:00:00`);
+      if (probe.getDay() !== weekdayIndex) continue;
+      const existing = await get(
+        "SELECT id FROM class_sessions WHERE class_id=? AND coalesce(class_schedule_id, 0)=coalesce(?, 0) AND class_date=? LIMIT 1",
+        [row.class_id, row.schedule_id, dateKey]
+      );
+      if (existing?.id) continue;
+      await run(
+        "INSERT INTO class_sessions (class_id, class_schedule_id, class_date, start_time, end_time, session_status, notes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        [
+          row.class_id,
+          row.schedule_id,
+          dateKey,
+          row.start_time || null,
+          row.end_time || null,
+          dateKey < brazilDateKey() ? "realizada" : "planejada",
+          row.schedule_notes || null,
+        ]
+      );
+      created += 1;
+    }
+  }
+  if (actorUserId && created) {
+    await logEvent(actorUserId, "academic_sessions_seeded", {
+      created_sessions: created,
+      source: "class_schedule_seed",
+    });
+  }
+  return { created_sessions: created };
+}
+
+async function ensureAcademicTimelineBackfill(actorUserId = null) {
+  const classHistoryRows = await all(
+    `SELECT ech.enrollment_id, ech.reason, ech.notes, ech.changed_at, ech.changed_by_user_id,
+            e.student_id, old_class.name AS old_class_name, new_class.name AS new_class_name
+       FROM enrollment_class_history ech
+       JOIN enrollments e ON e.id = ech.enrollment_id
+       LEFT JOIN classes old_class ON old_class.id = ech.old_class_id
+       LEFT JOIN classes new_class ON new_class.id = ech.new_class_id
+      ORDER BY ech.id ASC`
+  );
+  const transferRows = await all(
+    `SELECT st.enrollment_id, st.transfer_type, st.reason, st.notes, st.changed_at, st.changed_by_user_id,
+            st.old_value_json, st.new_value_json, e.student_id
+       FROM student_transfers st
+       JOIN enrollments e ON e.id = st.enrollment_id
+      ORDER BY st.id ASC`
+  );
+
+  let created = 0;
+  for (const row of classHistoryRows) {
+    const timelineId = await ensureStudentTimelineEntry({
+      student_id: row.student_id,
+      enrollment_id: row.enrollment_id,
+      actor_user_id: row.changed_by_user_id || actorUserId,
+      event_type: "academic_class_change",
+      title: "Troca de turma",
+      description: `${row.old_class_name || "Sem turma"} -> ${row.new_class_name || "Sem turma"}${row.reason ? ` (${row.reason})` : ""}`,
+      metadata: {
+        old_class_name: row.old_class_name || null,
+        new_class_name: row.new_class_name || null,
+        reason: row.reason || null,
+        notes: row.notes || null,
+      },
+      created_at: row.changed_at,
+    });
+    if (timelineId) created += 1;
+  }
+
+  for (const row of transferRows) {
+    const oldValue = safeJsonParse(row.old_value_json || "{}") || {};
+    const newValue = safeJsonParse(row.new_value_json || "{}") || {};
+    const title = row.transfer_type === "schedule_change"
+      ? "Mudanca de horario"
+      : row.transfer_type === "remanejamento"
+        ? "Remanejamento"
+        : row.transfer_type === "reversao_pedagogica"
+          ? "Reversao pedagogica"
+          : "Movimentacao academica";
+    const descriptionParts = [];
+    if (oldValue.class_name || newValue.target_class_label || newValue.class_name) {
+      descriptionParts.push(`${oldValue.class_name || "Sem turma"} -> ${newValue.target_class_label || newValue.class_name || "Sem turma"}`);
+    }
+    if (row.reason) descriptionParts.push(row.reason);
+    const timelineId = await ensureStudentTimelineEntry({
+      student_id: row.student_id,
+      enrollment_id: row.enrollment_id,
+      actor_user_id: row.changed_by_user_id || actorUserId,
+      event_type: row.transfer_type || "academic_transfer",
+      title,
+      description: descriptionParts.join(" | ") || row.notes || "Movimentacao academica registrada.",
+      metadata: {
+        transfer_type: row.transfer_type || null,
+        old_value: oldValue,
+        new_value: newValue,
+        notes: row.notes || null,
+      },
+      created_at: row.changed_at,
+    });
+    if (timelineId) created += 1;
+  }
+
+  if (actorUserId && created) {
+    await logEvent(actorUserId, "academic_timeline_backfilled", {
+      created_entries: created,
+    });
+  }
+  return { created_entries: created };
 }
 
 async function resolveStudentHubScope(user, viewKey = "") {
@@ -3061,6 +3629,7 @@ async function listStudentHubStudents(scope, filters = {}) {
       active_total: Number(summary?.active_total || 0),
       no_guardian_total: Number(summary?.no_guardian_total || 0),
       students_with_contract_total: Number(summary?.students_with_contract_total || 0),
+      without_contract_total: Math.max(0, Number(summary?.total || 0) - Number(summary?.students_with_contract_total || 0)),
       overdue_students: Number(summary?.overdue_students || 0),
     },
   };
@@ -3967,7 +4536,7 @@ async function buildStudentHubBootstrap(user, filters = {}) {
       payload.summary = {
         total: Number(students.summary?.total || 0),
         active_total: Number(students.summary?.students_with_contract_total || 0),
-        pending_contracts: Number(students.summary?.no_guardian_total || 0),
+        pending_contracts: Number(students.summary?.without_contract_total || 0),
         overdue_contracts: Number(students.summary?.overdue_students || 0),
       };
       payload.students = students.rows;
@@ -6772,6 +7341,7 @@ async function saveAcademicAttendance(classId, payload = {}, actorUser) {
   const classDate = normalizeAcademicDateInput(payload.class_date);
   if (!classDate) throw new Error("missing_class_date");
   const classScheduleId = Number(payload.class_schedule_id || 0) || null;
+  const classRow = await get("SELECT id, name FROM classes WHERE id=? LIMIT 1", [classId]);
   await saveAcademicClassSession(classId, {
     class_schedule_id: classScheduleId,
     class_date: classDate,
@@ -6801,13 +7371,38 @@ async function saveAcademicAttendance(classId, payload = {}, actorUser) {
         [attendanceStatus, notes, actorUser.id || actorUser.sub, existing.id]
       );
       savedItems.push(existing.id);
-      continue;
+    } else {
+      const created = await run(
+        "INSERT INTO attendance_records (enrollment_id, class_id, class_schedule_id, class_date, attendance_status, notes, recorded_by_user_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        [enrollmentId, classId, classScheduleId, classDate, attendanceStatus, notes, actorUser.id || actorUser.sub]
+      );
+      savedItems.push(created.lastID);
     }
-    const created = await run(
-      "INSERT INTO attendance_records (enrollment_id, class_id, class_schedule_id, class_date, attendance_status, notes, recorded_by_user_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-      [enrollmentId, classId, classScheduleId, classDate, attendanceStatus, notes, actorUser.id || actorUser.sub]
+
+    const studentRow = await get(
+      `SELECT s.id, s.full_name
+         FROM enrollments e
+         JOIN students s ON s.id = e.student_id
+        WHERE e.id=? LIMIT 1`,
+      [enrollmentId]
     );
-    savedItems.push(created.lastID);
+    if (studentRow?.id) {
+      await ensureStudentTimelineEntry({
+        student_id: studentRow.id,
+        enrollment_id: enrollmentId,
+        actor_user_id: actorUser.id || actorUser.sub,
+        event_type: "attendance_recorded",
+        title: "Frequencia registrada",
+        description: `${attendanceStatus} em ${classDate}${classRow?.name ? ` na turma ${classRow.name}` : ""}.`,
+        metadata: {
+          class_id: classId,
+          class_name: classRow?.name || null,
+          class_date: classDate,
+          class_schedule_id: classScheduleId,
+          attendance_status: attendanceStatus,
+        },
+      });
+    }
   }
   await logEvent(actorUser.id || actorUser.sub, "academic_attendance_saved", {
     class_id: classId,
@@ -15115,6 +15710,9 @@ async function runStartupBootstrap() {
     await ensureCalendarEventTypes();
     await syncLegacyUserDepartmentData();
     await ensureFixedDepartments();
+    await ensureOperationalDepartmentUsers();
+    await ensureAcademicClassSessionsSeed();
+    await ensureAcademicTimelineBackfill();
 
     const incompatibleCleanup = await purgeIncompatibleKnowledgeAssets(null);
     if (

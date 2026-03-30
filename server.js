@@ -3871,8 +3871,8 @@ async function listStudentHubContracts(scope, filters = {}) {
 
 async function buildStudentHubOptions() {
   const [languagesRows, modalitiesRows, termsRows, classesRows] = await Promise.all([
-    all(`SELECT DISTINCT language AS value FROM academic_programs WHERE coalesce(language, '')<>'' ORDER BY lower(language) ASC LIMIT 80`),
-    all(`SELECT DISTINCT modality AS value FROM academic_programs WHERE coalesce(modality, '')<>'' ORDER BY lower(modality) ASC LIMIT 80`),
+    all(`SELECT DISTINCT language AS value FROM academic_programs WHERE coalesce(language, '')<>'' ORDER BY value ASC LIMIT 80`),
+    all(`SELECT DISTINCT modality AS value FROM academic_programs WHERE coalesce(modality, '')<>'' ORDER BY value ASC LIMIT 80`),
     all(`SELECT id, code, name FROM school_terms ORDER BY lower(code) DESC, lower(name) DESC LIMIT 40`),
     all(`SELECT c.id, c.name, c.code, c.language, c.modality, st.code AS school_term_code
            FROM classes c

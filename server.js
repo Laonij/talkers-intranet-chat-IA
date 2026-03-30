@@ -11605,21 +11605,51 @@ async function buildIntranetPayload(userId) {
 
   const documentWhereSql = documentWhere.length ? `WHERE ${documentWhere.join(' AND ')}` : '';
 
+  const loadBootstrapSection = async (label, task, fallback) => {
+    try {
+      return await task();
+    } catch (error) {
+      console.error("[intranet.bootstrap] section_failed", {
+        label,
+        message: error?.message || String(error || "unknown_error"),
+      });
+      return fallback;
+    }
+  };
+
   const [departmentSubmenus, recentDocuments, totalDocumentsRow, salesPayload, documentCountRows, announcementsRaw, upcomingEvents, marketingIndicatorDashboard] = await Promise.all([
-    (!isAdmin && !visibleDepartmentIds.length)
-      ? Promise.resolve([])
-      : listDepartmentSubmenus({ includeInactive: isAdmin, departmentIds: visibleDepartmentIds }),
-    all(
-      `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, vector_store_file_id, created_at
-         FROM knowledge_sources
-         ${documentWhereSql}
-        ORDER BY datetime(created_at) DESC, id DESC
-        LIMIT 12`,
+    loadBootstrapSection(
+      "department_submenus",
+      () => ((!isAdmin && !visibleDepartmentIds.length)
+        ? Promise.resolve([])
+        : listDepartmentSubmenus({ includeInactive: isAdmin, departmentIds: visibleDepartmentIds })),
+      []
+    ),
+    loadBootstrapSection(
+      "recent_documents",
+      () => all(
+        `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, vector_store_file_id, created_at
+           FROM knowledge_sources
+           ${documentWhereSql}
+          ORDER BY datetime(created_at) DESC, id DESC
+          LIMIT 12`,
         documentParams
       ),
-      get(`SELECT COUNT(*) AS total FROM knowledge_sources ${documentWhereSql}`, documentParams),
-      buildSalesIntranetPayload(user),
-      all(
+      []
+    ),
+    loadBootstrapSection(
+      "documents_total",
+      () => get(`SELECT COUNT(*) AS total FROM knowledge_sources ${documentWhereSql}`, documentParams),
+      { total: 0 }
+    ),
+    loadBootstrapSection(
+      "sales_workspace",
+      () => buildSalesIntranetPayload(user),
+      { enabled: false, can_view_all: false, can_edit_all: false, summary: null, records: [], closers: [] }
+    ),
+    loadBootstrapSection(
+      "document_department_totals",
+      () => all(
         `SELECT COALESCE(NULLIF(department_name, ''), 'Geral') AS department_name, COUNT(*) AS total
            FROM knowledge_sources
            ${documentWhereSql}
@@ -11628,16 +11658,30 @@ async function buildIntranetPayload(userId) {
           LIMIT 16`,
         documentParams
       ),
-      listIntranetAnnouncements({ includeInactive: isAdmin, limit: 24 }),
-      listCalendarEventsForUser(user, {
+      []
+    ),
+    loadBootstrapSection(
+      "announcements",
+      () => listIntranetAnnouncements({ includeInactive: isAdmin, limit: 24 }),
+      []
+    ),
+    loadBootstrapSection(
+      "upcoming_events",
+      () => listCalendarEventsForUser(user, {
         from: brazilDateKey(),
         to: brazilDateKey(new Date(Date.now() + 1000 * 60 * 60 * 24 * 21)),
         status: 'scheduled',
         limit: 8,
       }),
-      (isAdmin || userHasDepartmentAccess(user, "marketing"))
-        ? buildMarketingIndicatorDashboardSnapshot(user).catch(() => null)
-        : Promise.resolve(null),
+      []
+    ),
+    loadBootstrapSection(
+      "marketing_indicator_dashboard",
+      () => ((isAdmin || userHasDepartmentAccess(user, "marketing"))
+        ? buildMarketingIndicatorDashboardSnapshot(user)
+        : Promise.resolve(null)),
+      null
+    ),
   ]);
 
   const submenusByDepartmentId = new Map();
@@ -15879,8 +15923,15 @@ app.post("/api/intranet/pedagogico/whatsapp/campaigns/:id/start", requireAuth(JW
 });
 
 app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
-  const payload = await buildIntranetPayload(req.user.sub);
-  res.json(payload || { user: null, intranet: null, department_catalog: [] });
+  try {
+    const payload = await buildIntranetPayload(req.user.sub);
+    res.json(payload || { user: null, intranet: null, department_catalog: [] });
+  } catch (error) {
+    console.error("[intranet.bootstrap] request_failed", {
+      message: error?.message || String(error || "unknown_error"),
+    });
+    res.status(500).json({ error: error?.message || "intranet_bootstrap_failed" });
+  }
 });
 
 function redirectAuthenticatedHome(req, res) {

@@ -20,22 +20,25 @@
 - `OPENAI_PROMPT_ID`: ativa a skill/prompt reutilizavel da OpenAI no fluxo do chat via Responses API.
 - `OPENAI_PROMPT_VERSION`: opcional, fixa a versao do prompt reutilizavel.
 - `OPENAI_PROMPT_VARIABLES_JSON`: opcional, permite injetar variaveis extras no prompt reutilizavel em formato JSON.
-- `DATA_DIR`: banco SQLite, uploads e cache local. No Render, use `/var/data`.
+- `DATA_DIR`: uploads, cache local e fallback SQLite. No Render, use `/var/data`.
 - `INDEX_FOLDER`: pasta indexada para a base documental local. No Render, use `/var/data/kb`.
 - `DRIVE_FOLDER_ID` e `DRIVE_SERVICE_ACCOUNT_JSON`: opcionais para sincronizar documentos do Google Drive.
-- `DATABASE_URL`: hoje e apenas ignorada por esta versao; o projeto ainda nao usa Postgres.
+- `DATABASE_URL`: quando definida, ativa Postgres como banco principal. Sem ela, o projeto usa SQLite local como fallback.
 
 ## Fluxo recomendado de setup
 1. Configure as envs do `.env.example` ou do `render.yaml`.
-2. No Render, confirme `DATA_DIR=/var/data` e `INDEX_FOLDER=/var/data/kb`.
-3. Inicie o servidor.
-4. Acesse `/login.html` com o admin configurado nas envs.
-5. Na tela admin, envie documentos para a base da empresa.
-6. Se usar Google Drive, rode `npm run sync` e depois `npm run index`.
+2. Em producao, configure `DB_CLIENT=postgres` e informe `DATABASE_URL` no painel do Render.
+3. No Render, confirme `DATA_DIR=/var/data` e `INDEX_FOLDER=/var/data/kb`.
+4. Rode `npm run bootstrap:active-db` para criar a estrutura do banco ativo, migrar do SQLite quando aplicavel e completar dados operacionais.
+5. Inicie o servidor.
+6. Acesse `/login.html` com o admin configurado nas envs.
+7. Na tela admin, envie documentos para a base da empresa.
+8. Se usar Google Drive, rode `npm run sync` e depois `npm run index`.
 
 ## Observacoes
 - Se `OPENAI_VECTOR_STORE_ID` estiver configurado, a IA usa `file_search` na OpenAI alem da base local.
 - Se `OPENAI_PROMPT_ID` estiver configurado, o backend envia esse prompt reutilizavel junto das chamadas da Responses API. Se a OpenAI recusar o prompt, o servidor faz fallback automatico para o fluxo padrao sem derrubar o chat.
 - Arquivos enviados no admin tambem alimentam o indice local da empresa.
 - Quando um PDF escaneado nao tiver texto legivel localmente, o backend tenta OCR por rasterizacao e tambem envia o arquivo bruto para a OpenAI quando couber no limite configurado.
-- Se `DATABASE_URL` estiver presente em producao, o servidor registra um aviso nos logs para deixar claro que o banco ativo continua sendo o SQLite persistido em disco.
+- O startup registra o cliente solicitado, a presenca de `DATABASE_URL`, o cliente efetivo selecionado e o alvo do banco.
+- Em producao, a ausencia de `DATABASE_URL` passa a ser tratada como erro de configuracao.

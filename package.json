@@ -7,6 +7,7 @@
     "dev": "node server.js",
     "start": "node server.js",
     "seed": "node scripts/seed.js",
+    "bootstrap:active-db": "node scripts/bootstrap_active_database.js",
     "index": "node scripts/index_drive.js",
     "watch": "node scripts/watch_drive.js",
     "sync": "node scripts/sync_drive.js",

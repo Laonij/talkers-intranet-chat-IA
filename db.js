@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
@@ -28,16 +30,33 @@ const kbDir = path.join(DATA_DIR, "kb");
 if (!fs.existsSync(kbDir)) fs.mkdirSync(kbDir, { recursive: true });
 
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
+const DATABASE_URL_PRESENT = Boolean(DATABASE_URL);
 const requestedDbClient = String(process.env.DB_CLIENT || "").trim().toLowerCase();
-const DB_CLIENT = requestedDbClient === "postgres"
-  ? "postgres"
-  : requestedDbClient === "sqlite"
-    ? "sqlite"
-    : (DATABASE_URL ? "postgres" : "sqlite");
+const REQUESTED_DB_CLIENT = requestedDbClient || null;
+const DB_CLIENT = DATABASE_URL_PRESENT ? "postgres" : "sqlite";
 
 const sqlitePath = process.env.SQLITE_PATH
   ? path.resolve(process.env.SQLITE_PATH)
   : path.join(DATA_DIR, "app.db");
+
+function getPostgresHost(connectionString = "") {
+  try {
+    const parsed = new URL(String(connectionString || "").trim());
+    return parsed.hostname || "";
+  } catch {
+    return "";
+  }
+}
+
+const POSTGRES_HOST = DB_CLIENT === "postgres" ? getPostgresHost(DATABASE_URL) : "";
+const DB_RUNTIME_CONFIG = {
+  requested_client: REQUESTED_DB_CLIENT || (DATABASE_URL_PRESENT ? "postgres" : "sqlite"),
+  selected_client: DB_CLIENT,
+  database_url_present: DATABASE_URL_PRESENT,
+  sqlite_path: sqlitePath,
+  data_dir: DATA_DIR,
+  postgres_host: POSTGRES_HOST || null,
+};
 
 let sqliteDb = null;
 let pgPool = null;
@@ -3648,6 +3667,10 @@ async function searchDocuments(query, limit = 4, options = {}) {
 module.exports = {
   DATA_DIR,
   DB_CLIENT,
+  DB_RUNTIME_CONFIG,
+  DATABASE_URL_PRESENT,
+  POSTGRES_HOST,
+  REQUESTED_DB_CLIENT,
   all,
   db,
   ensureArtifactSessionsSchema,

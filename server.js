@@ -14,6 +14,10 @@ const jwt = require("jsonwebtoken");
 const {
   DATA_DIR,
   DB_CLIENT,
+  DB_RUNTIME_CONFIG,
+  DATABASE_URL_PRESENT,
+  POSTGRES_HOST,
+  REQUESTED_DB_CLIENT,
   migrate,
   get,
   all,
@@ -385,19 +389,25 @@ fs.mkdirSync(kbDir, { recursive: true });
 fs.mkdirSync(knowledgeDir, { recursive: true });
 logEnvironmentWarnings();
 
-function logEnvironmentWarnings() {
-  if (IS_PRODUCTION && DB_CLIENT === "sqlite" && process.env.DATABASE_URL) {
-    console.log(`Aviso: DATABASE_URL esta configurado, mas DB_CLIENT esta em SQLite usando ${DATA_DIR}.`);
+  function logEnvironmentWarnings() {
+    if (REQUESTED_DB_CLIENT && REQUESTED_DB_CLIENT !== DB_CLIENT) {
+      console.log(
+        `Aviso: DB_CLIENT solicitado (${REQUESTED_DB_CLIENT}) foi sobrescrito para ${DB_CLIENT} porque DATABASE_URL ${DATABASE_URL_PRESENT ? "esta" : "nao esta"} configurado.`
+      );
+    }
+  
+    if (IS_PRODUCTION && DB_CLIENT === "postgres") {
+      console.log(`Banco configurado: Postgres (${POSTGRES_HOST || "host_indisponivel"}).`);
+    }
+  
+    if (!IS_PRODUCTION && DB_CLIENT === "sqlite") {
+      console.log(`Banco configurado: SQLite (${DB_RUNTIME_CONFIG.sqlite_path}).`);
+    }
+  
+    if (IS_PRODUCTION && !String(process.env.DATA_DIR || "").trim()) {
+      console.log(`Aviso: DATA_DIR nao foi definido no ambiente. O servidor vai usar ${DATA_DIR}.`);
+    }
   }
-
-  if (IS_PRODUCTION && DB_CLIENT === "postgres") {
-    console.log("Banco configurado: Postgres.");
-  }
-
-  if (IS_PRODUCTION && !String(process.env.DATA_DIR || "").trim()) {
-    console.log(`Aviso: DATA_DIR nao foi definido no ambiente. O servidor vai usar ${DATA_DIR}.`);
-  }
-}
 
 function validateConfig() {
   if (!JWT_SECRET) {
@@ -13954,6 +13964,13 @@ app.get("/api/health", (req, res) => {
     vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
     openai_prompt_configured: Boolean(OPENAI_PROMPT_ID),
     db_client: DB_CLIENT,
+    db_runtime: {
+      requested_client: REQUESTED_DB_CLIENT || null,
+      selected_client: DB_CLIENT,
+      database_url_present: DATABASE_URL_PRESENT,
+      sqlite_path: DB_CLIENT === "sqlite" ? DB_RUNTIME_CONFIG.sqlite_path : null,
+      postgres_host: DB_CLIENT === "postgres" ? POSTGRES_HOST || null : null,
+    },
     uptime_seconds: Math.round(process.uptime()),
   });
 });
@@ -15777,29 +15794,38 @@ function validateRuntimeConfiguration() {
     issues.push("JWT_SECRET ausente em producao");
   }
 
-  if (DB_CLIENT === "postgres" && !String(process.env.DATABASE_URL || "").trim()) {
-    issues.push("DATABASE_URL ausente para Postgres");
+  if (IS_PRODUCTION && !DATABASE_URL_PRESENT) {
+    issues.push("DATABASE_URL ausente em producao");
+  }
+
+  if (IS_PRODUCTION && DB_CLIENT !== "postgres") {
+    issues.push("cliente efetivo do banco nao esta em Postgres em producao");
   }
 
   if (MAX_UPLOAD_SIZE_BYTES <= 0) {
     issues.push("MAX_UPLOAD_SIZE_MB invalido");
   }
 
-  if (issues.length) {
-    startupLogger.error("Falha de configuracao critica na inicializacao.", {
-      issues,
-      db_client: DB_CLIENT,
-      is_production: IS_PRODUCTION,
-    });
-    throw new Error(`runtime_configuration_invalid: ${issues.join("; ")}`);
+    if (issues.length) {
+      startupLogger.error("Falha de configuracao critica na inicializacao.", {
+        issues,
+        db_client: DB_CLIENT,
+        db_runtime: DB_RUNTIME_CONFIG,
+        is_production: IS_PRODUCTION,
+      });
+      throw new Error(`runtime_configuration_invalid: ${issues.join("; ")}`);
+    }
   }
-}
 
 function startServer() {
   validateRuntimeConfiguration();
   startupLogger.info("Inicializando servidor.", {
-    db_client: process.env.DB_CLIENT || DB_CLIENT,
-    database_url_present: Boolean(process.env.DATABASE_URL),
+    db_client_requested: REQUESTED_DB_CLIENT || null,
+    db_client_selected: DB_CLIENT,
+    database_url_present: DATABASE_URL_PRESENT,
+    sqlite_path: DB_CLIENT === "sqlite" ? DB_RUNTIME_CONFIG.sqlite_path : null,
+    postgres_host: DB_CLIENT === "postgres" ? POSTGRES_HOST || null : null,
+    data_dir: DATA_DIR,
     max_upload_size_mb: MAX_UPLOAD_SIZE_MB,
     max_concurrent_jobs: MAX_CONCURRENT_JOBS,
   });

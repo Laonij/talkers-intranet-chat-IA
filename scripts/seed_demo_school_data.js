@@ -590,7 +590,18 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[demo-seed] failed", err?.stack || err?.message || err);
-  process.exit(1);
-});
+module.exports = {
+  ensureAttendanceSeed,
+  ensureFinancialInstallmentSeed,
+  ensureGuardianSeed,
+  ensureScheduleHistorySeed,
+  ensureStudentProfileSeed,
+  seedDemoSchoolData: main,
+};
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("[demo-seed] failed", err?.stack || err?.message || err);
+    process.exit(1);
+  });
+}

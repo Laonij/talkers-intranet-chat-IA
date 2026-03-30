@@ -980,20 +980,18 @@ function renderSidebar(user, intranet) {
         `;
       toggle.onclick = () => {
         const slug = department.slug || '';
+        const hasSubmenus = submenus.length > 0;
         const isExpanded = expandedDepartmentSlugs.has(slug);
-        const isCurrentDepartment = currentViewState.key === 'department' && currentViewState.departmentSlug === slug;
 
         if (isExpanded) {
           toggleDepartmentExpanded(slug, false);
-          if (isCurrentDepartment) {
-            const fallbackRoute = getDefaultRoute(bootstrapData?.intranet || {});
-            setActiveView(fallbackRoute.key, fallbackRoute);
-          }
           return;
         }
 
         toggleDepartmentExpanded(slug, true);
-        setActiveView('department', { departmentSlug: slug });
+        if (!hasSubmenus) {
+          setActiveView('department', { departmentSlug: slug });
+        }
       };
       group.appendChild(toggle);
 
@@ -4673,6 +4671,19 @@ function buildStudentHubInfoGrid(items = []) {
   `;
 }
 
+function formatStudentHubDateInputValue(value = '') {
+  const safe = String(value || '').trim();
+  if (!safe) return '';
+  return safe.slice(0, 10);
+}
+
+function buildStudentHubHistoryList(items = [], renderer, emptyMessage = 'Sem histórico.') {
+  if (!Array.isArray(items) || !items.length) {
+    return `<div class="intranet-empty-card">${escapeHtml(emptyMessage)}</div>`;
+  }
+  return items.map((item) => renderer(item)).join('');
+}
+
 function buildStudentHubSummaryCards(summary = {}, area = 'attendance', viewKey = '') {
   const cards = area === 'commercial'
     ? [
@@ -4707,10 +4718,18 @@ function buildStudentHubSummaryCards(summary = {}, area = 'attendance', viewKey 
 function buildStudentHubStudentDetailMarkup(detail = {}) {
   const student = detail.student || {};
   const latestCommercial = detail.commercial?.latest_record || {};
+  const commercialRecords = Array.isArray(detail.commercial?.records) ? detail.commercial.records.slice(0, 5) : [];
   const enrollment = detail.enrollment_summary || {};
   const financialSummary = detail.financial?.summary || {};
   const primaryContract = detail.financial?.primary_contract || {};
   const primaryContractSummary = primaryContract.summary || {};
+  const pedagogical = detail.pedagogical || {};
+  const statusSummary = pedagogical.status_summary || {};
+  const pedagogicalStatusLabel = [
+    statusSummary.trancado_total ? `${statusSummary.trancado_total} trancado(s)` : '',
+    statusSummary.inactive_total ? `${statusSummary.inactive_total} desist./cancel.` : '',
+    statusSummary.waiting_total ? `${statusSummary.waiting_total} aguardando turma` : '',
+  ].filter(Boolean).join(' · ') || '-';
   return `
     <section class="workspace-section-panel">
       <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Ficha 360</div><h4 class="intranet-section-title">${escapeHtml(student.full_name || 'Aluno')}</h4></div></div>
@@ -4718,6 +4737,7 @@ function buildStudentHubStudentDetailMarkup(detail = {}) {
         ['CPF', student.cpf || '-'],
         ['RG', student.rg || '-'],
         ['Nascimento', formatAcademicDate(student.birth_date || '')],
+        ['Idade', student.age ? `${student.age} ano(s)` : '-'],
         ['Telefone', student.phone || student.whatsapp || '-'],
         ['E-mail', student.email || '-'],
         ['Status', student.status || '-'],
@@ -4741,12 +4761,24 @@ function buildStudentHubStudentDetailMarkup(detail = {}) {
         <h5>Comercial</h5>
         ${latestCommercial?.id ? `${buildStudentHubInfoGrid([
           ['Origem', latestCommercial.media_source || '-'],
-          ['Atendente', latestCommercial.attendant_name || '-'],
+          ['Closer / atendente', latestCommercial.closer_name || latestCommercial.attendant_name || '-'],
           ['Status', latestCommercial.resolved_lead_stage || latestCommercial.operational_status || '-'],
+          ['Primeiro contato', formatAcademicDate(latestCommercial.first_contact_at || latestCommercial.sale_date || '')],
+          ['Fechamento', formatAcademicDate(latestCommercial.closed_at || latestCommercial.converted_at || '')],
+          ['Objetivo', latestCommercial.interest_goal || '-'],
+          ['Negociação', latestCommercial.negotiation_notes || latestCommercial.feedback || '-'],
           ['Idioma', latestCommercial.language || '-'],
           ['Semestre', latestCommercial.semester_label || '-'],
           ['Observações', latestCommercial.observations || latestCommercial.feedback || '-'],
-        ])}` : `<div class="intranet-empty-card">Nenhum lead/comercial vinculado ainda.</div>`}
+        ])}
+        <div class="small muted" style="margin-top:12px;">Histórico comercial recente</div>
+        ${buildStudentHubHistoryList(commercialRecords, (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.resolved_lead_stage || item.lead_stage || 'Lead')}</strong>
+            <div>${escapeHtml([item.media_source, item.language, item.modality].filter(Boolean).join(' · ') || '-')}</div>
+            <div class="small muted">${escapeHtml([item.closer_name || item.attendant_name, formatAcademicDateTime(item.closed_at || item.first_contact_at || item.updated_at || '')].filter(Boolean).join(' · '))}</div>
+          </div>
+        `, 'Sem histórico comercial recente.')}` : `<div class="intranet-empty-card">Nenhum lead/comercial vinculado ainda.</div>`}
       </article>
     </div>
     <div class="academic-class-columns">
@@ -4781,21 +4813,68 @@ function buildStudentHubStudentDetailMarkup(detail = {}) {
       <article class="academic-history-panel">
         <h5>Pedagógico</h5>
         ${buildStudentHubInfoGrid([
-          ['Turma atual', detail.pedagogical?.current_class_name || '-'],
-          ['Professor atual', (detail.pedagogical?.current_teacher_names || []).join(', ') || '-'],
-          ['Horário atual', (detail.pedagogical?.current_schedule_labels || []).join(' / ') || '-'],
-          ['Status acadêmico', detail.pedagogical?.current_status || '-'],
+          ['Turma atual', pedagogical.current_class_name || '-'],
+          ['Professor atual', (pedagogical.current_teacher_names || []).join(', ') || '-'],
+          ['Horário atual', (pedagogical.current_schedule_labels || []).join(' / ') || '-'],
+          ['Status acadêmico', pedagogical.current_status || '-'],
+          ['Trilha especial', (pedagogical.special_track_labels || []).join(', ') || '-'],
+          ['Histórico acadêmico', pedagogicalStatusLabel],
         ])}
       </article>
       <article class="academic-history-panel">
-        <h5>Histórico</h5>
-        ${(detail.timeline || []).length ? detail.timeline.map((item) => `
+        <h5>Timeline</h5>
+        ${buildStudentHubHistoryList(detail.timeline || [], (item) => `
           <div class="intranet-sales-history-item">
             <strong>${escapeHtml(item.title || item.event_type || 'Evento')}</strong>
             <div>${escapeHtml(item.description || '-')}</div>
             <div class="small muted">${escapeHtml(formatAcademicDateTime(item.created_at || ''))} · ${escapeHtml(item.actor_name || 'Sistema')}</div>
           </div>
-        `).join('') : `<div class="intranet-empty-card">Sem histórico operacional ainda.</div>`}
+        `, 'Sem histórico operacional ainda.')}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Histórico de turma</h5>
+        ${buildStudentHubHistoryList(pedagogical.class_history || [], (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.reason || 'Troca de turma')}</strong>
+            <div>${escapeHtml(item.old_class_name || '-')} -> ${escapeHtml(item.new_class_name || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at || ''))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div>
+          </div>
+        `, 'Sem histórico de turma.')}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Histórico de horário</h5>
+        ${buildStudentHubHistoryList(pedagogical.schedule_history || [], (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.reason || 'Mudança de horário')}</strong>
+            <div>${escapeHtml(item.old_class_name || '-')} -> ${escapeHtml(item.new_class_name || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at || ''))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div>
+          </div>
+        `, 'Sem histórico de horário.')}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Movimentações acadêmicas</h5>
+        ${buildStudentHubHistoryList(pedagogical.transfer_history || [], (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(formatAcademicMovementTypeLabel(item.transfer_type || item.movement_type || 'movimentacao'))}</strong>
+            <div>${escapeHtml(item.reason || item.notes || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at || ''))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div>
+          </div>
+        `, 'Sem movimentações acadêmicas.')}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Resumo financeiro</h5>
+        ${buildStudentHubInfoGrid([
+          ['Responsável financeiro', primaryContract.responsible_name || '-'],
+          ['CPF responsável', primaryContract.responsible_cpf || '-'],
+          ['1º vencimento', formatAcademicDate(primaryContract.first_due_date || '')],
+          ['Parcelas do contrato', String(primaryContractSummary.total || 0)],
+          ['Atrasadas', String(primaryContractSummary.overdue_total || 0)],
+          ['Pendentes', String(primaryContractSummary.pending_total || 0)],
+        ])}
       </article>
     </div>
   `;
@@ -4821,9 +4900,16 @@ function buildStudentHubLeadDetailMarkup(detail = {}, options = {}) {
           <div><label>Curso/Programa</label><input id="studentHubLeadCourse" value="${escapeHtml(record.course_name || '')}" /></div>
           <div><label>Nível/Livro</label><input id="studentHubLeadLevel" value="${escapeHtml(record.level_name || '')}" /></div>
           <div><label>Atendente</label><input id="studentHubLeadAttendant" value="${escapeHtml(record.attendant_name || '')}" /></div>
+          <div><label>Closer</label><input id="studentHubLeadCloser" value="${escapeHtml(record.closer_name || record.closer_original || '')}" /></div>
           <div><label>Origem</label><input id="studentHubLeadSource" value="${escapeHtml(record.media_source || '')}" /></div>
+          <div><label>Objetivo</label><input id="studentHubLeadGoal" value="${escapeHtml(record.interest_goal || '')}" /></div>
           <div><label>Status da negociação</label><select id="studentHubLeadStage">${(options.leadStages || []).map((item) => `<option value="${escapeHtml(item)}"${item === (record.resolved_lead_stage || 'lead') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
           <div><label>Data</label><input id="studentHubLeadDate" type="date" value="${escapeHtml(record.sale_date || '')}" /></div>
+          <div><label>Primeiro contato</label><input id="studentHubLeadFirstContactAt" type="date" value="${escapeHtml(formatStudentHubDateInputValue(record.first_contact_at || record.sale_date || ''))}" /></div>
+          <div><label>Fechamento</label><input id="studentHubLeadClosedAt" type="date" value="${escapeHtml(formatStudentHubDateInputValue(record.closed_at || record.converted_at || ''))}" /></div>
+          <div><label>Perda em</label><input id="studentHubLeadLostAt" type="date" value="${escapeHtml(formatStudentHubDateInputValue(record.lost_at || ''))}" /></div>
+          <div><label>Motivo da perda</label><input id="studentHubLeadLostReason" value="${escapeHtml(record.lost_reason || '')}" /></div>
+          <div class="academic-grid-span"><label>Negociação</label><textarea id="studentHubLeadNegotiationNotes" rows="2">${escapeHtml(record.negotiation_notes || '')}</textarea></div>
           <div class="academic-grid-span"><label>Observações</label><textarea id="studentHubLeadObservations" rows="3">${escapeHtml(record.observations || record.feedback || '')}</textarea></div>
         </div>
         <div class="academic-form-actions"><button class="btn primary" type="submit">Salvar lead</button>${leadId ? '' : '<span class="small muted">Use este formulário para iniciar o fluxo comercial.</span>'}</div>
@@ -4840,6 +4926,8 @@ function buildStudentHubLeadDetailMarkup(detail = {}, options = {}) {
           <div><label>Responsável</label><input id="studentHubConversionGuardianName" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.name || '')}" /></div>
           <div><label>CPF responsável</label><input id="studentHubConversionGuardianCpf" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.cpf || '')}" /></div>
           <div><label>Telefone responsável</label><input id="studentHubConversionGuardianPhone" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.phone || detail.linked_student?.guardians?.[0]?.whatsapp || '')}" /></div>
+          <div><label>E-mail responsável</label><input id="studentHubConversionGuardianEmail" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.email || '')}" /></div>
+          <div><label>Relação</label><input id="studentHubConversionGuardianRelation" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.relation_type || 'responsavel')}" /></div>
           <div><label>Termo letivo</label><select id="studentHubConversionTerm">${terms.map((item) => `<option value="${escapeHtml(item.code || '')}"${String(item.code || '') === String(record.semester_label || '') ? ' selected' : ''}>${escapeHtml(item.code || item.name || '')}</option>`).join('')}</select></div>
           <div><label>Turma</label><select id="studentHubConversionClassId"><option value="">Aguardando turma</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select></div>
           <div><label>Início</label><input id="studentHubConversionStartDate" type="date" value="${escapeHtml(record.sale_date || '')}" /></div>
@@ -4922,9 +5010,16 @@ async function submitStudentHubLeadForm() {
     course_name: el('studentHubLeadCourse')?.value || '',
     level_name: el('studentHubLeadLevel')?.value || '',
     attendant_name: el('studentHubLeadAttendant')?.value || '',
+    closer_name: el('studentHubLeadCloser')?.value || '',
     media_source: el('studentHubLeadSource')?.value || '',
+    interest_goal: el('studentHubLeadGoal')?.value || '',
+    negotiation_notes: el('studentHubLeadNegotiationNotes')?.value || '',
     lead_stage: el('studentHubLeadStage')?.value || 'lead',
     sale_date: el('studentHubLeadDate')?.value || '',
+    first_contact_at: el('studentHubLeadFirstContactAt')?.value || '',
+    closed_at: el('studentHubLeadClosedAt')?.value || '',
+    lost_at: el('studentHubLeadLostAt')?.value || '',
+    lost_reason: el('studentHubLeadLostReason')?.value || '',
     observations: el('studentHubLeadObservations')?.value || '',
   };
   if (leadId) {
@@ -4943,31 +5038,55 @@ async function submitStudentHubLeadConversionForm() {
   const leadId = Number(el('studentHubConversionLeadId')?.value || 0) || null;
   if (!leadId) return;
   const guardianName = el('studentHubConversionGuardianName')?.value?.trim() || '';
+  const guardianCpf = el('studentHubConversionGuardianCpf')?.value || '';
+  const guardianPhone = el('studentHubConversionGuardianPhone')?.value || '';
+  const guardianEmail = el('studentHubConversionGuardianEmail')?.value || '';
+  const guardianRelation = el('studentHubConversionGuardianRelation')?.value || 'responsavel';
+  const classId = Number(el('studentHubConversionClassId')?.value || 0) || null;
+  const installmentsCount = Number(el('studentHubConversionInstallments')?.value || 0) || 0;
   const payload = {
     view_key: getStudentHubCurrentViewKey(),
     student: {
       full_name: el('studentHubConversionStudentName')?.value || '',
       cpf: el('studentHubConversionStudentCpf')?.value || '',
       email: el('studentHubConversionStudentEmail')?.value || '',
+      phone: el('studentHubLeadPhone')?.value || '',
+      whatsapp: el('studentHubLeadPhone')?.value || '',
+      notes: el('studentHubLeadObservations')?.value || '',
     },
     guardians: guardianName ? [{
       name: guardianName,
-      cpf: el('studentHubConversionGuardianCpf')?.value || '',
-      phone: el('studentHubConversionGuardianPhone')?.value || '',
+      relation_type: guardianRelation,
+      cpf: guardianCpf,
+      phone: guardianPhone,
+      whatsapp: guardianPhone,
+      email: guardianEmail,
       financial_responsible: true,
       pedagogical_responsible: true,
       receives_notifications: true,
     }] : [],
     enrollment: {
       school_term_code: el('studentHubConversionTerm')?.value || '',
-      class_id: Number(el('studentHubConversionClassId')?.value || 0) || null,
+      class_id: classId,
       start_date: el('studentHubConversionStartDate')?.value || '',
+      enrollment_status: classId ? 'matriculado' : 'aguardando turma',
+      language: el('studentHubLeadLanguage')?.value || '',
+      program_name: el('studentHubLeadCourse')?.value || '',
+      level_name: el('studentHubLeadLevel')?.value || '',
+      modality: el('studentHubLeadModality')?.value || '',
+      semester_label: el('studentHubLeadSemester')?.value || '',
+      source_channel: el('studentHubLeadSource')?.value || 'comercial',
+      source_notes: el('studentHubLeadNegotiationNotes')?.value || '',
+      notes: el('studentHubLeadObservations')?.value || '',
     },
     contract: {
       total_amount: el('studentHubConversionContractAmount')?.value || '',
-      installments_count: Number(el('studentHubConversionInstallments')?.value || 0) || 0,
+      installments_count: installmentsCount,
       first_due_date: el('studentHubConversionFirstDueDate')?.value || '',
       contract_status: 'draft',
+      responsible_name: guardianName || '',
+      responsible_cpf: guardianCpf,
+      notes: `Contrato criado a partir da lead ${leadId}.`,
     },
   };
   await api(`/api/intranet/student-hub/leads/${leadId}/convert`, { method: 'POST', body: JSON.stringify(payload) });

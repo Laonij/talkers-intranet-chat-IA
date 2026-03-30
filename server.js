@@ -2571,8 +2571,15 @@ async function getSalesRecordById(recordId) {
 
 function serializeSalesRecord(record) {
   if (!record) return null;
+  const closerName = record.closer_name
+    || record.closer_original
+    || record.closer_normalized
+    || record.attendant_name
+    || null;
   return {
     ...record,
+    closer_name: closerName,
+    first_contact_at: record.first_contact_at || record.sale_date || null,
     source_payload: safeJsonParse(record.source_payload_json || '{}') || null,
     custom_fields: safeJsonParse(record.custom_fields_json || '{}') || null,
   };
@@ -3076,6 +3083,31 @@ function parseMoneyValue(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function formatMoneyValue(value, currency = "BRL") {
+  const numeric = Number(value || 0);
+  try {
+    return new Intl.NumberFormat("pt-BR", { style: "currency", currency }).format(numeric);
+  } catch {
+    return String(numeric.toFixed(2));
+  }
+}
+
+function computeAcademicAge(birthDate = "", fallbackAge = null) {
+  const safeBirthDate = normalizeAcademicDateInput(birthDate);
+  const safeFallback = Number.isFinite(Number(fallbackAge)) ? Math.max(0, Number(fallbackAge)) : null;
+  if (!safeBirthDate) return safeFallback;
+  try {
+    const [year, month, day] = safeBirthDate.split("-").map(Number);
+    const today = new Date();
+    let age = today.getFullYear() - year;
+    const monthDelta = (today.getMonth() + 1) - month;
+    if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < day)) age -= 1;
+    return Math.max(0, age);
+  } catch {
+    return safeFallback;
+  }
+}
+
 function addMonthsToDateKey(dateKey = "", months = 0) {
   const safe = normalizeAcademicDateInput(dateKey);
   if (!safe) return null;
@@ -3083,6 +3115,26 @@ function addMonthsToDateKey(dateKey = "", months = 0) {
   const date = new Date(Date.UTC(year, month - 1, day || 1, 12, 0, 0));
   date.setUTCMonth(date.getUTCMonth() + Number(months || 0));
   return date.toISOString().slice(0, 10);
+}
+
+function buildDefaultFinancialInstallments(totalAmount, installmentsCount = 0, firstDueDate = "") {
+  const safeCount = Math.max(0, Number(installmentsCount || 0) || 0);
+  const safeFirstDueDate = normalizeAcademicDateInput(firstDueDate);
+  const numericAmount = Number(totalAmount || 0);
+  if (!safeCount || !safeFirstDueDate || !Number.isFinite(numericAmount) || numericAmount <= 0) return [];
+  const totalCents = Math.round(numericAmount * 100);
+  const baseInstallmentCents = Math.floor(totalCents / safeCount);
+  const remainderCents = totalCents - (baseInstallmentCents * safeCount);
+  return Array.from({ length: safeCount }).map((_, index) => {
+    const amountCents = baseInstallmentCents + (index === safeCount - 1 ? remainderCents : 0);
+    return {
+      installment_number: index + 1,
+      due_date: addMonthsToDateKey(safeFirstDueDate, index),
+      amount: Number((amountCents / 100).toFixed(2)),
+      status: "pending",
+      reference_label: `Parcela ${index + 1}/${safeCount}`,
+    };
+  });
 }
 
 async function createStudentTimelineEntry(payload = {}) {
@@ -3898,36 +3950,81 @@ async function getStudentHubStudentDetail(studentId, scope) {
   const detail = await getAcademicStudentDetail(studentId, { canViewAll: true, teacherUserId: null });
   if (!detail?.student) return null;
   const student = detail.student;
-  const commercialRows = await all(
-    `SELECT sr.*, ${buildResolvedLeadStageSql("sr")} AS resolved_lead_stage,
-            COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
-       FROM sales_records sr
-       LEFT JOIN closers c ON c.id = sr.closer_id
-      WHERE sr.student_id=?
-         OR lower(coalesce(sr.student_name, ''))=lower(?)
-         OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.phone, ''))=lower(?))
-         OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.contact_email, ''))=lower(?))
-      ORDER BY datetime(coalesce(sr.converted_at, sr.updated_at, sr.created_at)) DESC, sr.id DESC
-      LIMIT 20`,
-    [
-      studentId,
-      student.full_name || "",
-      student.phone || null,
-      student.phone || null,
-      student.phone || null,
-      student.email || null,
-      student.email || null,
-      student.email || null,
-    ]
-  );
-  const contracts = await all(
-    `SELECT fc.*, e.enrollment_number
-       FROM financial_contracts fc
-       LEFT JOIN enrollments e ON e.id = fc.enrollment_id
-      WHERE fc.student_id=?
-      ORDER BY datetime(fc.updated_at) DESC, fc.id DESC`,
-    [studentId]
-  );
+  const [commercialRows, contracts, timeline, classHistoryRows, scheduleHistoryRows, transferHistoryRows] = await Promise.all([
+    all(
+      `SELECT sr.*, ${buildResolvedLeadStageSql("sr")} AS resolved_lead_stage,
+              COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+        WHERE sr.student_id=?
+           OR lower(coalesce(sr.student_name, ''))=lower(?)
+           OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.phone, ''))=lower(?))
+           OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.contact_email, ''))=lower(?))
+        ORDER BY datetime(coalesce(sr.converted_at, sr.closed_at, sr.updated_at, sr.created_at)) DESC, sr.id DESC
+        LIMIT 20`,
+      [
+        studentId,
+        student.full_name || "",
+        student.phone || null,
+        student.phone || null,
+        student.phone || null,
+        student.email || null,
+        student.email || null,
+        student.email || null,
+      ]
+    ),
+    all(
+      `SELECT fc.*, e.enrollment_number
+         FROM financial_contracts fc
+         LEFT JOIN enrollments e ON e.id = fc.enrollment_id
+        WHERE fc.student_id=?
+        ORDER BY datetime(fc.updated_at) DESC, fc.id DESC`,
+      [studentId]
+    ),
+    all(
+      `SELECT st.*, u.name AS actor_name
+         FROM student_timeline st
+         LEFT JOIN users u ON u.id = st.actor_user_id
+        WHERE st.student_id=?
+        ORDER BY datetime(st.created_at) DESC, st.id DESC
+        LIMIT 80`,
+      [studentId]
+    ),
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_class_history h
+         JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE e.student_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 30`,
+      [studentId]
+    ),
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_schedule_history h
+         JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE e.student_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 30`,
+      [studentId]
+    ),
+    all(
+      `SELECT st.*, u.name AS changed_by_name
+         FROM student_transfers st
+         JOIN enrollments e ON e.id = st.enrollment_id
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        WHERE e.student_id=?
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC
+        LIMIT 40`,
+      [studentId]
+    ),
+  ]);
   const contractDetails = [];
   for (const contract of contracts) {
     const installments = await listFinancialInstallmentsByContractId(contract.id);
@@ -3941,19 +4038,28 @@ async function getStudentHubStudentDetail(studentId, scope) {
   const primaryContract = contractDetails.find((item) => ["active", "signed", "pending", "draft"].includes(String(item.contract_status || "").toLowerCase()))
     || contractDetails[0]
     || null;
-  const timeline = await all(
-    `SELECT st.*, u.name AS actor_name
-       FROM student_timeline st
-       LEFT JOIN users u ON u.id = st.actor_user_id
-      WHERE st.student_id=?
-      ORDER BY datetime(st.created_at) DESC, st.id DESC
-      LIMIT 80`,
-    [studentId]
-  );
-
-  const currentEnrollment = (detail.enrollments || []).find((item) => ["matriculado", "aguardando turma", "pre-matricula"].includes(normalizeAcademicText(item.enrollment_status || "")))
+  const normalizedEnrollments = detail.enrollments || [];
+  const currentEnrollment = normalizedEnrollments.find((item) => ["matriculado", "aguardando turma", "pre-matricula"].includes(normalizeAcademicText(item.enrollment_status || "")))
     || detail.enrollments?.[0]
     || null;
+  const specialTrackLabels = Array.from(new Set(normalizedEnrollments.map((item) => {
+    const safeKind = normalizeAcademicText(item.class_kind || "");
+    if (safeKind === "vip") return "VIP";
+    if (safeKind === "semi_vip") return "Semi VIP";
+    if (safeKind === "intensive") return "Intensivo";
+    if (safeKind === "special_project") return "Projeto especial";
+    return "";
+  }).filter(Boolean)));
+  const pedagogicalStatusSummary = normalizedEnrollments.reduce((acc, item) => {
+    const enrollmentStatus = normalizeAcademicText(item.enrollment_status || "");
+    if (enrollmentStatus === "trancado") acc.trancado_total += 1;
+    if (["desistente", "cancelado"].includes(enrollmentStatus)) acc.inactive_total += 1;
+    if (enrollmentStatus === "aguardando turma") acc.waiting_total += 1;
+    const classKind = normalizeAcademicText(item.class_kind || "");
+    if (["vip", "semi_vip"].includes(classKind)) acc.vip_total += 1;
+    if (classKind === "intensive") acc.intensive_total += 1;
+    return acc;
+  }, { trancado_total: 0, inactive_total: 0, waiting_total: 0, vip_total: 0, intensive_total: 0 });
   let currentTeachers = [];
   let currentSchedules = [];
   if (currentEnrollment?.class_id) {
@@ -3982,6 +4088,25 @@ async function getStudentHubStudentDetail(studentId, scope) {
       current_teacher_names: currentTeachers.map((item) => item.display_name || item.user_name).filter(Boolean),
       current_schedule_labels: currentSchedules.map((item) => [item.weekday, item.start_time, item.end_time].filter(Boolean).join(" · ")).filter(Boolean),
       current_status: currentEnrollment?.enrollment_status || detail.student?.status || null,
+      current_class_kind: currentEnrollment?.class_kind || null,
+      current_class_metadata: currentEnrollment?.class_metadata || {},
+      special_track_labels: specialTrackLabels,
+      status_summary: pedagogicalStatusSummary,
+      class_history: classHistoryRows.map((row) => ({
+        ...row,
+        old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+        new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+      })),
+      schedule_history: scheduleHistoryRows.map((row) => ({
+        ...row,
+        old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+        new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+      })),
+      transfer_history: transferHistoryRows.map((row) => ({
+        ...row,
+        old_value: safeJsonParse(row.old_value_json || "null"),
+        new_value: safeJsonParse(row.new_value_json || "null"),
+      })),
     },
     financial: {
       contracts: contractDetails,
@@ -3999,6 +4124,10 @@ async function getStudentHubStudentDetail(studentId, scope) {
     timeline: timeline.map((item) => ({
       ...item,
       metadata: safeJsonParse(item.metadata_json || "{}") || {},
+    })),
+    commercial_history: commercialRows.map((row) => ({
+      ...serializeSalesRecord(row),
+      resolved_lead_stage: row.resolved_lead_stage || "lead",
     })),
     scope,
   };
@@ -4065,6 +4194,12 @@ async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = nu
   const actorId = actorUser?.id || actorUser?.sub || null;
   const fullName = sanitizeAcademicTextValue(payload.student_name, { maxLength: 180 });
   if (!fullName) throw new Error("missing_student_name");
+  const leadStage = normalizeLeadStage(payload.lead_stage || "lead");
+  const closerOriginal = sanitizeAcademicTextValue(payload.closer_original || payload.closer_name, { maxLength: 120 }) || null;
+  const firstContactAt = normalizeAcademicDateTimeInput(payload.first_contact_at || payload.sale_date || "") || null;
+  const explicitClosedAt = normalizeAcademicDateTimeInput(payload.closed_at || "") || null;
+  const explicitLostAt = normalizeAcademicDateTimeInput(payload.lost_at || "") || null;
+  const nowIso = new Date().toISOString();
   const persisted = {
     student_name: fullName,
     phone: sanitizeAcademicTextValue(payload.phone, { maxLength: 40 }) || null,
@@ -4082,12 +4217,20 @@ async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = nu
     system_name: sanitizeAcademicTextValue(payload.system_name, { maxLength: 120 }) || null,
     contract_status: sanitizeAcademicTextValue(payload.contract_status, { maxLength: 80 }) || null,
     language: sanitizeAcademicTextValue(payload.language, { maxLength: 80 }) || null,
+    closer_original: closerOriginal,
+    closer_normalized: normalizeAcademicText(closerOriginal || ""),
     media_source: sanitizeAcademicTextValue(payload.media_source, { maxLength: 120 }) || null,
+    interest_goal: sanitizeAcademicTextValue(payload.interest_goal, { maxLength: 240 }) || null,
+    negotiation_notes: sanitizeAcademicTextValue(payload.negotiation_notes, { maxLength: 4000 }) || null,
     profession: sanitizeAcademicTextValue(payload.profession, { maxLength: 120 }) || null,
     indication: sanitizeAcademicTextValue(payload.indication, { maxLength: 120 }) || null,
     observations: sanitizeAcademicTextValue(payload.observations, { maxLength: 4000 }) || null,
     feedback: sanitizeAcademicTextValue(payload.feedback, { maxLength: 4000 }) || null,
-    lead_stage: normalizeLeadStage(payload.lead_stage || "lead"),
+    lead_stage: leadStage,
+    first_contact_at: firstContactAt,
+    closed_at: explicitClosedAt || (leadStage === "fechado" ? nowIso : null),
+    lost_at: explicitLostAt || (leadStage === "perdido" ? nowIso : null),
+    lost_reason: sanitizeAcademicTextValue(payload.lost_reason, { maxLength: 400 }) || null,
     source_payload_json: safeJsonStringify(payload.source_payload || payload, "{}"),
   };
 
@@ -4097,8 +4240,9 @@ async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = nu
     await run(
       `UPDATE sales_records
           SET student_name=?, phone=?, contact_email=?, course_name=?, level_name=?, teacher_name=?, attendant_name=?, sale_month=?, sale_date=?, semester_label=?,
-              availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, media_source=?, profession=?, indication=?,
-              observations=?, feedback=?, lead_stage=?, source_payload_json=?, last_modified_by=?, updated_at=datetime('now')
+              availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, media_source=?, interest_goal=?,
+              negotiation_notes=?, profession=?, indication=?, observations=?, feedback=?, lead_stage=?, first_contact_at=?, closed_at=?, lost_at=?, lost_reason=?,
+              source_payload_json=?, last_modified_by=?, updated_at=datetime('now')
         WHERE id=?`,
       [
         persisted.student_name,
@@ -4117,17 +4261,44 @@ async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = nu
         persisted.system_name,
         persisted.contract_status,
         persisted.language,
+        persisted.closer_original,
+        persisted.closer_normalized,
         persisted.media_source,
+        persisted.interest_goal,
+        persisted.negotiation_notes,
         persisted.profession,
         persisted.indication,
         persisted.observations,
         persisted.feedback,
         persisted.lead_stage,
+        persisted.first_contact_at,
+        persisted.closed_at || existing.closed_at || null,
+        persisted.lost_at || existing.lost_at || null,
+        persisted.lost_reason,
         persisted.source_payload_json,
         actorId,
         existingId,
       ]
     );
+    if (actorId && Number(existing.student_id || 0)) {
+      await createStudentTimelineEntry({
+        student_id: Number(existing.student_id),
+        enrollment_id: Number(existing.enrollment_id || 0) || null,
+        sales_record_id: existingId,
+        actor_user_id: actorId,
+        event_type: persisted.lead_stage === "perdido" ? "lead_lost" : "lead_updated",
+        title: persisted.lead_stage === "perdido" ? "Lead encerrada sem conversao" : "Lead atualizada",
+        description: persisted.lead_stage === "perdido"
+          ? `${persisted.student_name} foi marcada como perdida no Comercial.`
+          : `Comercial atualizado para ${persisted.lead_stage}.`,
+        metadata: {
+          lead_stage: persisted.lead_stage,
+          media_source: persisted.media_source,
+          closer_name: persisted.closer_original || null,
+          lost_reason: persisted.lost_reason,
+        },
+      });
+    }
     return getStudentHubLeadDetail(existingId, { canViewAll: true });
   }
 
@@ -4135,9 +4306,10 @@ async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = nu
   const created = await run(
     `INSERT INTO sales_records
        (origin_type, source_workbook, source_sheet, dedupe_hash, student_name, phone, contact_email, course_name, level_name, teacher_name, attendant_name,
-        sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, media_source, profession, indication,
-        feedback, observations, lead_stage, source_payload_json, last_modified_by, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language,
+        closer_original, closer_normalized, media_source, interest_goal, negotiation_notes, profession, indication,
+        feedback, observations, lead_stage, first_contact_at, closed_at, lost_at, lost_reason, source_payload_json, last_modified_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     [
       "manual_lead",
       "manual_entry",
@@ -4159,16 +4331,41 @@ async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = nu
       persisted.system_name,
       persisted.contract_status,
       persisted.language,
+      persisted.closer_original,
+      persisted.closer_normalized,
       persisted.media_source,
+      persisted.interest_goal,
+      persisted.negotiation_notes,
       persisted.profession,
       persisted.indication,
       persisted.feedback,
       persisted.observations,
       persisted.lead_stage,
+      persisted.first_contact_at,
+      persisted.closed_at,
+      persisted.lost_at,
+      persisted.lost_reason,
       persisted.source_payload_json,
       actorId,
     ]
   );
+  if (actorId && Number(payload.student_id || 0)) {
+    await createStudentTimelineEntry({
+      student_id: Number(payload.student_id),
+      enrollment_id: Number(payload.enrollment_id || 0) || null,
+      sales_record_id: created.lastID,
+      actor_user_id: actorId,
+      event_type: "lead_created",
+      title: "Lead criada",
+      description: `${persisted.student_name} entrou no fluxo comercial.`,
+      metadata: {
+        lead_stage: persisted.lead_stage,
+        media_source: persisted.media_source,
+        closer_name: persisted.closer_original || null,
+      },
+      created_at: persisted.first_contact_at,
+    });
+  }
   await logEntityChange({
     entityType: "sales_record",
     entityId: created.lastID,
@@ -4276,8 +4473,17 @@ async function saveFinancialContractRecord(payload = {}, actorUser = null, optio
 
   const contract = await get("SELECT * FROM financial_contracts WHERE id=?", [finalId]);
   const suppliedInstallments = Array.isArray(payload.installments) ? payload.installments : [];
-  for (let index = 0; index < suppliedInstallments.length; index += 1) {
-    const item = suppliedInstallments[index] || {};
+  const generatedInstallments = !suppliedInstallments.length
+    ? buildDefaultFinancialInstallments(
+        contract?.total_amount ?? persisted.total_amount,
+        contract?.installments_count ?? persisted.installments_count,
+        contract?.first_due_date || persisted.first_due_date || ""
+      )
+    : [];
+  const installmentItems = suppliedInstallments.length ? suppliedInstallments : generatedInstallments;
+  const createdInstallments = [];
+  for (let index = 0; index < installmentItems.length; index += 1) {
+    const item = installmentItems[index] || {};
     const installmentNumber = Math.max(1, Number(item.installment_number || index + 1) || index + 1);
     const dueDate = normalizeAcademicDateInput(item.due_date || addMonthsToDateKey(contract.first_due_date, index));
     const amount = parseMoneyValue(item.amount);
@@ -4302,7 +4508,7 @@ async function saveFinancialContractRecord(payload = {}, actorUser = null, optio
         ]
       );
     } else {
-      await run(
+      const createdInstallment = await run(
         `INSERT INTO financial_installments
            (contract_id, installment_number, due_date, amount, status, paid_at, payment_method, reference_label, notes, metadata_json, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
@@ -4319,6 +4525,14 @@ async function saveFinancialContractRecord(payload = {}, actorUser = null, optio
           safeJsonStringify(item.metadata || {}, "{}"),
         ]
       );
+      createdInstallments.push({
+        id: createdInstallment.lastID,
+        installment_number: installmentNumber,
+        due_date: dueDate,
+        amount,
+        status: finalStatus,
+        reference_label: sanitizeAcademicTextValue(item.reference_label, { maxLength: 120 }) || null,
+      });
     }
   }
 
@@ -4337,6 +4551,25 @@ async function saveFinancialContractRecord(payload = {}, actorUser = null, optio
         installments_count: persisted.installments_count,
       },
     });
+    for (const installment of createdInstallments) {
+      await ensureStudentTimelineEntry({
+        student_id: persisted.student_id,
+        enrollment_id: persisted.enrollment_id,
+        sales_record_id: persisted.sales_record_id,
+        contract_id: finalId,
+        installment_id: installment.id,
+        actor_user_id: actorUserId,
+        event_type: "financial_installment_created",
+        title: "Parcela gerada",
+        description: `${installment.reference_label || `Parcela ${installment.installment_number}`} criada com vencimento ${installment.due_date || "-"} no valor de ${formatMoneyValue(installment.amount)}.`,
+        metadata: {
+          installment_number: installment.installment_number,
+          due_date: installment.due_date,
+          amount: installment.amount,
+          status: installment.status,
+        },
+      });
+    }
   }
 
   return getStudentHubContractDetail(finalId, { canViewAll: true });
@@ -4410,6 +4643,21 @@ async function convertLeadToStudentHubRecord(recordId, payload = {}, actorUser =
     status: incomingStudent.status || matchedStudent?.status || "ativo",
   }, actorId);
 
+  await ensureStudentTimelineEntry({
+    student_id: savedStudent.id,
+    sales_record_id: recordId,
+    actor_user_id: actorId,
+    event_type: "lead_created",
+    title: "Lead criada",
+    description: `${lead.student_name || savedStudent.full_name} entrou no fluxo comercial.`,
+    metadata: {
+      lead_stage: lead.lead_stage || null,
+      media_source: lead.media_source || null,
+      closer_name: lead.closer_original || lead.closer_name || lead.attendant_name || null,
+    },
+    created_at: lead.first_contact_at || lead.sale_date || lead.created_at || null,
+  });
+
   const guardians = Array.isArray(payload.guardians) ? payload.guardians : [];
   if (guardians.length) {
     await replaceStudentGuardians(savedStudent.id, guardians, actorId);
@@ -4468,15 +4716,7 @@ async function convertLeadToStudentHubRecord(recordId, payload = {}, actorUser =
   const totalAmount = parseMoneyValue(contractPayload.total_amount);
   const installments = Array.isArray(contractPayload.installments) && contractPayload.installments.length
     ? contractPayload.installments
-    : (defaultInstallmentsCount > 0 && totalAmount && contractPayload.first_due_date
-        ? Array.from({ length: defaultInstallmentsCount }).map((_, index) => ({
-            installment_number: index + 1,
-            due_date: addMonthsToDateKey(contractPayload.first_due_date, index),
-            amount: Number((totalAmount / defaultInstallmentsCount).toFixed(2)),
-            status: "pending",
-            reference_label: `Parcela ${index + 1}/${defaultInstallmentsCount}`,
-          }))
-        : []);
+    : buildDefaultFinancialInstallments(totalAmount, defaultInstallmentsCount, contractPayload.first_due_date);
 
   const contractDetail = await saveFinancialContractRecord({
     id: Number(lead.financial_contract_id || 0) || null,
@@ -4489,7 +4729,7 @@ async function convertLeadToStudentHubRecord(recordId, payload = {}, actorUser =
     contract_number: contractPayload.contract_number || generateContractNumber(savedStudent.id, enrollment.id),
     contract_type: contractPayload.contract_type || "course_enrollment",
     contract_status: contractPayload.contract_status || "draft",
-    total_amount,
+    total_amount: totalAmount,
     currency: contractPayload.currency || "BRL",
     installments_count: installments.length || defaultInstallmentsCount,
     first_due_date: contractPayload.first_due_date || installments[0]?.due_date || null,
@@ -4499,18 +4739,19 @@ async function convertLeadToStudentHubRecord(recordId, payload = {}, actorUser =
     metadata: {
       created_from_lead_id: lead.id,
     },
-  }, actorUser, { createTimeline: false });
+  }, actorUser);
 
   await run(
     `UPDATE sales_records
         SET student_id=?, enrollment_id=?, financial_contract_id=?, contact_email=COALESCE(?, contact_email), lead_stage='convertido',
-            converted_at=COALESCE(converted_at, CURRENT_TIMESTAMP), contract_status=?, updated_at=datetime('now')
+            converted_at=COALESCE(converted_at, CURRENT_TIMESTAMP), closed_at=COALESCE(closed_at, ?, CURRENT_TIMESTAMP), contract_status=?, updated_at=datetime('now')
       WHERE id=?`,
     [
       savedStudent.id,
       enrollment.id,
       contractDetail?.contract?.id || null,
       incomingStudent.email || lead.contact_email || null,
+      lead.closed_at || new Date().toISOString(),
       contractDetail?.contract?.contract_status || lead.contract_status || null,
       recordId,
     ]
@@ -4732,6 +4973,7 @@ function mapAcademicStudentRow(row) {
   if (!row) return null;
   return {
     ...row,
+    age: computeAcademicAge(row.birth_date, row.age),
     source_payload: safeJsonParse(row.source_payload_json || "{}") || null,
   };
 }
@@ -4742,6 +4984,7 @@ function mapAcademicEnrollmentRow(row) {
     ...row,
     source_payload: safeJsonParse(row.source_payload_json || "{}") || null,
     metadata: safeJsonParse(row.metadata_json || "{}") || {},
+    class_metadata: safeJsonParse(row.class_metadata_json || "{}") || {},
   };
 }
 
@@ -4932,7 +5175,7 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
   const normalizedName = normalizeAcademicText(fullName);
   const preferredName = sanitizeAcademicTextValue(payload.preferred_name, { maxLength: 120 }) || null;
   const birthDate = normalizeAcademicDateInput(payload.birth_date);
-  const age = Number.isFinite(Number(payload.age)) ? Math.max(0, Math.round(Number(payload.age))) : null;
+  const age = computeAcademicAge(birthDate, payload.age);
   const status = normalizeStudentStatus(payload.status || "ativo");
   const persisted = {
     full_name: fullName,
@@ -5021,7 +5264,22 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
         detail: { source: "academic_student_form" },
       });
     }
-    return mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [studentId]));
+    const savedStudent = mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [studentId]));
+    if (actorUserId && savedStudent?.id) {
+      await ensureStudentTimelineEntry({
+        student_id: savedStudent.id,
+        actor_user_id: actorUserId,
+        event_type: "student_updated",
+        title: "Cadastro do aluno atualizado",
+        description: `${savedStudent.full_name} teve os dados cadastrais atualizados.`,
+        metadata: {
+          status: savedStudent.status,
+          email: savedStudent.email || null,
+          phone: savedStudent.phone || savedStudent.whatsapp || null,
+        },
+      });
+    }
+    return savedStudent;
   }
 
   const created = await run(
@@ -5073,12 +5331,27 @@ async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
       detail: { source: "academic_student_form" },
     });
   }
-  return mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [created.lastID]));
+  const savedStudent = mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [created.lastID]));
+  if (actorUserId && savedStudent?.id) {
+    await ensureStudentTimelineEntry({
+      student_id: savedStudent.id,
+      actor_user_id: actorUserId,
+      event_type: "student_created",
+      title: "Aluno criado",
+      description: `${savedStudent.full_name} foi cadastrado no sistema.`,
+      metadata: {
+        status: savedStudent.status,
+        source_workbook: savedStudent.source_workbook || null,
+      },
+    });
+  }
+  return savedStudent;
 }
 
 async function replaceStudentGuardians(studentId, guardians = [], actorUserId = null) {
   await run("DELETE FROM student_guardians WHERE student_id=?", [studentId]);
   const persisted = [];
+  const guardianNames = [];
   for (const item of Array.isArray(guardians) ? guardians : []) {
     const name = sanitizeAcademicTextValue(item.name, { maxLength: 180 });
     if (!name) continue;
@@ -5101,6 +5374,7 @@ async function replaceStudentGuardians(studentId, guardians = [], actorUserId = 
       ]
     );
     persisted.push(created.lastID);
+    guardianNames.push(name);
   }
   if (actorUserId) {
     await logEntityChange({
@@ -5110,6 +5384,19 @@ async function replaceStudentGuardians(studentId, guardians = [], actorUserId = 
       actorUserId,
       origin: "manual_edit",
       detail: { total_guardians: persisted.length },
+    });
+    await ensureStudentTimelineEntry({
+      student_id: studentId,
+      actor_user_id: actorUserId,
+      event_type: "guardians_updated",
+      title: "Responsáveis atualizados",
+      description: guardianNames.length
+        ? `Responsáveis vinculados: ${guardianNames.join(", ")}.`
+        : "Os responsáveis do aluno foram removidos ou atualizados.",
+      metadata: {
+        total_guardians: persisted.length,
+        guardian_names: guardianNames,
+      },
     });
   }
 }
@@ -5620,7 +5907,33 @@ async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
         origin: "manual_edit",
       });
     }
-    return mapAcademicEnrollmentRow(await get("SELECT * FROM enrollments WHERE id=?", [enrollmentId]));
+    const savedEnrollment = mapAcademicEnrollmentRow(await get(
+      `SELECT e.*, ap.program_name, ap.level_name, ap.language, ap.modality, st.code AS school_term_code, c.name AS class_name
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN school_terms st ON st.id = e.school_term_id
+         LEFT JOIN classes c ON c.id = e.class_id
+        WHERE e.id=?`,
+      [enrollmentId]
+    ));
+    if (actorUserId && savedEnrollment?.student_id) {
+      await ensureStudentTimelineEntry({
+        student_id: savedEnrollment.student_id,
+        enrollment_id: savedEnrollment.id,
+        actor_user_id: actorUserId,
+        event_type: "enrollment_updated",
+        title: "Matrícula atualizada",
+        description: `${savedEnrollment.enrollment_number || `Matrícula ${savedEnrollment.id}`} foi atualizada para ${savedEnrollment.enrollment_status || "em andamento"}.`,
+        metadata: {
+          language: savedEnrollment.language || null,
+          modality: savedEnrollment.modality || null,
+          program_name: savedEnrollment.program_name || null,
+          class_name: savedEnrollment.class_name || null,
+          enrollment_status: savedEnrollment.enrollment_status || null,
+        },
+      });
+    }
+    return savedEnrollment;
   }
 
   const created = await run(
@@ -5660,7 +5973,33 @@ async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
       origin: "manual_create",
     });
   }
-  return mapAcademicEnrollmentRow(await get("SELECT * FROM enrollments WHERE id=?", [created.lastID]));
+  const savedEnrollment = mapAcademicEnrollmentRow(await get(
+    `SELECT e.*, ap.program_name, ap.level_name, ap.language, ap.modality, st.code AS school_term_code, c.name AS class_name
+       FROM enrollments e
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+       LEFT JOIN classes c ON c.id = e.class_id
+      WHERE e.id=?`,
+    [created.lastID]
+  ));
+  if (actorUserId && savedEnrollment?.student_id) {
+    await ensureStudentTimelineEntry({
+      student_id: savedEnrollment.student_id,
+      enrollment_id: savedEnrollment.id,
+      actor_user_id: actorUserId,
+      event_type: "enrollment_created",
+      title: "Matrícula criada",
+      description: `${savedEnrollment.enrollment_number || `Matrícula ${savedEnrollment.id}`} foi criada${savedEnrollment.class_name ? ` na turma ${savedEnrollment.class_name}` : ""}.`,
+      metadata: {
+        language: savedEnrollment.language || null,
+        modality: savedEnrollment.modality || null,
+        program_name: savedEnrollment.program_name || null,
+        class_name: savedEnrollment.class_name || null,
+        enrollment_status: savedEnrollment.enrollment_status || null,
+      },
+    });
+  }
+  return savedEnrollment;
 }
 
 async function upsertAcademicEnrollmentFromImport(student, payload = {}, actorUserId = null) {
@@ -6695,7 +7034,7 @@ async function getAcademicStudentDetail(studentId, scope) {
     ),
     all(
       `SELECT e.*, ap.program_name, ap.level_name, ap.language, ap.modality, st.name AS school_term_name, st.code AS school_term_code,
-              c.name AS class_name, c.status AS class_status
+              c.name AS class_name, c.status AS class_status, c.class_kind, c.metadata_json AS class_metadata_json
          FROM enrollments e
          LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
          LEFT JOIN school_terms st ON st.id = e.school_term_id
@@ -7319,6 +7658,21 @@ async function transferAcademicEnrollmentClass(enrollmentId, payload = {}, actor
     origin: "manual_edit",
     detail: { old_class_id: enrollment.class_id || null, new_class_id: newClassId, reason },
   });
+  await ensureStudentTimelineEntry({
+    student_id: enrollment.student_id,
+    enrollment_id: enrollmentId,
+    actor_user_id: actorUser.id || actorUser.sub,
+    event_type: "academic_class_transfer",
+    title: "Troca de turma registrada",
+    description: `${oldClass?.name || "Sem turma"} -> ${newClass?.name || "Sem turma"}.`,
+    metadata: {
+      old_class_id: enrollment.class_id || null,
+      new_class_id: newClassId,
+      old_class_name: oldClass?.name || null,
+      new_class_name: newClass?.name || null,
+      reason,
+    },
+  });
   return getAcademicEnrollmentDetail(enrollmentId, scope);
 }
 
@@ -7328,6 +7682,10 @@ async function changeAcademicEnrollmentSchedule(enrollmentId, payload = {}, acto
   const enrollment = await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [enrollmentId]);
   if (!enrollment) throw new Error("enrollment_not_found");
   const newClassId = Number(payload.new_class_id || enrollment.class_id || 0) || null;
+  const [oldClass, newClass] = await Promise.all([
+    enrollment.class_id ? getClassBasicById(enrollment.class_id).catch(() => null) : null,
+    newClassId ? getClassBasicById(newClassId).catch(() => null) : null,
+  ]);
   const oldSchedules = enrollment.class_id ? await listClassSchedulesByClassId(enrollment.class_id) : [];
   const newSchedules = newClassId ? await listClassSchedulesByClassId(newClassId) : [];
   if (newClassId && Number(newClassId) !== Number(enrollment.class_id || 0)) {
@@ -7375,6 +7733,23 @@ async function changeAcademicEnrollmentSchedule(enrollmentId, payload = {}, acto
     actorUserId: actorUser.id || actorUser.sub,
     origin: "manual_edit",
     detail: { old_class_id: enrollment.class_id || null, new_class_id: newClassId, reason },
+  });
+  await ensureStudentTimelineEntry({
+    student_id: enrollment.student_id,
+    enrollment_id: enrollmentId,
+    actor_user_id: actorUser.id || actorUser.sub,
+    event_type: "academic_schedule_change",
+    title: "Mudança de horário registrada",
+    description: `${oldClass?.name || "Sem turma"} -> ${newClass?.name || oldClass?.name || "Sem turma"} (${oldSchedules.length} horário(s) -> ${newSchedules.length} horário(s)).`,
+    metadata: {
+      old_class_id: enrollment.class_id || null,
+      new_class_id: newClassId,
+      old_class_name: oldClass?.name || null,
+      new_class_name: newClass?.name || null,
+      old_schedules: oldSchedules,
+      new_schedules: newSchedules,
+      reason,
+    },
   });
   return getAcademicEnrollmentDetail(enrollmentId, scope);
 }

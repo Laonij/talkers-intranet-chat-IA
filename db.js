@@ -1194,6 +1194,12 @@ async function migrateSqlite() {
       post_sale_rating TEXT,
       contact_email TEXT,
       lead_stage TEXT,
+      interest_goal TEXT,
+      negotiation_notes TEXT,
+      first_contact_at TEXT,
+      closed_at TEXT,
+      lost_at TEXT,
+      lost_reason TEXT,
       student_id INTEGER,
       enrollment_id INTEGER,
       financial_contract_id INTEGER,
@@ -1222,6 +1228,12 @@ async function migrateSqlite() {
     ["post_sale_rating", "TEXT"],
     ["contact_email", "TEXT"],
     ["lead_stage", "TEXT"],
+    ["interest_goal", "TEXT"],
+    ["negotiation_notes", "TEXT"],
+    ["first_contact_at", "TEXT"],
+    ["closed_at", "TEXT"],
+    ["lost_at", "TEXT"],
+    ["lost_reason", "TEXT"],
     ["student_id", "INTEGER"],
     ["enrollment_id", "INTEGER"],
     ["financial_contract_id", "INTEGER"],
@@ -2347,6 +2359,18 @@ async function migratePostgres() {
       indication TEXT,
       feedback TEXT,
       post_sale_rating TEXT,
+      contact_email TEXT,
+      lead_stage TEXT,
+      interest_goal TEXT,
+      negotiation_notes TEXT,
+      first_contact_at TIMESTAMPTZ,
+      closed_at TIMESTAMPTZ,
+      lost_at TIMESTAMPTZ,
+      lost_reason TEXT,
+      student_id INTEGER,
+      enrollment_id INTEGER,
+      financial_contract_id INTEGER,
+      converted_at TIMESTAMPTZ,
       source_payload_json TEXT,
       operational_status TEXT NOT NULL DEFAULT 'Novo',
       follow_up_notes TEXT,
@@ -2368,6 +2392,12 @@ async function migratePostgres() {
   await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS post_sale_rating TEXT;");
   await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS contact_email TEXT;");
   await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS lead_stage TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS interest_goal TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS negotiation_notes TEXT;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS first_contact_at TIMESTAMPTZ;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS lost_at TIMESTAMPTZ;");
+  await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS lost_reason TEXT;");
   await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS student_id INTEGER;");
   await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS enrollment_id INTEGER;");
   await pgPool.query("ALTER TABLE sales_records ADD COLUMN IF NOT EXISTS financial_contract_id INTEGER;");

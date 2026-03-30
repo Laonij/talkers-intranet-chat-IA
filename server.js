@@ -263,6 +263,7 @@ const JWT_SECRET =
 const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).trim().toLowerCase();
 const ADMIN_NAME = String(process.env.ADMIN_NAME || DEFAULT_ADMIN_NAME).trim() || DEFAULT_ADMIN_NAME;
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || (IS_PRODUCTION ? "" : DEFAULT_ADMIN_PASSWORD));
+const ADMIN_FORCE_PASSWORD_SYNC = ["1", "true", "yes"].includes(String(process.env.ADMIN_FORCE_PASSWORD_SYNC || "").trim().toLowerCase());
 
 const knowledgeDir = path.join(kbDir, "manual");
 const RAG_ALLOWED_EXTS = new Set([
@@ -457,8 +458,32 @@ async function ensureAdmin() {
       return;
     }
 
-    const existing = await get("SELECT id FROM users WHERE email=?", [ADMIN_EMAIL]);
-    if (existing) return;
+    const existing = await get("SELECT id, name, role, can_access_intranet, password_hash FROM users WHERE email=?", [ADMIN_EMAIL]);
+    if (existing) {
+      if (!ADMIN_FORCE_PASSWORD_SYNC) return;
+
+      const passwordMatches = existing.password_hash
+        ? await bcrypt.compare(ADMIN_PASSWORD, existing.password_hash).catch(() => false)
+        : false;
+      const needsUpdate = !passwordMatches
+        || String(existing.name || "").trim() !== ADMIN_NAME
+        || String(existing.role || "").trim().toLowerCase() !== "admin"
+        || !parseBooleanInput(existing.can_access_intranet);
+
+      if (!needsUpdate) return;
+
+      const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+      await run(
+        "UPDATE users SET name=?, password_hash=?, role='admin', can_access_intranet=?, updated_at=datetime('now') WHERE id=?",
+        [ADMIN_NAME, hash, true, existing.id]
+      );
+      await logEvent(existing.id, "admin_bootstrap_password_synced", {
+        email: ADMIN_EMAIL,
+        forced_sync: true,
+      });
+      console.log("Senha do admin sincronizada a partir das variaveis de ambiente.");
+      return;
+    }
 
     const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
     const created = await run(

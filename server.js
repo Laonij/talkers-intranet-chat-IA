@@ -474,7 +474,7 @@ async function ensureAdmin() {
 
       const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
       await run(
-        "UPDATE users SET name=?, password_hash=?, role='admin', can_access_intranet=?, updated_at=datetime('now') WHERE id=?",
+        "UPDATE users SET name=?, password_hash=?, role='admin', can_access_intranet=? WHERE id=?",
         [ADMIN_NAME, hash, true, existing.id]
       );
       await logEvent(existing.id, "admin_bootstrap_password_synced", {

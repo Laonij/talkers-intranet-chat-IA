@@ -6608,8 +6608,44 @@ async function listAcademicStudents(scope, filters = {}) {
 }
 
 async function getAcademicStudentDetail(studentId, scope) {
-  const rows = await listAcademicStudents(scope, { limit: 500, search: "" });
-  const student = rows.find((item) => Number(item.id) === Number(studentId));
+  const safeStudentId = Number(studentId || 0) || 0;
+  if (!safeStudentId) return null;
+  const params = [];
+  const where = ["s.id=?"];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        JOIN class_teachers ct ON ct.class_id = e.class_id
+       WHERE e.student_id = s.id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  params.push(safeStudentId);
+  const studentRow = await get(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.student_id=s.id) AS enrollments_total,
+            (SELECT enrollment_status FROM enrollments e WHERE e.student_id=s.id ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1) AS latest_enrollment_status,
+            (SELECT c.name
+               FROM enrollments e
+               LEFT JOIN classes c ON c.id = e.class_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_class_name,
+            (SELECT coalesce(ap.language, '')
+               FROM enrollments e
+               LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_language
+       FROM students s
+      WHERE ${where.join(" AND ")}
+      LIMIT 1`,
+    params
+  );
+  const student = studentRow ? mapAcademicStudentRow(studentRow) : null;
   if (!student) return null;
   const [guardians, enrollments, attendanceSummary] = await Promise.all([
     all(

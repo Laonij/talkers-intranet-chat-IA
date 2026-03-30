@@ -637,7 +637,10 @@ function readExpandedDepartmentPreference() {
   try {
     const raw = localStorage.getItem(DEPARTMENT_TREE_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item || '')) : []);
+    const items = Array.isArray(parsed)
+      ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    return new Set(items.slice(0, 1));
   } catch {
     return new Set();
   }
@@ -843,11 +846,12 @@ function syncSidebarNavigation(intranet) {
 function toggleDepartmentExpanded(slug, forceValue = null) {
   const safeSlug = String(slug || '').trim();
   if (!safeSlug) return;
-  const shouldOpen = typeof forceValue === 'boolean' ? forceValue : !expandedDepartmentSlugs.has(safeSlug);
+  const isOpen = expandedDepartmentSlugs.has(safeSlug);
+  const shouldOpen = typeof forceValue === 'boolean' ? forceValue : !isOpen;
   if (shouldOpen) {
-    expandedDepartmentSlugs.add(safeSlug);
+    expandedDepartmentSlugs = new Set([safeSlug]);
   } else {
-    expandedDepartmentSlugs.delete(safeSlug);
+    expandedDepartmentSlugs = new Set();
   }
   writeExpandedDepartmentPreference();
   syncSidebarNavigation(bootstrapData?.intranet || {});

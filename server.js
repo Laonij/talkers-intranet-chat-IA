@@ -28,6 +28,7 @@ const {
   searchDocuments,
   importLegacySqliteIntoPostgres,
 } = require("./db");
+const { seedDemoSchoolData } = require("./scripts/seed_demo_school_data");
 const { createLogger } = require("./lib/appLogger");
 const {
   DEFAULT_LOCALE,
@@ -112,6 +113,11 @@ const DEFAULT_ADMIN_PASSWORD = "Talkers#2026!";
 const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
 const MAX_UPLOAD_SIZE_MB = Math.max(1, Number(process.env.MAX_UPLOAD_SIZE_MB || 25));
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
+const SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB = Math.max(
+  MAX_UPLOAD_SIZE_MB,
+  Number(process.env.SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB || 80)
+);
+const SQLITE_IMPORT_MAX_UPLOAD_SIZE_BYTES = SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 const MAX_CONCURRENT_JOBS = Math.max(1, Number(process.env.MAX_CONCURRENT_JOBS || 5));
 const MAX_CONVERSATION_MEMORY = 6000;
 const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
@@ -13560,6 +13566,13 @@ const academicImportUpload = upload.fields([
   { name: "file", maxCount: 6 },
   { name: "files", maxCount: 6 },
 ]);
+const sqliteImportUpload = multer({
+  dest: uploadsDir,
+  limits: { fileSize: SQLITE_IMPORT_MAX_UPLOAD_SIZE_BYTES },
+}).fields([
+  { name: "sqlite_db", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+]);
 
 function ragUploadMiddleware(req, res, next) {
   ragUpload(req, res, (err) => {
@@ -13595,6 +13608,72 @@ function salesImportUploadMiddleware(req, res, next) {
     }
     return res.status(400).json({ error: err?.message || "sales_import_upload_failed" });
   });
+}
+
+function sqliteImportUploadMiddleware(req, res, next) {
+  sqliteImportUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        error: "sqlite_file_too_large",
+        max_upload_size_mb: SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB,
+      });
+    }
+    return res.status(400).json({ error: err?.message || "sqlite_import_upload_failed" });
+  });
+}
+
+const DATABASE_STATUS_TABLES = [
+  "students",
+  "academic_programs",
+  "school_terms",
+  "classes",
+  "class_schedules",
+  "teacher_profiles",
+  "class_teachers",
+  "enrollments",
+  "enrollment_class_history",
+  "student_transfers",
+  "sales_records",
+  "financial_contracts",
+  "financial_installments",
+  "student_guardians",
+  "student_timeline",
+  "attendance_records",
+  "class_sessions",
+  "enrollment_schedule_history",
+];
+
+async function collectDatabaseStatusCounts() {
+  const counts = {};
+  for (const table of DATABASE_STATUS_TABLES) {
+    const row = await get(`SELECT COUNT(*) AS total FROM ${table}`);
+    counts[table] = Number(row?.total || 0);
+  }
+  return counts;
+}
+
+async function ensureOperationalDemoComplements() {
+  const countsBefore = await collectDatabaseStatusCounts();
+  const shouldSeedDemo =
+    Number(countsBefore.students || 0) > 0 &&
+    (
+      Number(countsBefore.student_guardians || 0) === 0 ||
+      Number(countsBefore.financial_installments || 0) === 0 ||
+      Number(countsBefore.attendance_records || 0) === 0 ||
+      Number(countsBefore.enrollment_schedule_history || 0) === 0
+    );
+
+  if (shouldSeedDemo) {
+    await seedDemoSchoolData();
+  }
+
+  const countsAfter = await collectDatabaseStatusCounts();
+  return {
+    seeded_demo_data: shouldSeedDemo,
+    counts_before: countsBefore,
+    counts_after: countsAfter,
+  };
 }
 
 function maskConnectionTarget(value = "") {
@@ -14703,6 +14782,75 @@ app.get('/api/admin/sales/overview', requireAuth(JWT_SECRET), requireRole('admin
     recent_runs: recentRuns,
   });
 });
+
+app.get('/api/admin/database/status', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  try {
+    const counts = await collectDatabaseStatusCounts();
+    res.json({
+      ok: true,
+      db_client: DB_CLIENT,
+      db_runtime: {
+        requested_client: REQUESTED_DB_CLIENT || null,
+        selected_client: DB_CLIENT,
+        database_url_present: DATABASE_URL_PRESENT,
+        sqlite_path: DB_CLIENT === "sqlite" ? DB_RUNTIME_CONFIG.sqlite_path : null,
+        postgres_host: DB_CLIENT === "postgres" ? POSTGRES_HOST || null : null,
+      },
+      counts,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'database_status_failed' });
+  }
+});
+
+app.post('/api/admin/database/seed-demo', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  try {
+    const result = await ensureOperationalDemoComplements();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'database_demo_seed_failed' });
+  }
+});
+
+app.post('/api/admin/database/import-sqlite', requireAuth(JWT_SECRET), requireRole('admin'), sqliteImportUploadMiddleware, async (req, res) => {
+  if (DB_CLIENT !== 'postgres') {
+    return res.status(400).json({ error: 'postgres_required' });
+  }
+
+  const sqliteFile = ((req.files?.sqlite_db || [])[0] || (req.files?.file || [])[0] || null);
+  if (!sqliteFile?.path) {
+    return res.status(400).json({ error: 'sqlite_file_required' });
+  }
+
+  const sourcePath = path.resolve(sqliteFile.path);
+  try {
+    const importResult = await importLegacySqliteIntoPostgres({
+      sourcePath,
+      skipIfTargetHasData: false,
+      withSummary: true,
+    });
+    const demoResult = await ensureOperationalDemoComplements();
+    const counts = await collectDatabaseStatusCounts();
+    res.json({
+      ok: true,
+      import_result: importResult,
+      demo_result: demoResult,
+      counts,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'sqlite_import_failed' });
+  } finally {
+    try {
+      if (fs.existsSync(sourcePath)) fs.unlinkSync(sourcePath);
+    } catch (cleanupErr) {
+      startupLogger.warn('Falha ao limpar SQLite temporario importado.', {
+        path: sourcePath,
+        message: cleanupErr?.message || String(cleanupErr || 'sqlite_temp_cleanup_failed'),
+      });
+    }
+  }
+});
+
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   await logEvent(req.user.sub, "admin_delete_user_blocked", { target_user_id: Number(req.params.id) || null });
   res.status(403).json({ error: "user_deletion_disabled" });

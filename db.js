@@ -3219,15 +3219,41 @@ async function setPostgresSequence(client, table, column) {
   await client.query(`SELECT setval(pg_get_serial_sequence('${table}', '${column}'), $1, true)`, [maxId]);
 }
 
-async function importLegacySqliteIntoPostgres() {
-  if (DB_CLIENT !== "postgres" || !pgPool) return false;
-  if (String(process.env.SKIP_SQLITE_IMPORT || "").trim() === "1") return false;
-  if (!fs.existsSync(sqlitePath)) return false;
-  if (await postgresHasData()) return false;
+async function importLegacySqliteIntoPostgres(options = {}) {
+  const sourcePath = options?.sourcePath
+    ? path.resolve(String(options.sourcePath || "").trim())
+    : sqlitePath;
+  const skipIfTargetHasData = options?.skipIfTargetHasData !== false;
+  const withSummary = options?.withSummary === true;
+  const summary = {
+    imported: false,
+    source_path: sourcePath,
+    inserted: 0,
+    skipped_rows: 0,
+    failed_rows: 0,
+    reason: "",
+  };
+
+  if (DB_CLIENT !== "postgres" || !pgPool) {
+    summary.reason = "postgres_inactive";
+    return withSummary ? summary : false;
+  }
+  if (String(process.env.SKIP_SQLITE_IMPORT || "").trim() === "1") {
+    summary.reason = "sqlite_import_disabled";
+    return withSummary ? summary : false;
+  }
+  if (!fs.existsSync(sourcePath)) {
+    summary.reason = "sqlite_source_missing";
+    return withSummary ? summary : false;
+  }
+  if (skipIfTargetHasData && await postgresHasData()) {
+    summary.reason = "target_has_data";
+    return withSummary ? summary : false;
+  }
 
   let legacyDb;
   try {
-    legacyDb = await openLegacySqlite(sqlitePath);
+    legacyDb = await openLegacySqlite(sourcePath);
     const tableRows = await sqliteAllFrom(
       legacyDb,
 "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','departments','user_departments','department_submenus','intranet_announcements','conversations','messages','files','audit_log','documents','document_chunks','conversation_memories','user_memories','knowledge_sources','knowledge_processing_logs','memory_entries','ai_training_events','semantic_cache','closers','closer_aliases','sales_import_sources','sales_import_runs','sales_records','entity_change_log','calendar_event_types','calendar_events','calendar_event_participants','calendar_event_logs','marketing_influencers','marketing_influencer_metrics','marketing_indicator_tabs','marketing_indicator_rows','pedagogical_whatsapp_groups','pedagogical_whatsapp_campaigns','pedagogical_whatsapp_campaign_items','pedagogical_whatsapp_campaign_logs','pedagogical_whatsapp_settings','students','student_guardians','academic_programs','school_terms','classes','class_schedules','teacher_profiles','class_teachers','enrollments','class_sessions','attendance_records','enrollment_class_history','enrollment_schedule_history','student_transfers','academic_import_runs','academic_import_logs','financial_contracts','financial_installments','student_timeline')"
@@ -3235,7 +3261,8 @@ async function importLegacySqliteIntoPostgres() {
 
     if (!Array.isArray(tableRows) || !tableRows.length) {
       await closeSqlite(legacyDb);
-      return false;
+      summary.reason = "sqlite_tables_missing";
+      return withSummary ? summary : false;
     }
 
     const client = await pgPool.connect();
@@ -3415,9 +3442,14 @@ async function importLegacySqliteIntoPostgres() {
       await setPostgresSequence(client, "student_timeline", "id");
 
       await client.query("COMMIT");
+      summary.imported = true;
+      summary.inserted = migrationSummary.inserted;
+      summary.skipped_rows = migrationSummary.skipped;
+      summary.failed_rows = migrationSummary.failed;
+      summary.reason = "imported";
       console.log("Resumo da migracao SQLite -> Postgres:", migrationSummary);
-      console.log(`Migracao automatica SQLite -> Postgres concluida a partir de ${sqlitePath}.`);
-      return true;
+      console.log(`Migracao automatica SQLite -> Postgres concluida a partir de ${sourcePath}.`);
+      return withSummary ? summary : true;
     } catch (err) {
       try {
         await client.query("ROLLBACK");
@@ -3434,7 +3466,8 @@ async function importLegacySqliteIntoPostgres() {
       } catch {}
     }
     console.log("Falha ao importar SQLite legado:", err?.message || err);
-    return false;
+    summary.reason = err?.code || err?.message || "legacy_import_failed";
+    return withSummary ? summary : false;
   }
 }
 

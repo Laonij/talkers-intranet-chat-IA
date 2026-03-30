@@ -4057,6 +4057,10 @@ body.intranet-sidebar-collapsed .intranet-nav-link-label {
   border-left:1px solid #e5e7eb;
 }
 
+.intranet-department-submenu-list[hidden]{
+  display:none;
+}
+
 .intranet-submenu-link{
   display:grid;
   grid-template-columns:auto 1fr;

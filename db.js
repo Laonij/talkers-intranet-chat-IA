@@ -3020,6 +3020,40 @@ async function migratePostgres() {
   await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS processing_state_json TEXT;");
   await pgPool.query("ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;");
   await pgPool.query("ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS hit_count INTEGER NOT NULL DEFAULT 0;");
+  const postgresAuditTimestampTables = [
+    "students",
+    "student_guardians",
+    "academic_programs",
+    "school_terms",
+    "classes",
+    "class_schedules",
+    "teacher_profiles",
+    "class_teachers",
+    "enrollments",
+    "sales_records",
+    "financial_contracts",
+    "financial_installments",
+    "class_sessions",
+    "attendance_records",
+  ];
+  for (const tableName of postgresAuditTimestampTables) {
+    await pgPool.query(`ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ`);
+    await pgPool.query(`ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`);
+    await pgPool.query(`UPDATE ${quoteIdent(tableName)} SET created_at = COALESCE(created_at, updated_at, CURRENT_TIMESTAMP) WHERE created_at IS NULL`);
+    await pgPool.query(`UPDATE ${quoteIdent(tableName)} SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL`);
+    await pgPool.query(`ALTER TABLE ${quoteIdent(tableName)} ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP`);
+    await pgPool.query(`ALTER TABLE ${quoteIdent(tableName)} ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP`);
+  }
+  const postgresChangedAtTables = [
+    "enrollment_class_history",
+    "enrollment_schedule_history",
+    "student_transfers",
+  ];
+  for (const tableName of postgresChangedAtTables) {
+    await pgPool.query(`ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN IF NOT EXISTS changed_at TIMESTAMPTZ`);
+    await pgPool.query(`UPDATE ${quoteIdent(tableName)} SET changed_at = COALESCE(changed_at, CURRENT_TIMESTAMP) WHERE changed_at IS NULL`);
+    await pgPool.query(`ALTER TABLE ${quoteIdent(tableName)} ALTER COLUMN changed_at SET DEFAULT CURRENT_TIMESTAMP`);
+  }
   await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS source_workbook TEXT;");
   await pgPool.query("ALTER TABLE student_guardians ADD COLUMN IF NOT EXISTS cpf TEXT;");
   await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS class_kind TEXT NOT NULL DEFAULT 'regular';");

@@ -16,18 +16,60 @@ const databaseLogger = createLogger("database");
 const renderDiskCandidates = ["/var/data", "/data"];
 const detectedRenderDiskDir = renderDiskCandidates.find((candidate) => fs.existsSync(candidate));
 const defaultDataDir = detectedRenderDiskDir || path.join(__dirname, "data");
+const fallbackTempDataDir = path.join(require("os").tmpdir(), "talkers-data");
 
-const DATA_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : defaultDataDir;
+function ensureDirWritable(targetPath) {
+  const safePath = path.resolve(String(targetPath || "").trim() || ".");
+  fs.mkdirSync(safePath, { recursive: true });
+  const probePath = path.join(safePath, ".write-test");
+  fs.writeFileSync(probePath, "ok");
+  fs.unlinkSync(probePath);
+  return safePath;
+}
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+function resolveWritableDataDir() {
+  const requestedPath = process.env.DATA_DIR
+    ? path.resolve(process.env.DATA_DIR)
+    : defaultDataDir;
+  const candidates = [
+    requestedPath,
+    defaultDataDir,
+    fallbackTempDataDir,
+    path.join(__dirname, "data"),
+  ];
 
-const uploadsDir = path.join(DATA_DIR, "uploads");
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+  let lastError = null;
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const resolved = ensureDirWritable(candidate);
+      return {
+        path: resolved,
+        fallbackUsed: resolved !== requestedPath,
+        requestedPath,
+        error: null,
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
 
-const kbDir = path.join(DATA_DIR, "kb");
-if (!fs.existsSync(kbDir)) fs.mkdirSync(kbDir, { recursive: true });
+  throw lastError || new Error("data_dir_unavailable");
+}
+
+const dataDirResolution = resolveWritableDataDir();
+const DATA_DIR = dataDirResolution.path;
+
+if (dataDirResolution.fallbackUsed) {
+  databaseLogger.warn("DATA_DIR configurado nao estava gravavel; fallback aplicado.", {
+    requested_path: dataDirResolution.requestedPath,
+    selected_path: DATA_DIR,
+    message: dataDirResolution.error?.message || null,
+  });
+}
+
+const uploadsDir = ensureDirWritable(path.join(DATA_DIR, "uploads"));
+const kbDir = ensureDirWritable(path.join(DATA_DIR, "kb"));
 
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const DATABASE_URL_PRESENT = Boolean(DATABASE_URL);

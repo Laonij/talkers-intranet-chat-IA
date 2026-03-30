@@ -1604,6 +1604,7 @@ async function migrateSqlite() {
       level_name TEXT,
       semester_label TEXT,
       age_group TEXT,
+      whatsapp_group_id INTEGER,
       capacity INTEGER,
       min_students INTEGER,
       status TEXT NOT NULL DEFAULT 'planejada',
@@ -1672,6 +1673,7 @@ async function migrateSqlite() {
       academic_program_id INTEGER,
       school_term_id INTEGER,
       class_id INTEGER,
+      whatsapp_group_id INTEGER,
       enrollment_number TEXT UNIQUE,
       enrollment_date TEXT,
       start_date TEXT,
@@ -1680,6 +1682,9 @@ async function migrateSqlite() {
       contract_status TEXT,
       payment_status TEXT,
       pedagogical_status TEXT,
+      learning_book TEXT,
+      grade_summary TEXT,
+      grade_notes TEXT,
       source_channel TEXT,
       source_notes TEXT,
       notes TEXT,
@@ -1810,8 +1815,11 @@ async function migrateSqlite() {
       installments_count INTEGER NOT NULL DEFAULT 0,
       first_due_date TEXT,
       billing_cycle_day INTEGER,
+      payment_method_preference TEXT,
       responsible_name TEXT,
       responsible_cpf TEXT,
+      contract_pdf_file_name TEXT,
+      contract_pdf_generated_at TEXT,
       notes TEXT,
       source_workbook TEXT,
       source_sheet TEXT,
@@ -1878,6 +1886,9 @@ async function migrateSqlite() {
   if (!classColumns.some((column) => column.name === "metadata_json")) {
     await execSqlite("ALTER TABLE classes ADD COLUMN metadata_json TEXT;");
   }
+  if (!classColumns.some((column) => column.name === "whatsapp_group_id")) {
+    await execSqlite("ALTER TABLE classes ADD COLUMN whatsapp_group_id INTEGER;");
+  }
 
   const enrollmentColumns = await allSqlite("PRAGMA table_info(enrollments)");
   if (!enrollmentColumns.some((column) => column.name === "source_workbook")) {
@@ -1885,6 +1896,29 @@ async function migrateSqlite() {
   }
   if (!enrollmentColumns.some((column) => column.name === "metadata_json")) {
     await execSqlite("ALTER TABLE enrollments ADD COLUMN metadata_json TEXT;");
+  }
+  if (!enrollmentColumns.some((column) => column.name === "learning_book")) {
+    await execSqlite("ALTER TABLE enrollments ADD COLUMN learning_book TEXT;");
+  }
+  if (!enrollmentColumns.some((column) => column.name === "grade_summary")) {
+    await execSqlite("ALTER TABLE enrollments ADD COLUMN grade_summary TEXT;");
+  }
+  if (!enrollmentColumns.some((column) => column.name === "grade_notes")) {
+    await execSqlite("ALTER TABLE enrollments ADD COLUMN grade_notes TEXT;");
+  }
+  if (!enrollmentColumns.some((column) => column.name === "whatsapp_group_id")) {
+    await execSqlite("ALTER TABLE enrollments ADD COLUMN whatsapp_group_id INTEGER;");
+  }
+
+  const contractColumns = await allSqlite("PRAGMA table_info(financial_contracts)");
+  if (!contractColumns.some((column) => column.name === "payment_method_preference")) {
+    await execSqlite("ALTER TABLE financial_contracts ADD COLUMN payment_method_preference TEXT;");
+  }
+  if (!contractColumns.some((column) => column.name === "contract_pdf_file_name")) {
+    await execSqlite("ALTER TABLE financial_contracts ADD COLUMN contract_pdf_file_name TEXT;");
+  }
+  if (!contractColumns.some((column) => column.name === "contract_pdf_generated_at")) {
+    await execSqlite("ALTER TABLE financial_contracts ADD COLUMN contract_pdf_generated_at TEXT;");
   }
 
   await execSqlite(`
@@ -2757,6 +2791,7 @@ async function migratePostgres() {
       level_name TEXT,
       semester_label TEXT,
       age_group TEXT,
+      whatsapp_group_id INTEGER,
       capacity INTEGER,
       min_students INTEGER,
       status TEXT NOT NULL DEFAULT 'planejada',
@@ -2825,6 +2860,7 @@ async function migratePostgres() {
       academic_program_id INTEGER,
       school_term_id INTEGER,
       class_id INTEGER,
+      whatsapp_group_id INTEGER,
       enrollment_number TEXT UNIQUE,
       enrollment_date DATE,
       start_date DATE,
@@ -2833,6 +2869,9 @@ async function migratePostgres() {
       contract_status TEXT,
       payment_status TEXT,
       pedagogical_status TEXT,
+      learning_book TEXT,
+      grade_summary TEXT,
+      grade_notes TEXT,
       source_channel TEXT,
       source_notes TEXT,
       notes TEXT,
@@ -2963,8 +3002,11 @@ async function migratePostgres() {
       installments_count INTEGER NOT NULL DEFAULT 0,
       first_due_date DATE,
       billing_cycle_day INTEGER,
+      payment_method_preference TEXT,
       responsible_name TEXT,
       responsible_cpf TEXT,
+      contract_pdf_file_name TEXT,
+      contract_pdf_generated_at TIMESTAMPTZ,
       notes TEXT,
       source_workbook TEXT,
       source_sheet TEXT,
@@ -3089,8 +3131,16 @@ async function migratePostgres() {
   await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS class_kind TEXT NOT NULL DEFAULT 'regular';");
   await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS source_workbook TEXT;");
   await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS metadata_json TEXT;");
+  await pgPool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS whatsapp_group_id INTEGER;");
   await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS source_workbook TEXT;");
   await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS metadata_json TEXT;");
+  await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS learning_book TEXT;");
+  await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS grade_summary TEXT;");
+  await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS grade_notes TEXT;");
+  await pgPool.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS whatsapp_group_id INTEGER;");
+  await pgPool.query("ALTER TABLE financial_contracts ADD COLUMN IF NOT EXISTS payment_method_preference TEXT;");
+  await pgPool.query("ALTER TABLE financial_contracts ADD COLUMN IF NOT EXISTS contract_pdf_file_name TEXT;");
+  await pgPool.query("ALTER TABLE financial_contracts ADD COLUMN IF NOT EXISTS contract_pdf_generated_at TIMESTAMPTZ;");
 
   await pgPool.query(`
     CREATE TABLE IF NOT EXISTS knowledge_processing_logs (

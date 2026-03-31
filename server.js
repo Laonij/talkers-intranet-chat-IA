@@ -3950,28 +3950,30 @@ async function getStudentHubStudentDetail(studentId, scope) {
   const detail = await getAcademicStudentDetail(studentId, { canViewAll: true, teacherUserId: null });
   if (!detail?.student) return null;
   const student = detail.student;
+  const commercialWhereClauses = ["sr.student_id=?"];
+  const commercialParams = [studentId];
+  if (student.full_name) {
+    commercialWhereClauses.push("lower(coalesce(sr.student_name, ''))=lower(?)");
+    commercialParams.push(student.full_name);
+  }
+  if (student.phone) {
+    commercialWhereClauses.push("lower(coalesce(sr.phone, ''))=lower(?)");
+    commercialParams.push(student.phone);
+  }
+  if (student.email) {
+    commercialWhereClauses.push("lower(coalesce(sr.contact_email, ''))=lower(?)");
+    commercialParams.push(student.email);
+  }
   const [commercialRows, contracts, timeline, classHistoryRows, scheduleHistoryRows, transferHistoryRows] = await Promise.all([
     all(
       `SELECT sr.*, ${buildResolvedLeadStageSql("sr")} AS resolved_lead_stage,
               COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
          FROM sales_records sr
          LEFT JOIN closers c ON c.id = sr.closer_id
-        WHERE sr.student_id=?
-           OR lower(coalesce(sr.student_name, ''))=lower(?)
-           OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.phone, ''))=lower(?))
-           OR (? IS NOT NULL AND ? <> '' AND lower(coalesce(sr.contact_email, ''))=lower(?))
+        WHERE ${commercialWhereClauses.join("\n           OR ")}
         ORDER BY datetime(coalesce(sr.converted_at, sr.closed_at, sr.updated_at, sr.created_at)) DESC, sr.id DESC
         LIMIT 20`,
-      [
-        studentId,
-        student.full_name || "",
-        student.phone || null,
-        student.phone || null,
-        student.phone || null,
-        student.email || null,
-        student.email || null,
-        student.email || null,
-      ]
+      commercialParams
     ),
     all(
       `SELECT fc.*, e.enrollment_number

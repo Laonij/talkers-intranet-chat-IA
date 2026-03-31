@@ -91,6 +91,7 @@ function getPostgresHost(connectionString = "") {
 }
 
 const POSTGRES_HOST = DB_CLIENT === "postgres" ? getPostgresHost(DATABASE_URL) : "";
+const IS_SUPABASE_POOLER = /pooler\.supabase\.com$/i.test(POSTGRES_HOST || "");
 const DB_RUNTIME_CONFIG = {
   requested_client: REQUESTED_DB_CLIENT || (DATABASE_URL_PRESENT ? "postgres" : "sqlite"),
   selected_client: DB_CLIENT,
@@ -98,6 +99,7 @@ const DB_RUNTIME_CONFIG = {
   sqlite_path: sqlitePath,
   data_dir: DATA_DIR,
   postgres_host: POSTGRES_HOST || null,
+  postgres_pool_max: DB_CLIENT === "postgres" ? resolvePostgresPoolMax() : null,
 };
 
 let sqliteDb = null;
@@ -108,6 +110,17 @@ function readPositiveIntEnv(name, fallback, minimum = 1) {
   const parsed = Number(process.env[name] || fallback);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(minimum, Math.floor(parsed));
+}
+
+function resolvePostgresPoolMax() {
+  const explicit = Number(process.env.PG_POOL_MAX || "");
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(1, Math.floor(explicit));
+  }
+  if (IS_SUPABASE_POOLER) {
+    return 4;
+  }
+  return 12;
 }
 
 if (DB_CLIENT === "sqlite") {
@@ -121,7 +134,7 @@ if (DB_CLIENT === "sqlite") {
   pgPool = new Pool({
     connectionString: DATABASE_URL,
     ssl: sslMode === "disable" ? false : { rejectUnauthorized: false },
-    max: readPositiveIntEnv("PG_POOL_MAX", 12),
+    max: resolvePostgresPoolMax(),
     idleTimeoutMillis: readPositiveIntEnv("PG_IDLE_TIMEOUT_MS", 30000, 1000),
     connectionTimeoutMillis: readPositiveIntEnv("PG_CONNECTION_TIMEOUT_MS", 10000, 1000),
     statement_timeout: readPositiveIntEnv("PG_STATEMENT_TIMEOUT_MS", 30000, 1000),

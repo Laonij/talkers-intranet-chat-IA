@@ -1,7 +1,0 @@
-DB_CLIENT: sqlite
-DATABASE_URL present: false
-Server running on port 10000
-Talkers IA rodando em http://localhost:10000
-Login: http://localhost:10000/login.html
-Banco ativo: sqlite
-Legacy migration completed

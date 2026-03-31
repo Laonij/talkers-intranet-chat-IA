@@ -15,6 +15,8 @@
         value: 20
       - key: DB_CLIENT
         value: postgres
+      # DATABASE_URL deve ser configurada no painel do Render como variavel secreta.
+      # Quando DATABASE_URL existir, o backend usa Postgres como banco principal.
       - key: DATA_DIR
         value: /var/data
       - key: INDEX_FOLDER

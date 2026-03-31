@@ -1,6 +1,7 @@
 ﻿const el = (id) => document.getElementById(id);
 
 const ICONS = {
+  home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
   graduation: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 9 9-4 9 4-9 4-9-4Z"/><path d="M7 10.8v3.7c0 .7 2.2 2.5 5 2.5s5-1.8 5-2.5v-3.7"/><path d="M21 10v4"/></svg>',
   briefcase: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6V4h6v2"/><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 12h18"/></svg>',
   'book-open': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19a2 2 0 0 1 2-2h14"/><path d="M6 3h14v18H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M12 7h4"/></svg>',
@@ -21,6 +22,56 @@ const ICONS = {
   insight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V18h8v-3.3A7 7 0 0 0 12 2Z"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>',
   general: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>',
+};
+
+const ICON_ALIASES = {
+  user: 'users',
+  settings: 'layers',
+  folder: 'layers',
+  file: 'document',
+  'file-text': 'document',
+  clock: 'calendar',
+  search: 'general',
+  bell: 'message',
+  mail: 'message',
+  'message-square': 'message',
+  phone: 'message',
+  lock: 'shield',
+  'credit-card': 'wallet',
+  'shopping-cart': 'briefcase',
+  'chart-bar': 'chart',
+  'chart-pie': 'chart',
+  database: 'layers',
+  server: 'workspace',
+  globe: 'general',
+  map: 'general',
+  'map-pin': 'target',
+  camera: 'general',
+  image: 'document',
+  video: 'workspace',
+  music: 'general',
+  play: 'general',
+  pause: 'general',
+  upload: 'general',
+  download: 'general',
+  trash: 'general',
+  edit: 'general',
+  plus: 'general',
+  minus: 'general',
+  check: 'general',
+  x: 'general',
+  star: 'sparkles',
+  heart: 'sparkles',
+  bookmark: 'document',
+  tag: 'briefcase',
+  flag: 'target',
+  award: 'sparkles',
+  building: 'briefcase',
+  school: 'graduation',
+  book: 'book-open',
+  clipboard: 'document',
+  list: 'general',
+  menu: 'general',
 };
 
 const i18n = () => window.TalkersI18n;
@@ -48,6 +99,69 @@ let salesState = {
   closers: [],
   selectedRecordId: null,
   canEditAll: false,
+  statusOptions: [],
+  ratingOptions: [],
+  restrictedScope: false,
+};
+const ACADEMIC_PEDAGOGICAL_VIEW_KEYS = ['academic-students', 'academic-enrollments', 'academic-classes', 'academic-schedules', 'academic-teachers', 'academic-attendance', 'academic-movements'];
+const ACADEMIC_TEACHER_VIEW_KEYS = ['teacher-classes', 'teacher-attendance', 'teacher-class-students'];
+const ACADEMIC_ALL_VIEW_KEYS = new Set([...ACADEMIC_PEDAGOGICAL_VIEW_KEYS, ...ACADEMIC_TEACHER_VIEW_KEYS]);
+const STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS = ['student-search', 'student-profile', 'student-history'];
+const STUDENT_HUB_COMMERCIAL_VIEW_KEYS = ['commercial-leads', 'commercial-negotiations', 'commercial-enrollment-conversion'];
+const STUDENT_HUB_FINANCIAL_VIEW_KEYS = ['financial-contracts', 'financial-installments', 'financial-receivables', 'financial-delinquency', 'financial-student-profile'];
+const STUDENT_HUB_ALL_VIEW_KEYS = new Set([...STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS, ...STUDENT_HUB_COMMERCIAL_VIEW_KEYS, ...STUDENT_HUB_FINANCIAL_VIEW_KEYS]);
+let academicState = {
+  enabled: false,
+  loading: false,
+  loaded: false,
+  error: '',
+  bootstrap: null,
+  viewKey: '',
+  selectedStudentId: null,
+  selectedEnrollmentId: null,
+  selectedClassId: null,
+  attendanceDate: '',
+  attendanceData: [],
+  notice: null,
+  studentDetail: null,
+  studentDetailLoading: false,
+  enrollmentDetail: null,
+  enrollmentDetailLoading: false,
+  classDetail: null,
+  classDetailLoading: false,
+  filters: {
+    search: '',
+    studentStatus: '',
+    enrollmentStatus: '',
+    classStatus: '',
+    language: '',
+    modality: '',
+    teacher: '',
+    termCode: '',
+  },
+};
+let studentHubState = {
+  enabled: false,
+  loading: false,
+  loaded: false,
+  error: '',
+  bootstrap: null,
+  viewKey: '',
+  detailKind: '',
+  detail: null,
+  detailLoading: false,
+  selectedStudentId: null,
+  selectedLeadId: null,
+  selectedContractId: null,
+  notice: null,
+  filters: {
+    search: '',
+    studentStatus: '',
+    leadStage: '',
+    contractStatus: '',
+    language: '',
+    modality: '',
+  },
 };
 let trainingState = null;
 let calendarState = {
@@ -131,7 +245,8 @@ let currentViewState = { key: 'home', departmentSlug: '', submenuSlug: '' };
 let expandedDepartmentSlugs = new Set();
 
 function renderIcon(name) {
-  return ICONS[name] || ICONS.general;
+  const normalizedName = String(name || '').trim().toLowerCase();
+  return ICONS[normalizedName] || ICONS[ICON_ALIASES[normalizedName]] || ICONS.general;
 }
 
 async function api(path, opts = {}) {
@@ -271,15 +386,15 @@ function syncSidebarButtons() {
 }
 
 function renderIntranetChrome() {
-  document.title = t('intranet.title');
+  document.title = 'Talkers Intranet';
   const brandTitle = el('intranetBrandTitle');
-  if (brandTitle) brandTitle.textContent = t('intranet.title');
+  if (brandTitle) brandTitle.textContent = 'Talkers Intranet';
   const brandSub = el('intranetBrandSub');
-  if (brandSub) brandSub.textContent = t('intranet.brandSub');
+  if (brandSub) brandSub.textContent = 'Ambiente corporativo interno';
   const topbarEyebrow = el('intranetTopbarEyebrow');
-  if (topbarEyebrow) topbarEyebrow.textContent = t('intranet.eyebrow');
+  if (topbarEyebrow) topbarEyebrow.textContent = 'Workspace corporativo';
   const heroBadge = el('intranetHeroBadge');
-  if (heroBadge) heroBadge.textContent = t('intranet.heroBadge');
+  if (heroBadge) heroBadge.textContent = 'Intranet corporativa';
   const overviewEyebrow = el('homeOverviewEyebrow');
   if (overviewEyebrow) overviewEyebrow.textContent = t('intranet.overviewEyebrow');
   const overviewTitle = el('homeOverviewTitle');
@@ -318,9 +433,14 @@ function renderIntranetChrome() {
   if (dashboardBreakdownTitle) dashboardBreakdownTitle.textContent = t('intranet.dashboardBreakdownTitle', {}, 'Visão por área');
   const dashboardHighlightsTitle = el('dashboardHighlightsTitle');
   if (dashboardHighlightsTitle) dashboardHighlightsTitle.textContent = t('intranet.dashboardHighlightsTitle', {}, 'Leituras e alertas');
-  document.querySelectorAll('.intranet-back-btn, .intranet-topbar-actions .btn[href="/index.html"]').forEach((node) => {
-    node.textContent = t('common.backToChat');
-  });
+  const sidebarLogoutBtn = el('sidebarLogoutBtn');
+  if (sidebarLogoutBtn) sidebarLogoutBtn.textContent = 'Sair';
+  const topbarLogoutBtn = el('topbarLogoutBtn');
+  if (topbarLogoutBtn) topbarLogoutBtn.textContent = 'Sair';
+  const sidebarAdminLink = el('sidebarAdminLink');
+  if (sidebarAdminLink) sidebarAdminLink.textContent = 'Admin';
+  const topbarAdminLink = el('topbarAdminLink');
+  if (topbarAdminLink) topbarAdminLink.textContent = 'Admin';
   const calendarSectionEyebrow = el('calendarSectionEyebrow');
   if (calendarSectionEyebrow) calendarSectionEyebrow.textContent = t('calendar.sectionEyebrow', {}, 'Planejamento interno');
   const calendarSectionTitle = el('calendarSectionTitle');
@@ -460,10 +580,8 @@ function renderIntranetChrome() {
     ['#calendar .intranet-section-head .intranet-section-title', t('intranet.nav.calendar')],
     ['#departments .intranet-section-head .intranet-section-eyebrow', t('intranet.routes.departmentsEyebrow', {}, 'Áreas de trabalho')],
     ['#departments .intranet-section-head .intranet-section-title', t('intranet.routes.departmentsTitle', {}, 'Departamentos')],
-    ['#documents .intranet-section-eyebrow', t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento')],
+    ['#documents .intranet-section-eyebrow', t('intranet.routes.documentsEyebrow', {}, 'Documentos internos')],
     ['#documents .intranet-section-title', t('intranet.routes.documentsTitle', {}, 'Documentos')],
-    ['#training .intranet-section-eyebrow', t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestão')],
-    ['#training .intranet-section-title', t('intranet.routes.trainingTitle', {}, 'Treinamento IA')],
     ['#communication .intranet-section-eyebrow', t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados')],
     ['#communication .intranet-section-title', t('intranet.routes.communicationTitle', {}, 'Comunicação')],
   ];
@@ -519,7 +637,10 @@ function readExpandedDepartmentPreference() {
   try {
     const raw = localStorage.getItem(DEPARTMENT_TREE_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.map((item) => String(item || '')) : []);
+    const items = Array.isArray(parsed)
+      ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    return new Set(items.slice(0, 1));
   } catch {
     return new Set();
   }
@@ -535,14 +656,43 @@ function getVisibleDepartments(intranet) {
   return sortAlphabetically(intranet?.departments || [], (item) => item?.name || item?.slug || '');
 }
 
+function getIntranetPermissionHints(intranet) {
+  return intranet?.permissions || {};
+}
+
 function getGlobalNavigationItems(intranet) {
+  const allowedGlobalViews = new Set((getIntranetPermissionHints(intranet).allowed_global_views || []).map((item) => String(item || '').trim()).filter(Boolean));
   const items = [
     { key: 'home', label: t('intranet.nav.home'), icon: 'workspace' },
     { key: 'dashboard', label: t('intranet.nav.dashboard', {}, 'Dashboard'), icon: 'insight' },
     { key: 'calendar', label: t('intranet.nav.calendar'), icon: 'calendar' },
     { key: 'sales', label: t('intranet.nav.sales'), icon: 'target', hidden: !Boolean(salesState?.enabled) },
   ];
-  return items.filter((item) => !item.hidden);
+  return items.filter((item) => !item.hidden && (!allowedGlobalViews.size || allowedGlobalViews.has(item.key)));
+}
+
+function getDefaultRoute(intranet) {
+  const globalItems = getGlobalNavigationItems(intranet);
+  if (globalItems.some((item) => item.key === 'home')) {
+    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+  }
+  if (globalItems.length) {
+    return { key: globalItems[0].key, departmentSlug: '', submenuSlug: '' };
+  }
+  const department = getVisibleDepartments(intranet)[0] || null;
+  if (!department) return { key: 'home', departmentSlug: '', submenuSlug: '' };
+  const submenu = (department.submenus || [])[0] || null;
+  if (String(submenu?.view_key || '').trim() === 'sales-post-sale') {
+    return { key: 'sales', departmentSlug: '', submenuSlug: '' };
+  }
+  return { key: 'department', departmentSlug: department.slug || '', submenuSlug: submenu?.slug || '' };
+}
+
+function resolveDepartmentSubmenuRoute(department, submenu) {
+  if (String(submenu?.view_key || '').trim() === 'sales-post-sale') {
+    return { key: 'sales', departmentSlug: '', submenuSlug: '' };
+  }
+  return { key: 'department', departmentSlug: department?.slug || '', submenuSlug: submenu?.slug || '' };
 }
 
 function getDepartmentRouteMeta(intranet, departmentSlug = '', submenuSlug = '') {
@@ -566,8 +716,7 @@ function getRouteMeta(route = {}, intranet) {
     modules: { title: t('intranet.routes.modulesTitle', {}, 'Módulos'), eyebrow: t('intranet.routes.modulesEyebrow', {}, 'Workspace') },
     calendar: { title: t('intranet.nav.calendar'), eyebrow: t('intranet.routes.calendarEyebrow', {}, 'Calendário corporativo') },
     departments: { title: t('intranet.routes.departmentsTitle', {}, 'Departamentos'), eyebrow: t('intranet.routes.departmentsEyebrow', {}, 'Áreas de trabalho') },
-    documents: { title: t('intranet.routes.documentsTitle', {}, 'Documentos'), eyebrow: t('intranet.routes.documentsEyebrow', {}, 'Base de conhecimento') },
-    training: { title: t('intranet.routes.trainingTitle', {}, 'Treinamento IA'), eyebrow: t('intranet.routes.trainingEyebrow', {}, 'Aprendizado e ingestao') },
+    documents: { title: t('intranet.routes.documentsTitle', {}, 'Documentos'), eyebrow: t('intranet.routes.documentsEyebrow', {}, 'Documentos internos') },
     communication: { title: t('intranet.routes.communicationTitle', {}, 'Comunicação'), eyebrow: t('intranet.routes.communicationEyebrow', {}, 'Avisos e comunicados') },
     sales: { title: t('intranet.nav.sales'), eyebrow: t('intranet.routes.salesEyebrow', {}, 'Operação comercial') },
   };
@@ -577,6 +726,7 @@ function getRouteMeta(route = {}, intranet) {
 
 function normalizeViewState(route = {}, intranet) {
   const visibleDepartments = getVisibleDepartments(intranet);
+  const defaultRoute = getDefaultRoute(intranet);
   const normalized = {
     key: String(route.key || 'home'),
     departmentSlug: String(route.departmentSlug || ''),
@@ -587,7 +737,7 @@ function normalizeViewState(route = {}, intranet) {
   const internalKeys = new Set();
   if (normalized.key === 'department') {
     const department = visibleDepartments.find((item) => item.slug === normalized.departmentSlug);
-    if (!department) return { key: 'home', departmentSlug: '', submenuSlug: '' };
+    if (!department) return defaultRoute;
     const submenu = normalized.submenuSlug
       ? (department.submenus || []).find((item) => item.slug === normalized.submenuSlug)
       : null;
@@ -599,11 +749,11 @@ function normalizeViewState(route = {}, intranet) {
   }
 
   if (normalized.key === 'sales' && !salesState.enabled) {
-    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+    return defaultRoute;
   }
 
   if (!globalKeys.has(normalized.key) && !internalKeys.has(normalized.key)) {
-    return { key: 'home', departmentSlug: '', submenuSlug: '' };
+    return defaultRoute;
   }
 
   return normalized;
@@ -614,7 +764,7 @@ function applyIntranetSnapshot(snapshot, options = {}) {
   const preserveRoute = options.preserveRoute !== false;
   const nextRoute = preserveRoute
     ? normalizeViewState(options.route || currentViewState, snapshot.intranet)
-    : normalizeViewState({ key: 'home', departmentSlug: '', submenuSlug: '' }, snapshot.intranet);
+    : getDefaultRoute(snapshot.intranet);
 
   bootstrapData = snapshot;
   allModuleItems = snapshot.intranet.modules || [];
@@ -696,11 +846,12 @@ function syncSidebarNavigation(intranet) {
 function toggleDepartmentExpanded(slug, forceValue = null) {
   const safeSlug = String(slug || '').trim();
   if (!safeSlug) return;
-  const shouldOpen = typeof forceValue === 'boolean' ? forceValue : !expandedDepartmentSlugs.has(safeSlug);
+  const isOpen = expandedDepartmentSlugs.has(safeSlug);
+  const shouldOpen = typeof forceValue === 'boolean' ? forceValue : !isOpen;
   if (shouldOpen) {
-    expandedDepartmentSlugs.add(safeSlug);
+    expandedDepartmentSlugs = new Set([safeSlug]);
   } else {
-    expandedDepartmentSlugs.delete(safeSlug);
+    expandedDepartmentSlugs = new Set();
   }
   writeExpandedDepartmentPreference();
   syncSidebarNavigation(bootstrapData?.intranet || {});
@@ -774,6 +925,16 @@ function renderSidebarUtility(intranet) {
   });
 }
 
+function renderIntranetUtilityActions(user) {
+  const isAdmin = user?.role === 'admin';
+  ['sidebarAdminLink', 'topbarAdminLink'].forEach((id) => {
+    const node = el(id);
+    if (!node) return;
+    node.hidden = !isAdmin;
+    node.href = '/admin.html';
+  });
+}
+
 function renderSidebar(user, intranet) {
   const visibleDepartments = getVisibleDepartments(intranet);
   el('intranetBrandSub').textContent = user.role === 'admin'
@@ -819,17 +980,18 @@ function renderSidebar(user, intranet) {
         `;
       toggle.onclick = () => {
         const slug = department.slug || '';
+        const hasSubmenus = submenus.length > 0;
         const isExpanded = expandedDepartmentSlugs.has(slug);
-        const isCurrentDepartment = currentViewState.key === 'department' && currentViewState.departmentSlug === slug;
 
         if (isExpanded) {
           toggleDepartmentExpanded(slug, false);
-          if (isCurrentDepartment) setActiveView('home');
           return;
         }
 
         toggleDepartmentExpanded(slug, true);
-        setActiveView('department', { departmentSlug: slug });
+        if (!hasSubmenus) {
+          setActiveView('department', { departmentSlug: slug });
+        }
       };
       group.appendChild(toggle);
 
@@ -850,7 +1012,8 @@ function renderSidebar(user, intranet) {
           `;
           button.onclick = () => {
             toggleDepartmentExpanded(department.slug || '', true);
-            setActiveView('department', { departmentSlug: department.slug || '', submenuSlug: submenu.slug || '' });
+            const route = resolveDepartmentSubmenuRoute(department, submenu);
+            setActiveView(route.key, route);
           };
           submenuList.appendChild(button);
         });
@@ -861,6 +1024,7 @@ function renderSidebar(user, intranet) {
   }
 
   renderSidebarUtility(intranet);
+  renderIntranetUtilityActions(user);
   syncSidebarNavigation(intranet);
 }
 
@@ -1387,6 +1551,18 @@ function isMarketingIndicatorWorkspace(department, submenu) {
 
 function isPedagogicalWhatsAppWorkspace(department, submenu) {
   return String(department?.slug || '') === 'pedagogico' && String(submenu?.slug || '') === 'whatsapp';
+}
+
+function isAcademicWorkspace(department, submenu) {
+  const viewKey = String(submenu?.view_key || '').trim();
+  if (!ACADEMIC_ALL_VIEW_KEYS.has(viewKey)) return false;
+  return ['pedagogico', 'professor'].includes(String(department?.slug || '').trim());
+}
+
+function isStudentHubWorkspace(department, submenu) {
+  const viewKey = String(submenu?.view_key || '').trim();
+  if (!STUDENT_HUB_ALL_VIEW_KEYS.has(viewKey)) return false;
+  return ['atendimento', 'comercial', 'financeiro'].includes(String(department?.slug || '').trim());
 }
 
 function getMarketingIndicatorTabs() {
@@ -2486,14 +2662,26 @@ function renderDepartmentWorkspace(intranet) {
   const isInfluencerWorkspace = isMarketingInfluencerWorkspace(department, submenu);
   const isIndicatorWorkspace = isMarketingIndicatorWorkspace(department, submenu);
   const isWhatsAppWorkspace = isPedagogicalWhatsAppWorkspace(department, submenu);
-  const isCustomWorkspace = isInfluencerWorkspace || isIndicatorWorkspace || isWhatsAppWorkspace;
+  const isAcademicCustomWorkspace = isAcademicWorkspace(department, submenu);
+  const isStudentHubCustomWorkspace = isStudentHubWorkspace(department, submenu);
+  const isCustomWorkspace = isInfluencerWorkspace || isIndicatorWorkspace || isWhatsAppWorkspace || isAcademicCustomWorkspace || isStudentHubCustomWorkspace;
   el('departmentWorkspaceDescription').textContent = isInfluencerWorkspace
     ? t('intranet.marketingInfluencer.workspaceDescription', {}, 'Cadastro, lançamentos, relatórios e análise da operação de influencers do Marketing.')
     : isIndicatorWorkspace
       ? t('intranet.marketingIndicator.description', {}, 'Entrada de dados em estilo planilha e acompanhamento dos indicadores que alimentam o Dashboard do Marketing.')
       : isWhatsAppWorkspace
         ? t('intranet.whatsapp.workspaceDescription', {}, 'Cadastro de grupos, campanhas pedagógicas, fila, histórico e diagnóstico de integração do WhatsApp.')
-      : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Área departamental da intranet.'));
+        : isAcademicCustomWorkspace
+          ? (String(department?.slug || '') === 'professor'
+              ? 'Gestão acadêmica do professor com turmas, alunos, aulas e frequência no escopo permitido.'
+              : 'Operação acadêmica com alunos, matrículas, turmas, horários, professores e movimentações escolares.')
+        : isStudentHubCustomWorkspace
+          ? (String(department?.slug || '') === 'financeiro'
+              ? 'Fluxo financeiro do aluno com contratos, parcelas, vencimentos, inadimplência e ficha financeira.'
+              : String(department?.slug || '') === 'comercial'
+                ? 'Fluxo comercial do lead até a matrícula, com conversão em aluno e criação da base financeira.'
+                : 'Busca rápida e ficha 360 do aluno com dados cadastrais, responsáveis, matrícula, comercial e financeiro.')
+        : (submenu?.description || department.description || t('intranet.departmentWorkspaceDescription', {}, 'Área departamental da intranet.'));
 
   const summary = el('departmentWorkspaceSummary');
   summary.innerHTML = '';
@@ -2516,6 +2704,18 @@ function renderDepartmentWorkspace(intranet) {
           { title: t('intranet.whatsapp.actions.groups', {}, 'Cadastro de grupos'), description: t('intranet.whatsapp.actions.groupsHint', {}, 'Base dos grupos pedagógicos'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
           { title: t('intranet.whatsapp.actions.campaigns', {}, 'Campanhas'), description: t('intranet.whatsapp.actions.campaignsHint', {}, 'Texto, imagem, link e intervalo'), badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
           { title: t('intranet.whatsapp.actions.queue', {}, 'Fila de envio'), description: t('intranet.whatsapp.actions.queueHint', {}, 'Status por grupo e execução'), badge: t('intranet.departmentSummary.detail', {}, 'Detalhe') },
+        ]
+      : isAcademicCustomWorkspace
+        ? [
+          { title: 'Dashboard acadêmico', description: String(department?.slug || '') === 'professor' ? 'Leitura rápida das turmas e aulas do professor.' : 'Indicadores operacionais do contexto escolar.', badge: t('intranet.departmentSummary.main', {}, 'Principal') },
+          { title: 'Listagens operacionais', description: String(department?.slug || '') === 'professor' ? 'Turmas, alunos e frequência dentro do escopo docente.' : 'Alunos, matrículas, turmas, horários e vínculos de professores.', badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+          { title: 'Movimentações e frequência', description: 'Históricos, chamadas e ações acadêmicas com rastreabilidade.', badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
+        ]
+      : isStudentHubCustomWorkspace
+        ? [
+          { title: 'Ficha 360 do aluno', description: 'Dados cadastrais, responsáveis, comercial, matrícula, financeiro e resumo pedagógico no mesmo fluxo.', badge: t('intranet.departmentSummary.main', {}, 'Principal') },
+          { title: 'Busca e operação', description: String(department?.slug || '') === 'comercial' ? 'Leads, negociações, conversão e acompanhamento comercial.' : (String(department?.slug || '') === 'financeiro' ? 'Contratos, parcelas, recebimentos e inadimplência.' : 'Pesquisa rápida por aluno, responsável, matrícula, CPF e contato.'), badge: t('intranet.departmentSummary.resources', {}, 'Recursos') },
+          { title: 'Ligação entre áreas', description: 'Fluxo contínuo entre comercial, atendimento, matrícula e financeiro sem duplicar cadastro.', badge: t('intranet.departmentSummary.flows', {}, 'Fluxos') },
         ]
     : [
       { title: t('intranet.departmentSummary.currentLevel', {}, 'Nível atual'), description: department.access_level || t('intranet.departments.collaborator', {}, 'colaborador'), badge: t('intranet.departmentSummary.permission', {}, 'Permissão') },
@@ -2546,7 +2746,10 @@ function renderDepartmentWorkspace(intranet) {
       card.type = 'button';
       card.className = `intranet-quick-card intranet-submenu-card${currentViewState.submenuSlug === item.slug ? ' is-active' : ''}`;
       card.innerHTML = `<div class="intranet-quick-title">${escapeHtml(item.title)}</div>`;
-      card.onclick = () => setActiveView('department', { departmentSlug: department.slug, submenuSlug: item.slug || '' });
+      card.onclick = () => {
+        const route = resolveDepartmentSubmenuRoute(department, item);
+        setActiveView(route.key, route);
+      };
       submenusWrap.appendChild(card);
     });
   }
@@ -2580,6 +2783,18 @@ function renderDepartmentWorkspace(intranet) {
       renderPedagogicalWhatsAppWorkspace();
       if (!whatsappState.bootstrap && !whatsappState.loading) {
         fetchPedagogicalWhatsAppBootstrap();
+      }
+    } else if (isAcademicCustomWorkspace) {
+      renderAcademicWorkspace();
+      const nextViewKey = String(submenu?.view_key || '').trim();
+      if (!academicState.bootstrap || academicState.viewKey !== nextViewKey || !academicState.loaded) {
+        fetchAcademicBootstrap({ viewKey: nextViewKey, preserveSelection: true });
+      }
+    } else if (isStudentHubCustomWorkspace) {
+      renderStudentHubWorkspace();
+      const nextViewKey = String(submenu?.view_key || '').trim();
+      if (!studentHubState.bootstrap || studentHubState.viewKey !== nextViewKey || !studentHubState.loaded) {
+        fetchStudentHubBootstrap({ viewKey: nextViewKey, preserveSelection: true });
       }
     }
     return;
@@ -3357,18 +3572,7 @@ function renderTrainingPanel(training = {}) {
 }
 
 async function fetchTrainingBootstrap() {
-  if (bootstrapData?.user?.role !== 'admin') {
-    setTrainingSectionVisible(false);
-    return;
-  }
-  try {
-    const data = await api('/api/intranet/training/bootstrap');
-    trainingState = data.training || null;
-    setTrainingSectionVisible(Boolean(trainingState));
-    if (trainingState) renderTrainingPanel(trainingState);
-  } catch (err) {
-    setTrainingSectionVisible(false);
-  }
+  setTrainingSectionVisible(false);
 }
 
 function getTodayDateKey() {
@@ -3955,6 +4159,38 @@ function setSalesSectionVisible(isVisible) {
   if (section) section.hidden = !isVisible;
 }
 
+function getSalesTodayKey() {
+  return salesState.summary?.today_key || new Date().toISOString().slice(0, 10);
+}
+
+function isSalesRecordDueToday(record) {
+  return Boolean(record?.next_action_date) && String(record.next_action_date).slice(0, 10) === getSalesTodayKey();
+}
+
+function isSalesRecordOverdue(record) {
+  return Boolean(record?.next_action_date)
+    && String(record.next_action_date).slice(0, 10) < getSalesTodayKey()
+    && String(record?.operational_status || '').trim().toLowerCase() !== 'realizado';
+}
+
+function buildSalesStatusChipClass(status = '') {
+  const safe = String(status || '').trim().toLowerCase();
+  if (safe === 'realizado') return 'is-success';
+  if (safe === 'sem retorno') return 'is-danger';
+  if (safe === 'reagendado') return 'is-warning';
+  if (safe === 'em andamento') return 'is-info';
+  if (safe === 'pendente') return 'is-warning';
+  return 'is-neutral';
+}
+
+function buildSalesRatingChipClass(rating = '') {
+  const safe = String(rating || '').trim().toLowerCase();
+  if (safe === 'otimo') return 'is-success';
+  if (safe === 'bom') return 'is-warning';
+  if (safe === 'ruim') return 'is-danger';
+  return 'is-neutral';
+}
+
 function renderSalesSummary(sales) {
   const summaryWrap = el('salesSummaryCards');
   const closerWrap = el('salesCloserCards');
@@ -3966,15 +4202,16 @@ function renderSalesSummary(sales) {
     return;
   }
 
-  const statusEntries = Object.entries(sales.summary?.statuses || {});
   const cards = [
-    { label: 'Matrículas', value: Number(sales.summary?.total || 0) },
-    { label: 'Closers ativas', value: Array.isArray(sales.closers) ? sales.closers.length : 0 },
-    { label: 'Escopo atual', value: sales.can_view_all ? 'Geral' : 'Minha carteira' },
+    { label: 'Total', value: Number(sales.summary?.total || 0) },
+    { label: 'Pendentes', value: Number(sales.summary?.pending_total || 0) },
+    { label: 'Realizados', value: Number(sales.summary?.realized_total || 0) },
+    { label: 'Ação hoje', value: Number(sales.summary?.action_today_total || 0) },
+    { label: 'Atrasados', value: Number(sales.summary?.overdue_total || 0) },
+    { label: 'Sem observação', value: Number(sales.summary?.no_observation_total || 0) },
+    { label: 'Ótimos', value: Number(sales.summary?.ratings?.otimo || 0) },
+    { label: 'Ruins', value: Number(sales.summary?.ratings?.ruim || 0) },
   ];
-  statusEntries.slice(0, 3).forEach(([status, total]) => {
-    cards.push({ label: status, value: Number(total || 0) });
-  });
 
   cards.forEach((card) => {
     const item = document.createElement('article');
@@ -3987,7 +4224,11 @@ function renderSalesSummary(sales) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'intranet-sales-closer';
-    card.innerHTML = `<strong>${escapeHtml(closer.closer_name || 'Sem closer')}</strong><span>${Number(closer.total || 0)} matricula(s)</span>`;
+    card.innerHTML = `
+      <strong>${escapeHtml(closer.closer_name || 'Sem closer')}</strong>
+      <span>${Number(closer.total || 0)} registro(s) · ${Number(closer.realized_total || 0)} realizado(s)</span>
+      <span>${Number(closer.overdue_total || 0)} atrasado(s)</span>
+    `;
     card.onclick = () => {
       el('salesCloserFilter').value = closer.closer_id ? String(closer.closer_id) : '';
       fetchSalesRecords();
@@ -3999,8 +4240,12 @@ function renderSalesSummary(sales) {
 function renderSalesFilterOptions(sales) {
   const closerSelect = el('salesCloserFilter');
   const statusSelect = el('salesStatusFilter');
+  const languageSelect = el('salesLanguageFilter');
+  const modalitySelect = el('salesModalityFilter');
   const previousCloser = closerSelect.value;
   const previousStatus = statusSelect.value;
+  const previousLanguage = languageSelect?.value || '';
+  const previousModality = modalitySelect?.value || '';
 
   closerSelect.innerHTML = '<option value="">Todas</option>';
   (sales.closers || []).forEach((closer) => {
@@ -4014,14 +4259,43 @@ function renderSalesFilterOptions(sales) {
   }
 
   statusSelect.innerHTML = '<option value="">Todos</option>';
-  Object.entries(sales.summary?.statuses || {}).forEach(([status, total]) => {
+  (sales.status_options || Object.keys(sales.summary?.statuses || {})).forEach((status) => {
     const option = document.createElement('option');
     option.value = status;
+    const total = Number((sales.summary?.statuses || {})[status] || 0);
     option.textContent = `${status} (${total})`;
     statusSelect.appendChild(option);
   });
   if (Array.from(statusSelect.options).some((option) => option.value === previousStatus)) {
     statusSelect.value = previousStatus;
+  }
+
+  if (languageSelect) {
+    const languages = Array.from(new Set((sales.records || []).map((item) => String(item.language || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, currentLocale()));
+    languageSelect.innerHTML = '<option value="">Todos</option>';
+    languages.forEach((language) => {
+      const option = document.createElement('option');
+      option.value = language;
+      option.textContent = language;
+      languageSelect.appendChild(option);
+    });
+    if (Array.from(languageSelect.options).some((option) => option.value === previousLanguage)) {
+      languageSelect.value = previousLanguage;
+    }
+  }
+
+  if (modalitySelect) {
+    const modalities = Array.from(new Set((sales.records || []).map((item) => String(item.modality || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, currentLocale()));
+    modalitySelect.innerHTML = '<option value="">Todas</option>';
+    modalities.forEach((modality) => {
+      const option = document.createElement('option');
+      option.value = modality;
+      option.textContent = modality;
+      modalitySelect.appendChild(option);
+    });
+    if (Array.from(modalitySelect.options).some((option) => option.value === previousModality)) {
+      modalitySelect.value = previousModality;
+    }
   }
 }
 
@@ -4038,8 +4312,8 @@ function renderSalesDetail(record, history = []) {
   const form = el('salesDetailForm');
 
   if (!record) {
-    title.textContent = 'Selecione uma matrícula';
-    meta.innerHTML = '<div class="intranet-empty-card">Clique em um registro para ver detalhes, histórico e editar os campos permitidos.</div>';
+    title.textContent = 'Selecione um registro';
+    meta.innerHTML = '<div class="intranet-empty-card">Clique em um pós-venda para ver detalhes, histórico e editar os campos permitidos.</div>';
     historyWrap.innerHTML = '';
     form.reset();
     Array.from(form.elements).forEach((field) => {
@@ -4049,19 +4323,25 @@ function renderSalesDetail(record, history = []) {
     return;
   }
 
-  title.textContent = record.student_name || 'Matrícula';
+  title.textContent = record.student_name || 'Pós-venda';
   meta.innerHTML = [
-    ['Curso', record.course_name || '-'],
+    ['Telefone', record.phone || '-'],
+    ['Curso / nível', record.level_name || record.course_name || '-'],
+    ['Professor', record.teacher_name || '-'],
     ['Closer', record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer'],
+    ['Semestre', record.semester_label || '-'],
     ['Data', record.sale_date || '-'],
     ['Status', record.operational_status || 'Novo'],
     ['Origem', record.media_source || record.source_workbook || '-'],
     ['Idioma', record.language || '-'],
+    ['Próxima ação', record.next_action || '-'],
   ].map(([label, value]) => `<div class="intranet-sales-meta-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`).join('');
 
   el('salesOperationalStatus').value = record.operational_status || '';
+  el('salesPostSaleRating').value = record.post_sale_rating || '';
   el('salesNextAction').value = record.next_action || '';
   el('salesNextActionDate').value = record.next_action_date || '';
+  el('salesFeedback').value = record.feedback || '';
   el('salesFollowUpNotes').value = record.follow_up_notes || '';
   el('salesObservations').value = record.observations || '';
 
@@ -4091,28 +4371,40 @@ function renderSalesRecordsGrid() {
   wrap.innerHTML = '';
 
   if (!salesState.records.length) {
-    wrap.innerHTML = '<div class="intranet-empty-card">Nenhuma matricula encontrada para os filtros atuais.</div>';
+    wrap.innerHTML = '<div class="intranet-empty-card">Nenhum registro de pós-venda encontrado para os filtros atuais.</div>';
     renderSalesDetail(null, []);
     return;
   }
 
   salesState.records.forEach((record) => {
     const card = document.createElement('article');
-    card.className = 'intranet-sales-record';
+    card.className = `intranet-sales-record${isSalesRecordOverdue(record) ? ' is-urgent' : ''}${isSalesRecordDueToday(record) ? ' is-today' : ''}`;
     if (Number(record.id) === Number(salesState.selectedRecordId || 0)) {
       card.style.borderColor = '#bbf7d0';
       card.style.boxShadow = '0 18px 32px rgba(15,23,42,.08)';
     }
+    const feedbackPreview = String(record.feedback || record.follow_up_notes || record.observations || '').trim();
     card.innerHTML = `
       <div class="intranet-sales-record-head">
         <div>
           <h4>${escapeHtml(record.student_name || 'Sem nome')}</h4>
-          <div class="small muted">${escapeHtml(record.course_name || '-')}</div>
+          <div class="small muted">${escapeHtml(record.level_name || record.course_name || '-')}</div>
         </div>
-        <span class="intranet-chip">${escapeHtml(record.operational_status || 'Novo')}</span>
+        <span class="intranet-chip ${buildSalesStatusChipClass(record.operational_status)}">${escapeHtml(record.operational_status || 'Novo')}</span>
       </div>
-      <div class="small muted">${escapeHtml(record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer')}</div>
-      <div class="small muted">${escapeHtml(record.sale_date || '-')} - ${escapeHtml(record.media_source || record.source_workbook || '-')}</div>
+      <div class="intranet-sales-record-grid">
+        <div><strong>Telefone</strong><span>${escapeHtml(record.phone || '-')}</span></div>
+        <div><strong>Idioma</strong><span>${escapeHtml(record.language || '-')}</span></div>
+        <div><strong>Semestre</strong><span>${escapeHtml(record.semester_label || '-')}</span></div>
+        <div><strong>Closer</strong><span>${escapeHtml(record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer')}</span></div>
+        <div><strong>Próxima ação</strong><span>${escapeHtml(record.next_action || '-')}</span></div>
+        <div><strong>Data</strong><span>${escapeHtml(record.next_action_date || record.sale_date || '-')}</span></div>
+      </div>
+      <div class="intranet-sales-record-feedback">${escapeHtml(feedbackPreview || 'Sem feedback registrado')}</div>
+      <div class="intranet-sales-record-foot">
+        <span class="intranet-chip ${buildSalesRatingChipClass(record.post_sale_rating)}">${escapeHtml(record.post_sale_rating || 'sem avaliação')}</span>
+        <span class="small muted">${escapeHtml(record.updated_at ? `Atualizado em ${formatDate(record.updated_at)}` : 'Sem atualização recente')}</span>
+      </div>
     `;
     card.onclick = () => selectSalesRecord(record.id);
     wrap.appendChild(card);
@@ -4134,14 +4426,25 @@ async function fetchSalesRecords() {
   const params = new URLSearchParams();
   const closerId = el('salesCloserFilter').value;
   const status = el('salesStatusFilter').value;
+  const language = el('salesLanguageFilter')?.value || '';
+  const modality = el('salesModalityFilter')?.value || '';
   const search = el('salesSearchInput').value.trim();
   if (closerId) params.set('closer_id', closerId);
   if (status) params.set('status', status);
+  if (language) params.set('language', language);
+  if (modality) params.set('modality', modality);
   if (search) params.set('search', search);
   params.set('limit', '80');
 
-  const { records } = await api(`/api/intranet/sales/records?${params.toString()}`);
+  const { records, summary } = await api(`/api/intranet/sales/records?${params.toString()}`);
+  salesState.summary = summary || salesState.summary;
   salesState.records = records || [];
+  renderSalesSummary({
+    enabled: salesState.enabled,
+    can_view_all: salesState.canEditAll,
+    closers: salesState.closers,
+    summary: salesState.summary,
+  });
   if (!salesState.records.some((item) => Number(item.id) === Number(salesState.selectedRecordId || 0))) {
     salesState.selectedRecordId = salesState.records[0]?.id || null;
   }
@@ -4160,6 +4463,9 @@ function hydrateSalesWorkspace(intranet) {
     closers: Array.isArray(sales.closers) ? sales.closers : [],
     selectedRecordId: sales.records?.[0]?.id || null,
     canEditAll: Boolean(sales.can_edit_all),
+    statusOptions: Array.isArray(sales.status_options) ? sales.status_options : [],
+    ratingOptions: Array.isArray(sales.rating_options) ? sales.rating_options : [],
+    restrictedScope: Boolean(sales.restricted_scope),
   };
 
   setSalesSectionVisible(salesState.enabled);
@@ -4167,6 +4473,1561 @@ function hydrateSalesWorkspace(intranet) {
   renderSalesSummary(sales);
   renderSalesFilterOptions(sales);
   renderSalesRecordsGrid();
+}
+
+function formatCurrency(value) {
+  const safe = Number(value || 0);
+  return new Intl.NumberFormat(currentLocale(), {
+    style: 'currency',
+    currency: 'BRL',
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(safe) ? safe : 0);
+}
+
+function getStudentHubBootstrap() {
+  return studentHubState.bootstrap || {};
+}
+
+function getStudentHubCurrentViewKey() {
+  const intranet = bootstrapData?.intranet || {};
+  const { submenu } = getDepartmentRouteMeta(intranet, currentViewState.departmentSlug, currentViewState.submenuSlug);
+  const viewKey = String(submenu?.view_key || studentHubState.viewKey || '').trim();
+  return STUDENT_HUB_ALL_VIEW_KEYS.has(viewKey) ? viewKey : (studentHubState.viewKey || 'student-search');
+}
+
+function getStudentHubArea(viewKey = '') {
+  const safe = String(viewKey || '').trim();
+  if (STUDENT_HUB_COMMERCIAL_VIEW_KEYS.includes(safe)) return 'commercial';
+  if (STUDENT_HUB_FINANCIAL_VIEW_KEYS.includes(safe)) return 'financial';
+  return 'attendance';
+}
+
+function isStudentHubFinancialProfileView(viewKey = '') {
+  return String(viewKey || '').trim() === 'financial-student-profile';
+}
+
+function setStudentHubNotice(type = '', text = '') {
+  const safeText = String(text || '').trim();
+  studentHubState.notice = safeText ? { type: type || 'info', text: safeText } : null;
+}
+
+async function selectStudentHubStudent(studentId) {
+  const safeId = Number(studentId || 0) || null;
+  studentHubState.selectedStudentId = safeId;
+  studentHubState.detailKind = safeId ? 'student' : '';
+  studentHubState.detail = null;
+  studentHubState.detailLoading = Boolean(safeId);
+  renderStudentHubWorkspace();
+  if (!safeId) return;
+  try {
+    studentHubState.detail = await api(`/api/intranet/student-hub/students/${safeId}?view_key=${encodeURIComponent(getStudentHubCurrentViewKey())}`);
+    studentHubState.detailKind = 'student';
+  } catch (err) {
+    studentHubState.detail = { error: err.message || 'Não foi possível carregar a ficha do aluno.' };
+    studentHubState.detailKind = 'student';
+  } finally {
+    studentHubState.detailLoading = false;
+    renderStudentHubWorkspace();
+  }
+}
+
+async function selectStudentHubLead(leadId) {
+  const safeId = Number(leadId || 0) || null;
+  studentHubState.selectedLeadId = safeId;
+  studentHubState.detailKind = safeId ? 'lead' : '';
+  studentHubState.detail = null;
+  studentHubState.detailLoading = Boolean(safeId);
+  renderStudentHubWorkspace();
+  if (!safeId) return;
+  try {
+    studentHubState.detail = await api(`/api/intranet/student-hub/leads/${safeId}?view_key=${encodeURIComponent(getStudentHubCurrentViewKey())}`);
+    studentHubState.detailKind = 'lead';
+  } catch (err) {
+    studentHubState.detail = { error: err.message || 'Não foi possível carregar o lead.' };
+    studentHubState.detailKind = 'lead';
+  } finally {
+    studentHubState.detailLoading = false;
+    renderStudentHubWorkspace();
+  }
+}
+
+async function selectStudentHubContract(contractId) {
+  const safeId = Number(contractId || 0) || null;
+  studentHubState.selectedContractId = safeId;
+  studentHubState.detailKind = safeId ? 'contract' : '';
+  studentHubState.detail = null;
+  studentHubState.detailLoading = Boolean(safeId);
+  renderStudentHubWorkspace();
+  if (!safeId) return;
+  try {
+    studentHubState.detail = await api(`/api/intranet/student-hub/contracts/${safeId}?view_key=${encodeURIComponent(getStudentHubCurrentViewKey())}`);
+    studentHubState.detailKind = 'contract';
+  } catch (err) {
+    studentHubState.detail = { error: err.message || 'Não foi possível carregar o contrato.' };
+    studentHubState.detailKind = 'contract';
+  } finally {
+    studentHubState.detailLoading = false;
+    renderStudentHubWorkspace();
+  }
+}
+
+async function fetchStudentHubBootstrap(options = {}) {
+  studentHubState.loading = true;
+  studentHubState.error = '';
+  studentHubState.viewKey = String(options.viewKey || studentHubState.viewKey || getStudentHubCurrentViewKey()).trim() || 'student-search';
+  renderStudentHubWorkspace();
+  try {
+    const params = new URLSearchParams();
+    params.set('view_key', studentHubState.viewKey);
+    params.set('limit', '60');
+    if (studentHubState.filters.search) params.set('search', studentHubState.filters.search);
+    if (studentHubState.filters.studentStatus) params.set('student_status', studentHubState.filters.studentStatus);
+    if (studentHubState.filters.leadStage) params.set('lead_stage', studentHubState.filters.leadStage);
+    if (studentHubState.filters.contractStatus) params.set('contract_status', studentHubState.filters.contractStatus);
+    if (studentHubState.filters.language) params.set('language', studentHubState.filters.language);
+    if (studentHubState.filters.modality) params.set('modality', studentHubState.filters.modality);
+    const { student_hub } = await api(`/api/intranet/student-hub/bootstrap?${params.toString()}`);
+    studentHubState.bootstrap = student_hub || {};
+    studentHubState.enabled = Boolean(student_hub?.enabled);
+    studentHubState.loaded = true;
+    studentHubState.loading = false;
+    const area = getStudentHubArea(studentHubState.viewKey);
+    if (area === 'commercial') {
+      const targetId = options.preserveSelection ? studentHubState.selectedLeadId : null;
+      const fallbackId = (student_hub?.leads || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.leads?.[0]?.id || null;
+      if (fallbackId) {
+        await selectStudentHubLead(fallbackId);
+      } else {
+        studentHubState.selectedLeadId = null;
+        studentHubState.detailKind = '';
+        studentHubState.detail = null;
+        renderStudentHubWorkspace();
+      }
+      return;
+    }
+    if (area === 'financial') {
+      if (isStudentHubFinancialProfileView(studentHubState.viewKey)) {
+        const targetId = options.preserveSelection ? studentHubState.selectedStudentId : null;
+        const fallbackId = (student_hub?.students || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.students?.[0]?.id || null;
+        if (fallbackId) {
+          await selectStudentHubStudent(fallbackId);
+        } else {
+          studentHubState.selectedStudentId = null;
+          studentHubState.detailKind = '';
+          studentHubState.detail = null;
+          renderStudentHubWorkspace();
+        }
+      } else {
+        const targetId = options.preserveSelection ? studentHubState.selectedContractId : null;
+        const fallbackId = (student_hub?.contracts || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.contracts?.[0]?.id || null;
+        if (fallbackId) {
+          await selectStudentHubContract(fallbackId);
+        } else {
+          studentHubState.selectedContractId = null;
+          studentHubState.detailKind = '';
+          studentHubState.detail = null;
+          renderStudentHubWorkspace();
+        }
+      }
+      return;
+    }
+    const targetId = options.preserveSelection ? studentHubState.selectedStudentId : null;
+    const fallbackId = (student_hub?.students || []).find((item) => Number(item.id) === Number(targetId || 0))?.id || student_hub?.students?.[0]?.id || null;
+    if (fallbackId) {
+      await selectStudentHubStudent(fallbackId);
+    } else {
+      studentHubState.selectedStudentId = null;
+      studentHubState.detailKind = '';
+      studentHubState.detail = null;
+      renderStudentHubWorkspace();
+    }
+  } catch (err) {
+    studentHubState.loading = false;
+    studentHubState.loaded = true;
+    studentHubState.error = err.message || 'Não foi possível carregar o fluxo do aluno.';
+    renderStudentHubWorkspace();
+  }
+}
+
+function getStudentHubTone(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (['ativo', 'matriculado', 'convertido', 'fechado', 'signed', 'active', 'paid', 'completed'].includes(safe)) return 'is-success';
+  if (['perdido', 'cancelled', 'cancelado', 'desistente', 'inadimplente'].includes(safe)) return 'is-danger';
+  if (['negociacao', 'pending', 'draft', 'overdue', 'aguardando turma', 'trancado'].includes(safe)) return 'is-warning';
+  if (['lead', 'em andamento', 'in_progress', 'negotiated'].includes(safe)) return 'is-info';
+  return 'is-neutral';
+}
+
+function buildStudentHubInfoGrid(items = []) {
+  return `
+    <div class="intranet-sales-meta">
+      ${items.map(([label, value]) => `
+        <div class="intranet-sales-meta-item">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(value || '-')}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function formatStudentHubDateInputValue(value = '') {
+  const safe = String(value || '').trim();
+  if (!safe) return '';
+  return safe.slice(0, 10);
+}
+
+function buildStudentHubHistoryList(items = [], renderer, emptyMessage = 'Sem histórico.') {
+  if (!Array.isArray(items) || !items.length) {
+    return `<div class="intranet-empty-card">${escapeHtml(emptyMessage)}</div>`;
+  }
+  return items.map((item) => renderer(item)).join('');
+}
+
+function buildStudentHubSummaryCards(summary = {}, area = 'attendance', viewKey = '') {
+  const cards = area === 'commercial'
+    ? [
+        ['Leads', formatInteger(summary.total || 0)],
+        ['Negociação', formatInteger(summary.negotiation_total || 0)],
+        ['Convertidos', formatInteger(summary.converted_total || 0)],
+        ['Sem vínculo', formatInteger(summary.unlinked_total || 0)],
+      ]
+    : area === 'financial'
+      ? (isStudentHubFinancialProfileView(viewKey)
+          ? [
+              ['Alunos', formatInteger(summary.total || 0)],
+              ['Com contrato', formatInteger(summary.active_total || 0)],
+              ['Sem responsável', formatInteger(summary.pending_contracts || 0)],
+              ['Com atraso', formatInteger(summary.overdue_contracts || 0)],
+            ]
+          : [
+              ['Contratos', formatInteger(summary.total || 0)],
+              ['Ativos', formatInteger(summary.active_total || 0)],
+              ['Pendentes', formatInteger(summary.pending_contracts || 0)],
+              ['Atrasados', formatInteger(summary.overdue_contracts || 0)],
+            ])
+      : [
+          ['Alunos', formatInteger(summary.total || 0)],
+          ['Ativos', formatInteger(summary.active_total || 0)],
+          ['Sem responsável', formatInteger(summary.no_guardian_total || 0)],
+          ['Com atraso', formatInteger(summary.overdue_students || 0)],
+        ];
+  return `<div class="intranet-sales-summary">${cards.map(([label, value]) => `<article class="intranet-sales-card"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join('')}</div>`;
+}
+
+function buildStudentHubStudentDetailMarkup(detail = {}) {
+  const student = detail.student || {};
+  const latestCommercial = detail.commercial?.latest_record || {};
+  const commercialRecords = Array.isArray(detail.commercial?.records) ? detail.commercial.records.slice(0, 5) : [];
+  const enrollment = detail.enrollment_summary || {};
+  const financialSummary = detail.financial?.summary || {};
+  const primaryContract = detail.financial?.primary_contract || {};
+  const primaryContractSummary = primaryContract.summary || {};
+  const pedagogical = detail.pedagogical || {};
+  const statusSummary = pedagogical.status_summary || {};
+  const pedagogicalStatusLabel = [
+    statusSummary.trancado_total ? `${statusSummary.trancado_total} trancado(s)` : '',
+    statusSummary.inactive_total ? `${statusSummary.inactive_total} desist./cancel.` : '',
+    statusSummary.waiting_total ? `${statusSummary.waiting_total} aguardando turma` : '',
+  ].filter(Boolean).join(' · ') || '-';
+  return `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Ficha 360</div><h4 class="intranet-section-title">${escapeHtml(student.full_name || 'Aluno')}</h4></div></div>
+      ${buildStudentHubInfoGrid([
+        ['CPF', student.cpf || '-'],
+        ['RG', student.rg || '-'],
+        ['Nascimento', formatAcademicDate(student.birth_date || '')],
+        ['Idade', student.age ? `${student.age} ano(s)` : '-'],
+        ['Telefone', student.phone || student.whatsapp || '-'],
+        ['E-mail', student.email || '-'],
+        ['Status', student.status || '-'],
+        ['Endereço', [student.address_street, student.address_number, student.address_neighborhood].filter(Boolean).join(', ') || '-'],
+        ['Cidade/UF', [student.address_city, student.address_state].filter(Boolean).join(' / ') || '-'],
+      ])}
+    </section>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Responsáveis</h5>
+        ${(detail.guardians || []).length ? detail.guardians.map((guardian) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(guardian.name || 'Responsável')}</strong>
+            <div>${escapeHtml([guardian.relation_type, guardian.cpf].filter(Boolean).join(' · ') || '-')}</div>
+            <div>${escapeHtml([guardian.phone || guardian.whatsapp, guardian.email].filter(Boolean).join(' · ') || '-')}</div>
+            <div class="small muted">${escapeHtml([guardian.financial_responsible ? 'Financeiro' : '', guardian.pedagogical_responsible ? 'Pedagógico' : ''].filter(Boolean).join(' · ') || 'Sem marcação')}</div>
+          </div>
+        `).join('') : `<div class="intranet-empty-card">Nenhum responsável cadastrado.</div>`}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Comercial</h5>
+        ${latestCommercial?.id ? `${buildStudentHubInfoGrid([
+          ['Origem', latestCommercial.media_source || '-'],
+          ['Closer / atendente', latestCommercial.closer_name || latestCommercial.attendant_name || '-'],
+          ['Status', latestCommercial.resolved_lead_stage || latestCommercial.operational_status || '-'],
+          ['Primeiro contato', formatAcademicDate(latestCommercial.first_contact_at || latestCommercial.sale_date || '')],
+          ['Fechamento', formatAcademicDate(latestCommercial.closed_at || latestCommercial.converted_at || '')],
+          ['Objetivo', latestCommercial.interest_goal || '-'],
+          ['Negociação', latestCommercial.negotiation_notes || latestCommercial.feedback || '-'],
+          ['Idioma', latestCommercial.language || '-'],
+          ['Semestre', latestCommercial.semester_label || '-'],
+          ['Observações', latestCommercial.observations || latestCommercial.feedback || '-'],
+        ])}
+        <div class="small muted" style="margin-top:12px;">Histórico comercial recente</div>
+        ${buildStudentHubHistoryList(commercialRecords, (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.resolved_lead_stage || item.lead_stage || 'Lead')}</strong>
+            <div>${escapeHtml([item.media_source, item.language, item.modality].filter(Boolean).join(' · ') || '-')}</div>
+            <div class="small muted">${escapeHtml([item.closer_name || item.attendant_name, formatAcademicDateTime(item.closed_at || item.first_contact_at || item.updated_at || '')].filter(Boolean).join(' · '))}</div>
+          </div>
+        `, 'Sem histórico comercial recente.')}` : `<div class="intranet-empty-card">Nenhum lead/comercial vinculado ainda.</div>`}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Matrícula</h5>
+        ${buildStudentHubInfoGrid([
+          ['Número', enrollment.enrollment_number || '-'],
+          ['Idioma', enrollment.language || '-'],
+          ['Programa', enrollment.program_name || '-'],
+          ['Nível/Livro', enrollment.level_name || '-'],
+          ['Modalidade', enrollment.modality || '-'],
+          ['Semestre', enrollment.school_term_code || enrollment.semester_label || '-'],
+          ['Status', enrollment.enrollment_status || '-'],
+        ])}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Financeiro</h5>
+        ${buildStudentHubInfoGrid([
+          ['Contrato principal', primaryContract.contract_number || '-'],
+          ['Status do contrato', primaryContract.contract_status || '-'],
+          ['Responsável financeiro', primaryContract.responsible_name || '-'],
+          ['Parcelas', String(financialSummary.installments_total || 0)],
+          ['Pendentes', String(financialSummary.pending_total || 0)],
+          ['Atrasadas', String(financialSummary.overdue_total || 0)],
+          ['Pagas', String(financialSummary.paid_total || 0)],
+          ['Valor total', formatCurrency(financialSummary.amount_total || 0)],
+        ])}
+        ${primaryContract.id ? `<div class="small muted">Contrato selecionado: ${escapeHtml(primaryContract.contract_number || '-')} · ${escapeHtml(String(primaryContractSummary.total || 0))} parcela(s)</div>` : ''}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Pedagógico</h5>
+        ${buildStudentHubInfoGrid([
+          ['Turma atual', pedagogical.current_class_name || '-'],
+          ['Professor atual', (pedagogical.current_teacher_names || []).join(', ') || '-'],
+          ['Horário atual', (pedagogical.current_schedule_labels || []).join(' / ') || '-'],
+          ['Status acadêmico', pedagogical.current_status || '-'],
+          ['Trilha especial', (pedagogical.special_track_labels || []).join(', ') || '-'],
+          ['Histórico acadêmico', pedagogicalStatusLabel],
+        ])}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Timeline</h5>
+        ${buildStudentHubHistoryList(detail.timeline || [], (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.title || item.event_type || 'Evento')}</strong>
+            <div>${escapeHtml(item.description || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.created_at || ''))} · ${escapeHtml(item.actor_name || 'Sistema')}</div>
+          </div>
+        `, 'Sem histórico operacional ainda.')}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Histórico de turma</h5>
+        ${buildStudentHubHistoryList(pedagogical.class_history || [], (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.reason || 'Troca de turma')}</strong>
+            <div>${escapeHtml(item.old_class_name || '-')} -> ${escapeHtml(item.new_class_name || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at || ''))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div>
+          </div>
+        `, 'Sem histórico de turma.')}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Histórico de horário</h5>
+        ${buildStudentHubHistoryList(pedagogical.schedule_history || [], (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(item.reason || 'Mudança de horário')}</strong>
+            <div>${escapeHtml(item.old_class_name || '-')} -> ${escapeHtml(item.new_class_name || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at || ''))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div>
+          </div>
+        `, 'Sem histórico de horário.')}
+      </article>
+    </div>
+    <div class="academic-class-columns">
+      <article class="academic-history-panel">
+        <h5>Movimentações acadêmicas</h5>
+        ${buildStudentHubHistoryList(pedagogical.transfer_history || [], (item) => `
+          <div class="intranet-sales-history-item">
+            <strong>${escapeHtml(formatAcademicMovementTypeLabel(item.transfer_type || item.movement_type || 'movimentacao'))}</strong>
+            <div>${escapeHtml(item.reason || item.notes || '-')}</div>
+            <div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at || ''))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div>
+          </div>
+        `, 'Sem movimentações acadêmicas.')}
+      </article>
+      <article class="academic-history-panel">
+        <h5>Resumo financeiro</h5>
+        ${buildStudentHubInfoGrid([
+          ['Responsável financeiro', primaryContract.responsible_name || '-'],
+          ['CPF responsável', primaryContract.responsible_cpf || '-'],
+          ['1º vencimento', formatAcademicDate(primaryContract.first_due_date || '')],
+          ['Parcelas do contrato', String(primaryContractSummary.total || 0)],
+          ['Atrasadas', String(primaryContractSummary.overdue_total || 0)],
+          ['Pendentes', String(primaryContractSummary.pending_total || 0)],
+        ])}
+      </article>
+    </div>
+  `;
+}
+
+function buildStudentHubLeadDetailMarkup(detail = {}, options = {}) {
+  const record = detail.record || {};
+  const classes = options.classes || [];
+  const terms = options.terms || [];
+  const leadId = record.id || '';
+  return `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Comercial</div><h4 class="intranet-section-title">${escapeHtml(record.student_name || 'Novo lead')}</h4></div></div>
+      <form id="studentHubLeadForm" class="academic-form">
+        <input type="hidden" id="studentHubLeadId" value="${escapeHtml(leadId)}" />
+        <div class="academic-form-grid">
+          <div><label>Nome do lead</label><input id="studentHubLeadStudentName" value="${escapeHtml(record.student_name || '')}" /></div>
+          <div><label>Telefone</label><input id="studentHubLeadPhone" value="${escapeHtml(record.phone || '')}" /></div>
+          <div><label>E-mail</label><input id="studentHubLeadEmail" value="${escapeHtml(record.contact_email || '')}" /></div>
+          <div><label>Idioma</label><input id="studentHubLeadLanguage" value="${escapeHtml(record.language || '')}" /></div>
+          <div><label>Modalidade</label><input id="studentHubLeadModality" value="${escapeHtml(record.modality || '')}" /></div>
+          <div><label>Semestre</label><input id="studentHubLeadSemester" value="${escapeHtml(record.semester_label || '')}" /></div>
+          <div><label>Curso/Programa</label><input id="studentHubLeadCourse" value="${escapeHtml(record.course_name || '')}" /></div>
+          <div><label>Nível/Livro</label><input id="studentHubLeadLevel" value="${escapeHtml(record.level_name || '')}" /></div>
+          <div><label>Atendente</label><input id="studentHubLeadAttendant" value="${escapeHtml(record.attendant_name || '')}" /></div>
+          <div><label>Closer</label><input id="studentHubLeadCloser" value="${escapeHtml(record.closer_name || record.closer_original || '')}" /></div>
+          <div><label>Origem</label><input id="studentHubLeadSource" value="${escapeHtml(record.media_source || '')}" /></div>
+          <div><label>Objetivo</label><input id="studentHubLeadGoal" value="${escapeHtml(record.interest_goal || '')}" /></div>
+          <div><label>Status da negociação</label><select id="studentHubLeadStage">${(options.leadStages || []).map((item) => `<option value="${escapeHtml(item)}"${item === (record.resolved_lead_stage || 'lead') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+          <div><label>Data</label><input id="studentHubLeadDate" type="date" value="${escapeHtml(record.sale_date || '')}" /></div>
+          <div><label>Primeiro contato</label><input id="studentHubLeadFirstContactAt" type="date" value="${escapeHtml(formatStudentHubDateInputValue(record.first_contact_at || record.sale_date || ''))}" /></div>
+          <div><label>Fechamento</label><input id="studentHubLeadClosedAt" type="date" value="${escapeHtml(formatStudentHubDateInputValue(record.closed_at || record.converted_at || ''))}" /></div>
+          <div><label>Perda em</label><input id="studentHubLeadLostAt" type="date" value="${escapeHtml(formatStudentHubDateInputValue(record.lost_at || ''))}" /></div>
+          <div><label>Motivo da perda</label><input id="studentHubLeadLostReason" value="${escapeHtml(record.lost_reason || '')}" /></div>
+          <div class="academic-grid-span"><label>Negociação</label><textarea id="studentHubLeadNegotiationNotes" rows="2">${escapeHtml(record.negotiation_notes || '')}</textarea></div>
+          <div class="academic-grid-span"><label>Observações</label><textarea id="studentHubLeadObservations" rows="3">${escapeHtml(record.observations || record.feedback || '')}</textarea></div>
+        </div>
+        <div class="academic-form-actions"><button class="btn primary" type="submit">Salvar lead</button>${leadId ? '' : '<span class="small muted">Use este formulário para iniciar o fluxo comercial.</span>'}</div>
+      </form>
+    </section>
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Conversão</div><h5 class="intranet-section-title">Converter em aluno</h5></div></div>
+      <form id="studentHubLeadConversionForm" class="academic-form">
+        <input type="hidden" id="studentHubConversionLeadId" value="${escapeHtml(leadId)}" />
+        <div class="academic-form-grid">
+          <div><label>Nome do aluno</label><input id="studentHubConversionStudentName" value="${escapeHtml(record.student_name || '')}" /></div>
+          <div><label>CPF do aluno</label><input id="studentHubConversionStudentCpf" value="${escapeHtml(detail.linked_student?.student?.cpf || '')}" /></div>
+          <div><label>E-mail do aluno</label><input id="studentHubConversionStudentEmail" value="${escapeHtml(detail.linked_student?.student?.email || record.contact_email || '')}" /></div>
+          <div><label>Responsável</label><input id="studentHubConversionGuardianName" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.name || '')}" /></div>
+          <div><label>CPF responsável</label><input id="studentHubConversionGuardianCpf" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.cpf || '')}" /></div>
+          <div><label>Telefone responsável</label><input id="studentHubConversionGuardianPhone" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.phone || detail.linked_student?.guardians?.[0]?.whatsapp || '')}" /></div>
+          <div><label>E-mail responsável</label><input id="studentHubConversionGuardianEmail" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.email || '')}" /></div>
+          <div><label>Relação</label><input id="studentHubConversionGuardianRelation" value="${escapeHtml(detail.linked_student?.guardians?.[0]?.relation_type || 'responsavel')}" /></div>
+          <div><label>Termo letivo</label><select id="studentHubConversionTerm">${terms.map((item) => `<option value="${escapeHtml(item.code || '')}"${String(item.code || '') === String(record.semester_label || '') ? ' selected' : ''}>${escapeHtml(item.code || item.name || '')}</option>`).join('')}</select></div>
+          <div><label>Turma</label><select id="studentHubConversionClassId"><option value="">Aguardando turma</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select></div>
+          <div><label>Início</label><input id="studentHubConversionStartDate" type="date" value="${escapeHtml(record.sale_date || '')}" /></div>
+          <div><label>Valor do contrato</label><input id="studentHubConversionContractAmount" value="" placeholder="Ex.: 1200,00" /></div>
+          <div><label>Qtd. parcelas</label><input id="studentHubConversionInstallments" type="number" min="0" value="0" /></div>
+          <div><label>1º vencimento</label><input id="studentHubConversionFirstDueDate" type="date" value="" /></div>
+        </div>
+        <div class="academic-form-actions"><button class="btn primary" type="submit"${leadId ? '' : ' disabled'}>Converter lead</button></div>
+      </form>
+      ${detail.linked_student?.student?.id ? `<div class="small muted">Este lead já possui aluno vinculado.</div>` : ''}
+    </section>
+    <article class="academic-history-panel">
+      <h5>Histórico comercial</h5>
+      ${(detail.history || []).length ? detail.history.map((item) => `
+        <div class="intranet-sales-history-item">
+          <strong>${escapeHtml(item.action || 'Atualização')}</strong>
+          <div>${escapeHtml(item.field_name || '')}${item.old_value || item.new_value ? `: ${escapeHtml(item.old_value || '-')} -> ${escapeHtml(item.new_value || '-')}` : ''}</div>
+          <div class="small muted">${escapeHtml(formatAcademicDateTime(item.created_at || ''))} · ${escapeHtml(item.actor_name || 'Sistema')}</div>
+        </div>
+      `).join('') : `<div class="intranet-empty-card">Sem histórico comercial ainda.</div>`}
+    </article>
+  `;
+}
+
+function buildStudentHubContractDetailMarkup(detail = {}, options = {}) {
+  const contract = detail.contract || {};
+  const installments = detail.installments || [];
+  return `
+    <section class="workspace-section-panel">
+      <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Financeiro</div><h4 class="intranet-section-title">${escapeHtml(contract.contract_number || 'Contrato')}</h4></div></div>
+      <form id="studentHubContractForm" class="academic-form">
+        <input type="hidden" id="studentHubContractId" value="${escapeHtml(contract.id || '')}" />
+        <div class="academic-form-grid">
+          <div><label>Aluno</label><input value="${escapeHtml(contract.student_name || '')}" disabled /></div>
+          <div><label>Número do contrato</label><input id="studentHubContractNumber" value="${escapeHtml(contract.contract_number || '')}" /></div>
+          <div><label>Status</label><select id="studentHubContractStatus">${(options.contractStatuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === (contract.contract_status || 'draft') ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+          <div><label>Responsável</label><input id="studentHubContractResponsibleName" value="${escapeHtml(contract.responsible_name || '')}" /></div>
+          <div><label>CPF responsável</label><input id="studentHubContractResponsibleCpf" value="${escapeHtml(contract.responsible_cpf || '')}" /></div>
+          <div><label>Valor total</label><input id="studentHubContractAmount" value="${escapeHtml(contract.total_amount || '')}" /></div>
+          <div><label>Qtd. parcelas</label><input id="studentHubContractInstallmentsCount" type="number" min="0" value="${escapeHtml(contract.installments_count || 0)}" /></div>
+          <div><label>1º vencimento</label><input id="studentHubContractFirstDueDate" type="date" value="${escapeHtml(contract.first_due_date || '')}" /></div>
+          <div class="academic-grid-span"><label>Observações</label><textarea id="studentHubContractNotes" rows="3">${escapeHtml(contract.notes || '')}</textarea></div>
+        </div>
+        <div class="academic-form-actions"><button class="btn primary" type="submit">Salvar contrato</button></div>
+      </form>
+    </section>
+    <article class="academic-history-panel">
+      <h5>Parcelas</h5>
+      ${installments.length ? installments.map((item) => `
+        <div class="academic-schedule-row" data-student-hub-installment-row="${escapeHtml(item.id)}" style="grid-template-columns:1fr 1fr 1fr 1.2fr 1.4fr auto;">
+          <input data-installment-field="due_date" type="date" value="${escapeHtml(item.due_date || '')}" />
+          <input data-installment-field="amount" value="${escapeHtml(item.amount || '')}" />
+          <select data-installment-field="status">${(options.installmentStatuses || []).map((status) => `<option value="${escapeHtml(status)}"${status === (item.effective_status || item.status) ? ' selected' : ''}>${escapeHtml(status)}</option>`).join('')}</select>
+          <input data-installment-field="reference_label" value="${escapeHtml(item.reference_label || `Parcela ${item.installment_number}`)}" />
+          <input data-installment-field="notes" value="${escapeHtml(item.notes || '')}" placeholder="Observações" />
+          <button class="btn" type="button" data-save-installment="${escapeHtml(item.id)}">Salvar</button>
+        </div>
+      `).join('') : `<div class="intranet-empty-card">Nenhuma parcela cadastrada ainda.</div>`}
+    </article>
+    ${detail.student?.student?.id ? `<article class="academic-history-panel"><h5>Ficha financeira resumida</h5>${buildStudentHubInfoGrid([
+      ['Aluno', detail.student.student.full_name || '-'],
+      ['CPF', detail.student.student.cpf || '-'],
+      ['Matrícula', detail.contract?.enrollment_number || detail.student.enrollment_summary?.enrollment_number || '-'],
+      ['Turma', detail.student.pedagogical?.current_class_name || '-'],
+      ['Status acadêmico', detail.student.pedagogical?.current_status || '-'],
+    ])}</article>` : ''}
+  `;
+}
+
+async function submitStudentHubLeadForm() {
+  const leadId = Number(el('studentHubLeadId')?.value || 0) || null;
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    student_name: el('studentHubLeadStudentName')?.value || '',
+    phone: el('studentHubLeadPhone')?.value || '',
+    contact_email: el('studentHubLeadEmail')?.value || '',
+    language: el('studentHubLeadLanguage')?.value || '',
+    modality: el('studentHubLeadModality')?.value || '',
+    semester_label: el('studentHubLeadSemester')?.value || '',
+    course_name: el('studentHubLeadCourse')?.value || '',
+    level_name: el('studentHubLeadLevel')?.value || '',
+    attendant_name: el('studentHubLeadAttendant')?.value || '',
+    closer_name: el('studentHubLeadCloser')?.value || '',
+    media_source: el('studentHubLeadSource')?.value || '',
+    interest_goal: el('studentHubLeadGoal')?.value || '',
+    negotiation_notes: el('studentHubLeadNegotiationNotes')?.value || '',
+    lead_stage: el('studentHubLeadStage')?.value || 'lead',
+    sale_date: el('studentHubLeadDate')?.value || '',
+    first_contact_at: el('studentHubLeadFirstContactAt')?.value || '',
+    closed_at: el('studentHubLeadClosedAt')?.value || '',
+    lost_at: el('studentHubLeadLostAt')?.value || '',
+    lost_reason: el('studentHubLeadLostReason')?.value || '',
+    observations: el('studentHubLeadObservations')?.value || '',
+  };
+  if (leadId) {
+    const response = await api(`/api/intranet/student-hub/leads/${leadId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    studentHubState.selectedLeadId = Number(response?.lead?.record?.id || leadId) || leadId;
+    setStudentHubNotice('success', 'Lead atualizado.');
+  } else {
+    const response = await api('/api/intranet/student-hub/leads', { method: 'POST', body: JSON.stringify(payload) });
+    studentHubState.selectedLeadId = Number(response?.lead?.record?.id || 0) || null;
+    setStudentHubNotice('success', 'Lead criado.');
+  }
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+async function submitStudentHubLeadConversionForm() {
+  const leadId = Number(el('studentHubConversionLeadId')?.value || 0) || null;
+  if (!leadId) return;
+  const guardianName = el('studentHubConversionGuardianName')?.value?.trim() || '';
+  const guardianCpf = el('studentHubConversionGuardianCpf')?.value || '';
+  const guardianPhone = el('studentHubConversionGuardianPhone')?.value || '';
+  const guardianEmail = el('studentHubConversionGuardianEmail')?.value || '';
+  const guardianRelation = el('studentHubConversionGuardianRelation')?.value || 'responsavel';
+  const classId = Number(el('studentHubConversionClassId')?.value || 0) || null;
+  const installmentsCount = Number(el('studentHubConversionInstallments')?.value || 0) || 0;
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    student: {
+      full_name: el('studentHubConversionStudentName')?.value || '',
+      cpf: el('studentHubConversionStudentCpf')?.value || '',
+      email: el('studentHubConversionStudentEmail')?.value || '',
+      phone: el('studentHubLeadPhone')?.value || '',
+      whatsapp: el('studentHubLeadPhone')?.value || '',
+      notes: el('studentHubLeadObservations')?.value || '',
+    },
+    guardians: guardianName ? [{
+      name: guardianName,
+      relation_type: guardianRelation,
+      cpf: guardianCpf,
+      phone: guardianPhone,
+      whatsapp: guardianPhone,
+      email: guardianEmail,
+      financial_responsible: true,
+      pedagogical_responsible: true,
+      receives_notifications: true,
+    }] : [],
+    enrollment: {
+      school_term_code: el('studentHubConversionTerm')?.value || '',
+      class_id: classId,
+      start_date: el('studentHubConversionStartDate')?.value || '',
+      enrollment_status: classId ? 'matriculado' : 'aguardando turma',
+      language: el('studentHubLeadLanguage')?.value || '',
+      program_name: el('studentHubLeadCourse')?.value || '',
+      level_name: el('studentHubLeadLevel')?.value || '',
+      modality: el('studentHubLeadModality')?.value || '',
+      semester_label: el('studentHubLeadSemester')?.value || '',
+      source_channel: el('studentHubLeadSource')?.value || 'comercial',
+      source_notes: el('studentHubLeadNegotiationNotes')?.value || '',
+      notes: el('studentHubLeadObservations')?.value || '',
+    },
+    contract: {
+      total_amount: el('studentHubConversionContractAmount')?.value || '',
+      installments_count: installmentsCount,
+      first_due_date: el('studentHubConversionFirstDueDate')?.value || '',
+      contract_status: 'draft',
+      responsible_name: guardianName || '',
+      responsible_cpf: guardianCpf,
+      notes: `Contrato criado a partir da lead ${leadId}.`,
+    },
+  };
+  await api(`/api/intranet/student-hub/leads/${leadId}/convert`, { method: 'POST', body: JSON.stringify(payload) });
+  setStudentHubNotice('success', 'Lead convertido em aluno.');
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+async function submitStudentHubContractForm() {
+  const contractId = Number(el('studentHubContractId')?.value || 0) || null;
+  if (!contractId) return;
+  const existing = studentHubState.detail?.contract || {};
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    id: contractId,
+    student_id: existing.student_id,
+    enrollment_id: existing.enrollment_id,
+    sales_record_id: existing.sales_record_id,
+    responsible_guardian_id: existing.responsible_guardian_id,
+    contract_number: el('studentHubContractNumber')?.value || '',
+    contract_status: el('studentHubContractStatus')?.value || 'draft',
+    responsible_name: el('studentHubContractResponsibleName')?.value || '',
+    responsible_cpf: el('studentHubContractResponsibleCpf')?.value || '',
+    total_amount: el('studentHubContractAmount')?.value || '',
+    installments_count: Number(el('studentHubContractInstallmentsCount')?.value || 0) || 0,
+    first_due_date: el('studentHubContractFirstDueDate')?.value || '',
+    notes: el('studentHubContractNotes')?.value || '',
+  };
+  await api(`/api/intranet/student-hub/contracts/${contractId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  setStudentHubNotice('success', 'Contrato atualizado.');
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+async function submitStudentHubInstallmentUpdate(installmentId) {
+  const row = document.querySelector(`[data-student-hub-installment-row="${installmentId}"]`);
+  if (!row) return;
+  const payload = {
+    view_key: getStudentHubCurrentViewKey(),
+    due_date: row.querySelector('[data-installment-field="due_date"]')?.value || '',
+    amount: row.querySelector('[data-installment-field="amount"]')?.value || '',
+    status: row.querySelector('[data-installment-field="status"]')?.value || 'pending',
+    reference_label: row.querySelector('[data-installment-field="reference_label"]')?.value || '',
+    notes: row.querySelector('[data-installment-field="notes"]')?.value || '',
+  };
+  await api(`/api/intranet/student-hub/installments/${installmentId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  setStudentHubNotice('success', 'Parcela atualizada.');
+  await fetchStudentHubBootstrap({ viewKey: getStudentHubCurrentViewKey(), preserveSelection: true });
+}
+
+function renderStudentHubWorkspace() {
+  const customWrap = el('departmentWorkspaceCustom');
+  if (!customWrap || customWrap.hidden) return;
+  const bootstrap = getStudentHubBootstrap();
+  const viewKey = getStudentHubCurrentViewKey();
+  studentHubState.viewKey = viewKey;
+  const area = getStudentHubArea(viewKey);
+  const isFinancialProfile = isStudentHubFinancialProfileView(viewKey);
+
+  if (studentHubState.loading && !bootstrap.enabled) {
+    customWrap.innerHTML = '<div class="intranet-empty-card">Carregando fluxo do aluno...</div>';
+    return;
+  }
+  if (studentHubState.error && !bootstrap.enabled) {
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(studentHubState.error)}</div>`;
+    return;
+  }
+
+  const noticeMarkup = studentHubState.notice?.text
+    ? `<div class="workspace-inline-notice is-${escapeHtml(studentHubState.notice.type || 'info')}"><span>${escapeHtml(studentHubState.notice.text)}</span><button class="btn workspace-inline-notice-close" type="button" id="btnDismissStudentHubNotice">${renderIcon('chevron')}</button></div>`
+    : '';
+  const filtersMarkup = area === 'commercial'
+    ? `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Nome, telefone, idioma, atendente..." /></div>
+        <div><label>Etapa</label><select id="studentHubLeadStageFilter"><option value="">Todas</option>${(bootstrap.options?.lead_stage_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.leadStage ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div><label>Idioma</label><select id="studentHubLanguageFilter"><option value="">Todos</option>${(bootstrap.options?.languages || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.language ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div><label>Modalidade</label><select id="studentHubModalityFilter"><option value="">Todas</option>${(bootstrap.options?.modalities || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.modality ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button><button class="btn primary" type="button" id="btnNewStudentHubLead">Novo lead</button></div>
+      </div>`
+    : area === 'financial' && !isFinancialProfile
+      ? `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Aluno, contrato ou responsável..." /></div>
+        <div><label>Status do contrato</label><select id="studentHubContractStatusFilter"><option value="">Todos</option>${(bootstrap.options?.contract_status_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.contractStatus ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button></div>
+      </div>`
+      : area === 'financial'
+        ? `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Aluno, CPF, matrícula, responsável ou contrato..." /></div>
+        <div><label>Status do aluno</label><select id="studentHubStudentStatusFilter"><option value="">Todos</option>${(bootstrap.options?.student_status_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.studentStatus ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button></div>
+      </div>`
+      : `
+      <div class="academic-filter-grid">
+        <div><label>Busca</label><input id="studentHubSearchInput" value="${escapeHtml(studentHubState.filters.search || '')}" placeholder="Nome, CPF, responsável, telefone, e-mail ou matrícula..." /></div>
+        <div><label>Status</label><select id="studentHubStudentStatusFilter"><option value="">Todos</option>${(bootstrap.options?.student_status_options || []).map((item) => `<option value="${escapeHtml(item)}"${item === studentHubState.filters.studentStatus ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+        <div class="academic-grid-span"><button class="btn" type="button" id="btnRefreshStudentHub">Atualizar</button></div>
+      </div>`;
+
+  const recordsMarkup = area === 'commercial'
+    ? ((bootstrap.leads || []).length ? (bootstrap.leads || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedLeadId || 0) ? ' is-active' : ''}" data-student-hub-lead="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.student_name || 'Lead')}</h4><div class="small muted">${escapeHtml(item.language || '-')} · ${escapeHtml(item.modality || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.resolved_lead_stage)}">${escapeHtml(item.resolved_lead_stage || 'lead')}</span></div>
+          <div class="small muted">${escapeHtml(item.phone || item.contact_email || '-')}</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum lead encontrado.</div>')
+    : area === 'financial' && !isFinancialProfile
+      ? ((bootstrap.contracts || []).length ? (bootstrap.contracts || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedContractId || 0) ? ' is-active' : ''}" data-student-hub-contract="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.student_name || 'Contrato')}</h4><div class="small muted">${escapeHtml(item.contract_number || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.contract_status)}">${escapeHtml(item.contract_status || 'draft')}</span></div>
+          <div class="small muted">${escapeHtml(formatCurrency(item.total_amount || 0))} · ${escapeHtml(String(item.overdue_total || 0))} atraso(s)</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum contrato encontrado.</div>')
+      : area === 'financial'
+        ? ((bootstrap.students || []).length ? (bootstrap.students || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedStudentId || 0) ? ' is-active' : ''}" data-student-hub-student="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.full_name || 'Aluno')}</h4><div class="small muted">${escapeHtml(item.current_class_name || item.current_language || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.status || item.current_enrollment_status)}">${escapeHtml(item.status || item.current_enrollment_status || 'ativo')}</span></div>
+          <div class="small muted">${escapeHtml(String(item.contracts_total || 0))} contrato(s) · ${escapeHtml(String(item.overdue_installments || 0))} parcela(s) em atraso</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum aluno encontrado.</div>')
+      : ((bootstrap.students || []).length ? (bootstrap.students || []).map((item) => `
+        <article class="academic-record${Number(item.id) === Number(studentHubState.selectedStudentId || 0) ? ' is-active' : ''}" data-student-hub-student="${escapeHtml(item.id)}">
+          <div class="academic-record-head"><div><h4>${escapeHtml(item.full_name || 'Aluno')}</h4><div class="small muted">${escapeHtml(item.current_class_name || item.current_language || '-')}</div></div><span class="intranet-chip ${getStudentHubTone(item.status || item.current_enrollment_status)}">${escapeHtml(item.status || item.current_enrollment_status || 'ativo')}</span></div>
+          <div class="small muted">${escapeHtml(item.phone || item.email || '-')}</div>
+        </article>`).join('') : '<div class="intranet-empty-card">Nenhum aluno encontrado.</div>');
+
+  let detailMarkup = '<div class="intranet-empty-card">Selecione um item da lista para ver os detalhes.</div>';
+  if (studentHubState.detailLoading) {
+    detailMarkup = '<div class="small muted">Carregando detalhes...</div>';
+  } else if (studentHubState.detail?.error) {
+    detailMarkup = `<div class="intranet-empty-card">${escapeHtml(studentHubState.detail.error)}</div>`;
+  } else if (area === 'commercial') {
+    detailMarkup = buildStudentHubLeadDetailMarkup(studentHubState.detail || {}, {
+      leadStages: bootstrap.options?.lead_stage_options || [],
+      classes: bootstrap.options?.classes || [],
+      terms: bootstrap.options?.terms || [],
+    });
+  } else if (area === 'financial' && !isFinancialProfile) {
+    detailMarkup = buildStudentHubContractDetailMarkup(studentHubState.detail || {}, {
+      contractStatuses: bootstrap.options?.contract_status_options || [],
+      installmentStatuses: bootstrap.options?.installment_status_options || [],
+    });
+  } else if (studentHubState.detail) {
+    detailMarkup = buildStudentHubStudentDetailMarkup(studentHubState.detail || {});
+  }
+
+  customWrap.innerHTML = `
+    ${noticeMarkup}
+    ${buildStudentHubSummaryCards(bootstrap.summary || {}, area, viewKey)}
+    ${filtersMarkup}
+    <div class="academic-layout">
+      <div class="academic-list-panel">${recordsMarkup}</div>
+      <div class="academic-detail-panel">${detailMarkup}</div>
+    </div>
+  `;
+
+  el('btnDismissStudentHubNotice')?.addEventListener('click', () => { setStudentHubNotice('', ''); renderStudentHubWorkspace(); });
+  el('btnRefreshStudentHub')?.addEventListener('click', async () => {
+    studentHubState.filters.search = el('studentHubSearchInput')?.value?.trim() || '';
+    studentHubState.filters.studentStatus = el('studentHubStudentStatusFilter')?.value || '';
+    studentHubState.filters.leadStage = el('studentHubLeadStageFilter')?.value || '';
+    studentHubState.filters.contractStatus = el('studentHubContractStatusFilter')?.value || '';
+    studentHubState.filters.language = el('studentHubLanguageFilter')?.value || '';
+    studentHubState.filters.modality = el('studentHubModalityFilter')?.value || '';
+    await fetchStudentHubBootstrap({ viewKey, preserveSelection: true });
+  });
+  el('studentHubSearchInput')?.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    el('btnRefreshStudentHub')?.click();
+  });
+  el('studentHubStudentStatusFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubLeadStageFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubContractStatusFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubLanguageFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('studentHubModalityFilter')?.addEventListener('change', () => el('btnRefreshStudentHub')?.click());
+  el('btnNewStudentHubLead')?.addEventListener('click', () => {
+    studentHubState.selectedLeadId = null;
+    studentHubState.detailKind = 'lead';
+    studentHubState.detail = { record: {} };
+    renderStudentHubWorkspace();
+  });
+  Array.from(customWrap.querySelectorAll('[data-student-hub-student]')).forEach((item) => item.addEventListener('click', () => selectStudentHubStudent(item.getAttribute('data-student-hub-student'))));
+  Array.from(customWrap.querySelectorAll('[data-student-hub-lead]')).forEach((item) => item.addEventListener('click', () => selectStudentHubLead(item.getAttribute('data-student-hub-lead'))));
+  Array.from(customWrap.querySelectorAll('[data-student-hub-contract]')).forEach((item) => item.addEventListener('click', () => selectStudentHubContract(item.getAttribute('data-student-hub-contract'))));
+  el('studentHubLeadForm')?.addEventListener('submit', async (event) => { event.preventDefault(); await submitStudentHubLeadForm(); });
+  el('studentHubLeadConversionForm')?.addEventListener('submit', async (event) => { event.preventDefault(); await submitStudentHubLeadConversionForm(); });
+  el('studentHubContractForm')?.addEventListener('submit', async (event) => { event.preventDefault(); await submitStudentHubContractForm(); });
+  Array.from(customWrap.querySelectorAll('[data-save-installment]')).forEach((button) => button.addEventListener('click', async () => submitStudentHubInstallmentUpdate(button.getAttribute('data-save-installment'))));
+}
+
+function getAcademicBootstrap() {
+  return academicState.bootstrap || {};
+}
+
+function getAcademicCurrentViewKey() {
+  const intranet = bootstrapData?.intranet || {};
+  const { submenu } = getDepartmentRouteMeta(intranet, currentViewState.departmentSlug, currentViewState.submenuSlug);
+  const viewKey = String(submenu?.view_key || academicState.viewKey || '').trim();
+  if (ACADEMIC_ALL_VIEW_KEYS.has(viewKey)) return viewKey;
+  return academicState.viewKey || 'academic-students';
+}
+
+function isTeacherAcademicView(viewKey = '') {
+  return ACADEMIC_TEACHER_VIEW_KEYS.includes(String(viewKey || '').trim());
+}
+
+function setAcademicNotice(type = '', text = '') {
+  const safeText = String(text || '').trim();
+  academicState.notice = safeText ? { type: type || 'info', text: safeText } : null;
+}
+
+function getAcademicStatusTone(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (['matriculado', 'ativa', 'ativo', 'presente', 'realizada', 'concluido'].includes(safe)) return 'is-success';
+  if (['cancelado', 'desistente', 'falta', 'sem retorno'].includes(safe)) return 'is-danger';
+  if (['trancado', 'aguardando turma', 'planejada', 'remarcada', 'reagendado', 'atraso', 'falta_justificada'].includes(safe)) return 'is-warning';
+  if (['transferido', 'em andamento', 'reposicao'].includes(safe)) return 'is-info';
+  return 'is-neutral';
+}
+
+function formatAcademicDate(value = '') {
+  if (!value) return '-';
+  try {
+    const safeValue = /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim())
+      ? `${String(value).trim()}T12:00:00`
+      : value;
+    return new Date(safeValue).toLocaleDateString(currentLocale());
+  } catch {
+    return String(value || '-');
+  }
+}
+
+function formatAcademicDateTime(value = '') {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString(currentLocale());
+  } catch {
+    return String(value || '-');
+  }
+}
+
+function buildAcademicSummaryCards(dashboard = {}, isTeacher = false) {
+  return isTeacher
+    ? [
+        { label: 'Turmas', value: Number(dashboard.total_classes || 0) },
+        { label: 'Alunos', value: Number(dashboard.total_students || 0) },
+        { label: 'Aulas de hoje', value: Number(dashboard.classes_today || 0) },
+        { label: 'Movimentações', value: Number(dashboard.recent_movements || 0) },
+      ]
+    : [
+        { label: 'Alunos', value: Number(dashboard.total_students || 0) },
+        { label: 'Matrículas ativas', value: Number(dashboard.active_enrollments || 0) },
+        { label: 'Turmas ativas', value: Number(dashboard.active_classes || 0) },
+        { label: 'Aguardando turma', value: Number(dashboard.waiting_for_class || 0) },
+        { label: 'Trancados', value: Number(dashboard.trancados || 0) },
+        { label: 'Desistentes / cancelados', value: Number(dashboard.inactive_total || 0) },
+        { label: 'VIPs / Semi VIP', value: Number(dashboard.vip_classes || 0) },
+        { label: 'Intensivos', value: Number(dashboard.intensive_classes || 0) },
+      ];
+}
+
+function formatAcademicMovementTypeLabel(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (safe === 'class') return 'Troca de turma';
+  if (safe === 'schedule') return 'Mudança de horário';
+  if (safe === 'remanejamento') return 'Remanejamento';
+  if (safe === 'reversao_pedagogica') return 'Reversão pedagógica';
+  if (safe === 'class_transfer') return 'Transferência manual de turma';
+  if (safe === 'schedule_change') return 'Ajuste manual de horário';
+  return safe ? safe.replace(/_/g, ' ') : 'Movimentação acadêmica';
+}
+
+function formatAcademicClassKindLabel(value = '') {
+  const safe = String(value || '').trim().toLowerCase();
+  if (safe === 'semi_vip') return 'Semi VIP';
+  if (safe === 'vip') return 'VIP';
+  if (safe === 'intensive') return 'Intensivo';
+  if (safe === 'special_project') return 'Projeto especial';
+  return safe ? safe.replace(/_/g, ' ') : 'Regular';
+}
+
+function buildAcademicGuardiansMarkup(guardians = []) {
+  const safeGuardians = Array.isArray(guardians) && guardians.length
+    ? guardians
+    : [{ name: '', relation_type: '', phone: '', whatsapp: '', email: '', financial_responsible: true, pedagogical_responsible: true, receives_notifications: true, notes: '' }];
+  return safeGuardians.map((guardian, index) => `
+    <article class="academic-guardian-card" data-academic-guardian-row="${index}">
+      <div class="academic-guardian-grid">
+        <div>
+          <label>Nome</label>
+          <input type="text" data-guardian-field="name" value="${escapeHtml(guardian.name || '')}" />
+        </div>
+        <div>
+          <label>Relação</label>
+          <input type="text" data-guardian-field="relation_type" value="${escapeHtml(guardian.relation_type || '')}" placeholder="Mãe, pai, responsável..." />
+        </div>
+        <div>
+          <label>Telefone</label>
+          <input type="text" data-guardian-field="phone" value="${escapeHtml(guardian.phone || '')}" />
+        </div>
+        <div>
+          <label>WhatsApp</label>
+          <input type="text" data-guardian-field="whatsapp" value="${escapeHtml(guardian.whatsapp || '')}" />
+        </div>
+        <div>
+          <label>E-mail</label>
+          <input type="email" data-guardian-field="email" value="${escapeHtml(guardian.email || '')}" />
+        </div>
+        <div class="academic-guardian-checks">
+          <label><input type="checkbox" data-guardian-field="financial_responsible" ${guardian.financial_responsible ? 'checked' : ''} /> Financeiro</label>
+          <label><input type="checkbox" data-guardian-field="pedagogical_responsible" ${guardian.pedagogical_responsible ? 'checked' : ''} /> Pedagógico</label>
+          <label><input type="checkbox" data-guardian-field="receives_notifications" ${guardian.receives_notifications !== false ? 'checked' : ''} /> Recebe avisos</label>
+        </div>
+        <div class="academic-grid-span">
+          <label>Observações</label>
+          <textarea rows="2" data-guardian-field="notes">${escapeHtml(guardian.notes || '')}</textarea>
+        </div>
+      </div>
+      <div class="academic-guardian-actions">
+        <button class="btn danger" type="button" data-remove-guardian="${index}">Remover responsável</button>
+      </div>
+    </article>
+  `).join('');
+}
+
+function buildEmptyAcademicStudentDetail() {
+  return {
+    student: {
+      id: '',
+      full_name: '',
+      preferred_name: '',
+      birth_date: '',
+      email: '',
+      phone: '',
+      whatsapp: '',
+      school_name: '',
+      school_grade: '',
+      status: 'ativo',
+      notes: '',
+    },
+    guardians: [],
+    enrollments: [],
+    attendance_summary: { total: 0, present_total: 0, absent_total: 0 },
+  };
+}
+
+function buildEmptyAcademicEnrollmentDetail() {
+  return {
+    enrollment: {
+      id: '',
+      student_id: '',
+      student_name: '',
+      enrollment_status: 'aguardando turma',
+      enrollment_date: '',
+      start_date: '',
+      end_date: '',
+      contract_status: '',
+      payment_status: '',
+      pedagogical_status: '',
+      source_channel: '',
+      source_notes: '',
+      notes: '',
+      class_id: '',
+      class_name: '',
+      school_term_code: '',
+    },
+    class_history: [],
+    schedule_history: [],
+  };
+}
+
+function buildEmptyAcademicClassDetail() {
+  return {
+    class: {
+      id: '',
+      code: '',
+      name: '',
+      language: '',
+      modality: 'online',
+      level_name: '',
+      semester_label: '',
+      capacity: '',
+      min_students: '',
+      status: 'planejada',
+      room_name: '',
+      unit_name: '',
+      notes: '',
+    },
+    schedules: [],
+    teachers: [],
+    students: [],
+    sessions: [],
+    attendance_summary: { total: 0, present_total: 0, absent_total: 0 },
+  };
+}
+
+async function fetchAcademicAttendance(classId, classDate = '') {
+  const safeClassId = Number(classId || 0);
+  if (!safeClassId) {
+    academicState.attendanceData = [];
+    return;
+  }
+  const safeDate = String(classDate || academicState.attendanceDate || getTodayDateKey()).trim() || getTodayDateKey();
+  academicState.attendanceDate = safeDate;
+  try {
+    const { attendance } = await api(`/api/intranet/academic/classes/${safeClassId}/attendance?class_date=${encodeURIComponent(safeDate)}`);
+    academicState.attendanceData = Array.isArray(attendance) ? attendance : [];
+  } catch {
+    academicState.attendanceData = [];
+  }
+}
+
+async function selectAcademicStudent(studentId) {
+  const safeId = Number(studentId || 0);
+  academicState.selectedStudentId = safeId || null;
+  academicState.studentDetailLoading = Boolean(safeId);
+  if (!safeId) {
+    academicState.studentDetailLoading = false;
+    academicState.studentDetail = buildEmptyAcademicStudentDetail();
+    renderAcademicWorkspace();
+    return;
+  }
+  renderAcademicWorkspace();
+  try {
+    academicState.studentDetail = await api(`/api/intranet/academic/students/${safeId}`);
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível carregar o aluno.');
+    academicState.studentDetail = buildEmptyAcademicStudentDetail();
+  } finally {
+    academicState.studentDetailLoading = false;
+    renderAcademicWorkspace();
+  }
+}
+
+async function selectAcademicEnrollment(enrollmentId) {
+  const safeId = Number(enrollmentId || 0);
+  academicState.selectedEnrollmentId = safeId || null;
+  academicState.enrollmentDetailLoading = Boolean(safeId);
+  if (!safeId) {
+    academicState.enrollmentDetailLoading = false;
+    academicState.enrollmentDetail = buildEmptyAcademicEnrollmentDetail();
+    renderAcademicWorkspace();
+    return;
+  }
+  renderAcademicWorkspace();
+  try {
+    academicState.enrollmentDetail = await api(`/api/intranet/academic/enrollments/${safeId}`);
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível carregar a matrícula.');
+    academicState.enrollmentDetail = buildEmptyAcademicEnrollmentDetail();
+  } finally {
+    academicState.enrollmentDetailLoading = false;
+    renderAcademicWorkspace();
+  }
+}
+
+async function selectAcademicClass(classId) {
+  const safeId = Number(classId || 0);
+  academicState.selectedClassId = safeId || null;
+  academicState.classDetailLoading = Boolean(safeId);
+  if (!safeId) {
+    academicState.classDetailLoading = false;
+    academicState.classDetail = buildEmptyAcademicClassDetail();
+    academicState.attendanceData = [];
+    renderAcademicWorkspace();
+    return;
+  }
+  renderAcademicWorkspace();
+  try {
+    academicState.classDetail = await api(`/api/intranet/academic/classes/${safeId}`);
+    await fetchAcademicAttendance(safeId, academicState.attendanceDate || getTodayDateKey());
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível carregar a turma.');
+    academicState.classDetail = buildEmptyAcademicClassDetail();
+    academicState.attendanceData = [];
+  } finally {
+    academicState.classDetailLoading = false;
+    renderAcademicWorkspace();
+  }
+}
+
+function collectAcademicGuardiansFromForm() {
+  return Array.from(document.querySelectorAll('[data-academic-guardian-row]')).map((row) => ({
+    name: row.querySelector('[data-guardian-field="name"]')?.value?.trim() || '',
+    relation_type: row.querySelector('[data-guardian-field="relation_type"]')?.value?.trim() || '',
+    phone: row.querySelector('[data-guardian-field="phone"]')?.value?.trim() || '',
+    whatsapp: row.querySelector('[data-guardian-field="whatsapp"]')?.value?.trim() || '',
+    email: row.querySelector('[data-guardian-field="email"]')?.value?.trim() || '',
+    financial_responsible: Boolean(row.querySelector('[data-guardian-field="financial_responsible"]')?.checked),
+    pedagogical_responsible: Boolean(row.querySelector('[data-guardian-field="pedagogical_responsible"]')?.checked),
+    receives_notifications: Boolean(row.querySelector('[data-guardian-field="receives_notifications"]')?.checked),
+    notes: row.querySelector('[data-guardian-field="notes"]')?.value?.trim() || '',
+  })).filter((item) => item.name);
+}
+
+function applyAcademicFiltersFromUi() {
+  academicState.filters.search = el('academicSearchInput')?.value?.trim() || '';
+  academicState.filters.studentStatus = el('academicStudentStatusFilter')?.value || '';
+  academicState.filters.enrollmentStatus = el('academicEnrollmentStatusFilter')?.value || '';
+  academicState.filters.classStatus = el('academicClassStatusFilter')?.value || '';
+  academicState.filters.language = el('academicLanguageFilter')?.value || '';
+  academicState.filters.modality = el('academicModalityFilter')?.value || '';
+  academicState.filters.teacher = el('academicTeacherFilter')?.value || '';
+  academicState.filters.termCode = el('academicTermFilter')?.value || '';
+}
+
+async function fetchAcademicBootstrap(options = {}) {
+  academicState.loading = true;
+  academicState.error = '';
+  academicState.viewKey = String(options.viewKey || academicState.viewKey || getAcademicCurrentViewKey()).trim() || 'academic-students';
+  renderAcademicWorkspace();
+  try {
+    const params = new URLSearchParams();
+    const filters = academicState.filters || {};
+    if (filters.search) params.set('search', filters.search);
+    if (filters.studentStatus) params.set('student_status', filters.studentStatus);
+    if (filters.enrollmentStatus) params.set('enrollment_status', filters.enrollmentStatus);
+    if (filters.classStatus) params.set('class_status', filters.classStatus);
+    if (filters.language) params.set('language', filters.language);
+    if (filters.modality) params.set('modality', filters.modality);
+    if (filters.teacher) params.set('teacher', filters.teacher);
+    if (filters.termCode) params.set('term_code', filters.termCode);
+    params.set('view_key', academicState.viewKey);
+    const { academic } = await api(`/api/intranet/academic/bootstrap?${params.toString()}`);
+    academicState.bootstrap = academic || {};
+    academicState.enabled = Boolean(academic?.enabled);
+    academicState.loaded = true;
+    academicState.loading = false;
+    academicState.attendanceDate = academicState.attendanceDate || getTodayDateKey();
+
+    if (academicState.viewKey === 'academic-students') {
+      const targetId = options.preserveSelection ? academicState.selectedStudentId : null;
+      const nextId = (academic.students || []).some((item) => Number(item.id) === Number(targetId || 0))
+        ? targetId
+        : academic.students?.[0]?.id || null;
+      await selectAcademicStudent(nextId);
+      return;
+    }
+
+    if (academicState.viewKey === 'academic-enrollments') {
+      const targetId = options.preserveSelection ? academicState.selectedEnrollmentId : null;
+      const nextId = (academic.enrollments || []).some((item) => Number(item.id) === Number(targetId || 0))
+        ? targetId
+        : academic.enrollments?.[0]?.id || null;
+      await selectAcademicEnrollment(nextId);
+      return;
+    }
+
+    const targetClassId = options.preserveSelection ? academicState.selectedClassId : null;
+    const nextClassId = (academic.classes || []).some((item) => Number(item.id) === Number(targetClassId || 0))
+      ? targetClassId
+      : academic.classes?.[0]?.id || null;
+    await selectAcademicClass(nextClassId);
+  } catch (err) {
+    academicState.loading = false;
+    academicState.loaded = true;
+    academicState.error = err.message || 'Não foi possível carregar a base acadêmica.';
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicImportSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const fileInput = form.querySelector('input[type="file"]');
+  const files = Array.from(fileInput?.files || []).filter(Boolean);
+  if (!files.length) {
+    window.alert('Selecione pelo menos uma planilha acadêmica para importar.');
+    return;
+  }
+  const formData = new FormData();
+  files.forEach((file) => formData.append('academic_workbook', file));
+  try {
+    const response = await api('/api/intranet/academic/import', {
+      method: 'POST',
+      body: formData,
+      headers: {},
+    });
+    setAcademicNotice('success', `Importação consolidada concluída: ${response?.result?.workbook_names?.length || files.length} arquivo(s), ${response?.result?.totals?.students_inserted || 0} aluno(s) novos, ${response?.result?.totals?.classes_upserted || 0} turma(s) sincronizada(s).`);
+    academicState.bootstrap = response?.academic || academicState.bootstrap;
+    await fetchAcademicBootstrap({ viewKey: academicState.viewKey, preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível importar a planilha acadêmica.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicStudentSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('academicStudentId')?.value || 0) || null,
+    full_name: el('academicStudentFullName')?.value?.trim() || '',
+    preferred_name: el('academicStudentPreferredName')?.value?.trim() || '',
+    birth_date: el('academicStudentBirthDate')?.value || '',
+    email: el('academicStudentEmail')?.value?.trim() || '',
+    phone: el('academicStudentPhone')?.value?.trim() || '',
+    whatsapp: el('academicStudentWhatsapp')?.value?.trim() || '',
+    school_name: el('academicStudentSchoolName')?.value?.trim() || '',
+    school_grade: el('academicStudentSchoolGrade')?.value?.trim() || '',
+    status: el('academicStudentStatus')?.value || 'ativo',
+    notes: el('academicStudentNotes')?.value?.trim() || '',
+    guardians: collectAcademicGuardiansFromForm(),
+  };
+  if (!payload.full_name) {
+    window.alert('Informe o nome completo do aluno.');
+    return;
+  }
+  try {
+    const endpoint = payload.id ? `/api/intranet/academic/students/${payload.id}` : '/api/intranet/academic/students';
+    const method = payload.id ? 'PATCH' : 'POST';
+    const response = await api(endpoint, {
+      method,
+      body: JSON.stringify(payload),
+    });
+    setAcademicNotice('success', 'Aluno salvo com sucesso.');
+    academicState.selectedStudentId = response?.student?.id || academicState.selectedStudentId;
+    await fetchAcademicBootstrap({ viewKey: 'academic-students', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar o aluno.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicEnrollmentSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('academicEnrollmentId')?.value || 0) || null,
+    student_id: Number(el('academicEnrollmentStudentId')?.value || 0) || null,
+    academic_program_id: Number(el('academicEnrollmentProgramId')?.value || 0) || null,
+    school_term_id: Number(el('academicEnrollmentSchoolTermId')?.value || 0) || null,
+    class_id: Number(el('academicEnrollmentClassId')?.value || 0) || null,
+    enrollment_date: el('academicEnrollmentDate')?.value || '',
+    start_date: el('academicEnrollmentStartDate')?.value || '',
+    end_date: el('academicEnrollmentEndDate')?.value || '',
+    enrollment_status: el('academicEnrollmentStatus')?.value || 'aguardando turma',
+    contract_status: el('academicEnrollmentContractStatus')?.value?.trim() || '',
+    payment_status: el('academicEnrollmentPaymentStatus')?.value?.trim() || '',
+    pedagogical_status: el('academicEnrollmentPedagogicalStatus')?.value?.trim() || '',
+    source_channel: el('academicEnrollmentSourceChannel')?.value?.trim() || '',
+    source_notes: el('academicEnrollmentSourceNotes')?.value?.trim() || '',
+    notes: el('academicEnrollmentNotes')?.value?.trim() || '',
+  };
+  if (!payload.student_id) {
+    window.alert('Informe o aluno da matrícula.');
+    return;
+  }
+  try {
+    const endpoint = payload.id ? `/api/intranet/academic/enrollments/${payload.id}` : '/api/intranet/academic/enrollments';
+    const method = payload.id ? 'PATCH' : 'POST';
+    const response = await api(endpoint, {
+      method,
+      body: JSON.stringify(payload),
+    });
+    setAcademicNotice('success', payload.id ? 'Matrícula atualizada com sucesso.' : 'Matrícula criada com sucesso.');
+    academicState.selectedEnrollmentId = response?.enrollment?.id || academicState.selectedEnrollmentId;
+    await fetchAcademicBootstrap({ viewKey: 'academic-enrollments', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar a matrícula.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicTransferSubmit(event) {
+  event.preventDefault();
+  const enrollmentId = Number(el('academicEnrollmentId')?.value || 0) || null;
+  const newClassId = Number(el('academicTransferClassId')?.value || 0) || null;
+  const reason = el('academicTransferReason')?.value?.trim() || '';
+  if (!enrollmentId || !newClassId) {
+    window.alert('Selecione a nova turma para transferir.');
+    return;
+  }
+  try {
+    await api(`/api/intranet/academic/enrollments/${enrollmentId}/transfer-class`, {
+      method: 'POST',
+      body: JSON.stringify({ new_class_id: newClassId, reason }),
+    });
+    setAcademicNotice('success', 'Troca de turma registrada com sucesso.');
+    await fetchAcademicBootstrap({ viewKey: 'academic-enrollments', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível transferir a matrícula.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicScheduleSubmit(event) {
+  event.preventDefault();
+  const enrollmentId = Number(el('academicEnrollmentId')?.value || 0) || null;
+  const newClassId = Number(el('academicScheduleClassId')?.value || 0) || null;
+  const reason = el('academicScheduleReason')?.value?.trim() || '';
+  if (!enrollmentId) {
+    window.alert('Selecione uma matrícula.');
+    return;
+  }
+  try {
+    await api(`/api/intranet/academic/enrollments/${enrollmentId}/change-schedule`, {
+      method: 'POST',
+      body: JSON.stringify({ new_class_id: newClassId || null, reason }),
+    });
+    setAcademicNotice('success', 'Mudança de horário registrada com sucesso.');
+    await fetchAcademicBootstrap({ viewKey: 'academic-enrollments', preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível registrar a mudança de horário.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicClassSubmit(event) {
+  event.preventDefault();
+  const payload = {
+    id: Number(el('academicClassId')?.value || 0) || null,
+    code: el('academicClassCode')?.value?.trim() || '',
+    name: el('academicClassName')?.value?.trim() || '',
+    school_term_id: Number(el('academicClassSchoolTermId')?.value || 0) || null,
+    academic_program_id: Number(el('academicClassProgramId')?.value || 0) || null,
+    language: el('academicClassLanguage')?.value?.trim() || '',
+    modality: el('academicClassModality')?.value?.trim() || '',
+    level_name: el('academicClassLevel')?.value?.trim() || '',
+    semester_label: el('academicClassSemester')?.value?.trim() || '',
+    capacity: Number(el('academicClassCapacity')?.value || 0) || null,
+    min_students: Number(el('academicClassMinStudents')?.value || 0) || null,
+    status: el('academicClassStatus')?.value || 'planejada',
+    room_name: el('academicClassRoom')?.value?.trim() || '',
+    unit_name: el('academicClassUnit')?.value?.trim() || '',
+    notes: el('academicClassNotes')?.value?.trim() || '',
+    schedules: Array.from(document.querySelectorAll('[data-academic-schedule-row]')).map((row) => ({
+      weekday: row.querySelector('[data-schedule-field="weekday"]')?.value?.trim() || '',
+      start_time: row.querySelector('[data-schedule-field="start_time"]')?.value?.trim() || '',
+      end_time: row.querySelector('[data-schedule-field="end_time"]')?.value?.trim() || '',
+      notes: row.querySelector('[data-schedule-field="notes"]')?.value?.trim() || '',
+    })).filter((item) => item.weekday || item.start_time || item.end_time),
+  };
+  if (!payload.name) {
+    window.alert('Informe o nome da turma.');
+    return;
+  }
+  try {
+    const endpoint = payload.id ? `/api/intranet/academic/classes/${payload.id}` : '/api/intranet/academic/classes';
+    const method = payload.id ? 'PATCH' : 'POST';
+    const response = await api(endpoint, {
+      method,
+      body: JSON.stringify(payload),
+    });
+    setAcademicNotice('success', 'Turma salva com sucesso.');
+    academicState.selectedClassId = response?.class?.id || academicState.selectedClassId;
+    await fetchAcademicBootstrap({ viewKey: academicState.viewKey, preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar a turma.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicTeacherLinkSubmit(event) {
+  event.preventDefault();
+  const classId = Number(el('academicClassId')?.value || 0) || null;
+  const teacherProfileId = Number(el('academicTeacherProfileId')?.value || 0) || null;
+  if (!classId || !teacherProfileId) {
+    window.alert('Selecione uma turma e um professor.');
+    return;
+  }
+  try {
+    await api(`/api/intranet/academic/classes/${classId}/teachers`, {
+      method: 'POST',
+      body: JSON.stringify({
+        teacher_profile_id: teacherProfileId,
+        role_in_class: el('academicTeacherRole')?.value || 'teacher',
+        start_date: el('academicTeacherStartDate')?.value || '',
+      }),
+    });
+    setAcademicNotice('success', 'Professor vinculado à turma com sucesso.');
+    await fetchAcademicBootstrap({ viewKey: academicState.viewKey, preserveSelection: true });
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível vincular o professor.');
+    renderAcademicWorkspace();
+  }
+}
+
+async function handleAcademicAttendanceSubmit(event) {
+  event.preventDefault();
+  const classId = Number(el('academicAttendanceClassId')?.value || 0) || null;
+  if (!classId) {
+    window.alert('Selecione uma turma.');
+    return;
+  }
+  const items = Array.from(document.querySelectorAll('[data-attendance-enrollment-id]')).map((row) => ({
+    enrollment_id: Number(row.getAttribute('data-attendance-enrollment-id') || 0),
+    attendance_status: row.querySelector('[data-attendance-field="status"]')?.value || 'presente',
+    notes: row.querySelector('[data-attendance-field="notes"]')?.value?.trim() || '',
+  })).filter((item) => item.enrollment_id);
+  try {
+    await api(`/api/intranet/academic/classes/${classId}/attendance`, {
+      method: 'POST',
+      body: JSON.stringify({
+        class_date: el('academicAttendanceDate')?.value || academicState.attendanceDate || getTodayDateKey(),
+        class_schedule_id: Number(el('academicAttendanceScheduleId')?.value || 0) || null,
+        session_status: el('academicAttendanceSessionStatus')?.value || 'realizada',
+        session_notes: el('academicAttendanceSessionNotes')?.value?.trim() || '',
+        items,
+      }),
+    });
+    setAcademicNotice('success', 'Frequência salva com sucesso.');
+    await fetchAcademicAttendance(classId, el('academicAttendanceDate')?.value || academicState.attendanceDate);
+    renderAcademicWorkspace();
+  } catch (err) {
+    setAcademicNotice('error', err.message || 'Não foi possível salvar a frequência.');
+    renderAcademicWorkspace();
+  }
+}
+
+function renderAcademicWorkspace() {
+  const customWrap = el('departmentWorkspaceCustom');
+  if (!customWrap) return;
+  const viewKey = getAcademicCurrentViewKey();
+  academicState.viewKey = viewKey;
+  const bootstrap = getAcademicBootstrap();
+  const isTeacherView = isTeacherAcademicView(viewKey) || String(bootstrap.scope_kind || '') === 'teacher';
+
+  if (academicState.loading && !bootstrap.enabled) {
+    customWrap.hidden = false;
+    customWrap.innerHTML = `<div class="intranet-empty-card">Carregando base acadêmica...</div>`;
+    return;
+  }
+  if (academicState.error && !bootstrap.enabled) {
+    customWrap.hidden = false;
+    customWrap.innerHTML = `<div class="intranet-empty-card">${escapeHtml(academicState.error)}</div>`;
+    return;
+  }
+
+  const dashboard = bootstrap.dashboard || {};
+  const filters = bootstrap.filters || {};
+  const teachers = Array.isArray(bootstrap.teacher_profiles) ? bootstrap.teacher_profiles : [];
+  const programs = Array.isArray(bootstrap.programs) ? bootstrap.programs : [];
+  const schoolTerms = Array.isArray(bootstrap.school_terms) ? bootstrap.school_terms : [];
+  const classes = Array.isArray(bootstrap.classes) ? bootstrap.classes : [];
+  const students = Array.isArray(bootstrap.students) ? bootstrap.students : [];
+  const enrollments = Array.isArray(bootstrap.enrollments) ? bootstrap.enrollments : [];
+  const movements = Array.isArray(bootstrap.movements) ? bootstrap.movements : [];
+  const studentDetail = academicState.studentDetail || buildEmptyAcademicStudentDetail();
+  const enrollmentDetail = academicState.enrollmentDetail || buildEmptyAcademicEnrollmentDetail();
+  const classDetail = academicState.classDetail || buildEmptyAcademicClassDetail();
+  const noticeMarkup = academicState.notice?.text
+    ? `<div class="workspace-inline-notice is-${escapeHtml(academicState.notice.type || 'info')}"><span>${escapeHtml(academicState.notice.text)}</span><button class="btn workspace-inline-notice-close" type="button" id="btnDismissAcademicNotice">${renderIcon('chevron')}</button></div>`
+    : '';
+  const importMarkup = bootstrap.can_import
+    ? `<form id="academicImportForm" class="academic-import-form"><input type="file" id="academicImportFile" accept=".xlsx,.xls" multiple /><button class="btn" type="submit">Importar planilhas acadêmicas</button></form>`
+    : '';
+  const summaryMarkup = `
+    <div class="academic-summary-grid">
+      ${buildAcademicSummaryCards(dashboard, isTeacherView).map((item) => `<article class="intranet-sales-card"><strong>${escapeHtml(item.value)}</strong><span>${escapeHtml(item.label)}</span></article>`).join('')}
+    </div>
+  `;
+  const filtersMarkup = `
+    <div class="academic-filter-grid">
+      <div><label>Busca</label><input id="academicSearchInput" value="${escapeHtml(academicState.filters.search || '')}" placeholder="Nome, turma, idioma..." /></div>
+      <div><label>Idioma</label><select id="academicLanguageFilter"><option value="">Todos</option>${(filters.languages || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.language ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div><label>Modalidade</label><select id="academicModalityFilter"><option value="">Todas</option>${(filters.modalities || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.modality ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div><label>Status aluno</label><select id="academicStudentStatusFilter"><option value="">Todos</option>${(filters.student_statuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.studentStatus ? ' selected' : ''}>${item}</option>`).join('')}</select></div>
+      <div><label>Status matrícula</label><select id="academicEnrollmentStatusFilter"><option value="">Todos</option>${(filters.enrollment_statuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.enrollmentStatus ? ' selected' : ''}>${item}</option>`).join('')}</select></div>
+      <div><label>Status turma</label><select id="academicClassStatusFilter"><option value="">Todos</option>${(filters.class_statuses || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.classStatus ? ' selected' : ''}>${item}</option>`).join('')}</select></div>
+      <div><label>Professor</label><select id="academicTeacherFilter"><option value="">Todos</option>${(filters.teachers || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.teacher ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div><label>Semestre</label><select id="academicTermFilter"><option value="">Todos</option>${(filters.terms || []).map((item) => `<option value="${escapeHtml(item)}"${item === academicState.filters.termCode ? ' selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></div>
+      <div class="academic-filter-actions"><button class="btn" type="button" id="btnRefreshAcademicWorkspace">Atualizar</button></div>
+    </div>
+  `;
+
+  let sectionMarkup = '';
+  if (viewKey === 'academic-students') {
+    sectionMarkup = `
+      <div class="academic-layout">
+        <section class="academic-list-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Pedagógico</div><h4 class="intranet-section-title">Alunos</h4></div><button class="btn" type="button" id="btnNewAcademicStudent">Novo aluno</button></div>
+          <div class="academic-list">
+            ${students.length ? students.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedStudentId || 0) ? ' is-active' : ''}" data-academic-student="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.full_name || 'Aluno')}</h4><div class="small muted">${escapeHtml(item.latest_class_name || item.latest_language || 'Sem turma')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.status || item.latest_enrollment_status)}">${escapeHtml(item.status || item.latest_enrollment_status || 'ativo')}</span></div><div class="small muted">${escapeHtml(item.phone || item.whatsapp || '-')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhum aluno encontrado.</div>`}
+          </div>
+        </section>
+        <aside class="academic-detail-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Cadastro/Matrícula</div><h4 class="intranet-section-title">${escapeHtml(studentDetail.student?.full_name || 'Novo aluno')}</h4></div></div>
+          ${academicState.studentDetailLoading ? `<div class="small muted">Carregando aluno...</div>` : `<form id="academicStudentForm" class="academic-form"><input type="hidden" id="academicStudentId" value="${escapeHtml(studentDetail.student?.id || '')}" /><div class="academic-form-grid"><div><label>Nome completo</label><input id="academicStudentFullName" value="${escapeHtml(studentDetail.student?.full_name || '')}" /></div><div><label>Nome preferido</label><input id="academicStudentPreferredName" value="${escapeHtml(studentDetail.student?.preferred_name || '')}" /></div><div><label>Nascimento</label><input id="academicStudentBirthDate" type="date" value="${escapeHtml(studentDetail.student?.birth_date || '')}" /></div><div><label>Status</label><select id="academicStudentStatus">${['ativo','inativo','aguardando','cancelado','trancado','desistente'].map((item) => `<option value="${item}"${item === (studentDetail.student?.status || 'ativo') ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div><label>E-mail</label><input id="academicStudentEmail" type="email" value="${escapeHtml(studentDetail.student?.email || '')}" /></div><div><label>Telefone</label><input id="academicStudentPhone" value="${escapeHtml(studentDetail.student?.phone || '')}" /></div><div><label>WhatsApp</label><input id="academicStudentWhatsapp" value="${escapeHtml(studentDetail.student?.whatsapp || '')}" /></div><div><label>Escola</label><input id="academicStudentSchoolName" value="${escapeHtml(studentDetail.student?.school_name || '')}" /></div><div><label>Série</label><input id="academicStudentSchoolGrade" value="${escapeHtml(studentDetail.student?.school_grade || '')}" /></div><div class="academic-grid-span"><label>Observações</label><textarea id="academicStudentNotes" rows="3">${escapeHtml(studentDetail.student?.notes || '')}</textarea></div></div><div class="workspace-section-head academic-inline-head"><div><div class="intranet-section-eyebrow">Responsáveis</div><h5 class="intranet-section-title">Contato e responsáveis</h5></div><button class="btn" type="button" id="btnAddAcademicGuardian">Adicionar responsável</button></div><div id="academicGuardiansWrap" class="academic-guardians-wrap">${buildAcademicGuardiansMarkup(studentDetail.guardians || [])}</div><div class="academic-form-actions"><button class="btn primary" type="submit">Salvar aluno</button></div></form>`}
+        </aside>
+      </div>
+    `;
+  } else if (viewKey === 'academic-enrollments') {
+    sectionMarkup = `
+      <div class="academic-layout">
+        <section class="academic-list-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Pedagógico</div><h4 class="intranet-section-title">Matrículas</h4></div><button class="btn" type="button" id="btnNewAcademicEnrollment">Nova matrícula</button></div>
+          <div class="academic-list">
+            ${enrollments.length ? enrollments.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedEnrollmentId || 0) ? ' is-active' : ''}" data-academic-enrollment="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.student_name || 'Matrícula')}</h4><div class="small muted">${escapeHtml(item.class_name || 'Aguardando turma')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.enrollment_status)}">${escapeHtml(item.enrollment_status || 'aguardando turma')}</span></div><div class="small muted">${escapeHtml(item.language || '-')} · ${escapeHtml(item.school_term_code || '-')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma matrícula encontrada.</div>`}
+          </div>
+        </section>
+        <aside class="academic-detail-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Vínculo acadêmico</div><h4 class="intranet-section-title">${escapeHtml(enrollmentDetail.enrollment?.student_name || 'Selecione uma matrícula')}</h4></div></div>
+          ${academicState.enrollmentDetailLoading ? `<div class="small muted">Carregando matrícula...</div>` : `<form id="academicEnrollmentForm" class="academic-form"><input type="hidden" id="academicEnrollmentId" value="${escapeHtml(enrollmentDetail.enrollment?.id || '')}" /><div class="academic-form-grid"><div><label>ID do aluno</label><input id="academicEnrollmentStudentId" value="${escapeHtml(enrollmentDetail.enrollment?.student_id || '')}" placeholder="ID do aluno" /></div><div><label>Programa</label><select id="academicEnrollmentProgramId"><option value="">Selecione</option>${programs.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(enrollmentDetail.enrollment?.academic_program_id || 0) ? ' selected' : ''}>${escapeHtml(item.program_name || item.level_name || ('Programa #' + item.id))}</option>`).join('')}</select></div><div><label>Período letivo</label><select id="academicEnrollmentSchoolTermId"><option value="">Selecione</option>${schoolTerms.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(enrollmentDetail.enrollment?.school_term_id || 0) ? ' selected' : ''}>${escapeHtml(item.code || item.name || ('Período #' + item.id))}</option>`).join('')}</select></div><div><label>Turma</label><select id="academicEnrollmentClassId"><option value="">Aguardando turma</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(enrollmentDetail.enrollment?.class_id || 0) ? ' selected' : ''}>${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select></div><div><label>Status</label><select id="academicEnrollmentStatus">${['pre-matricula','matriculado','aguardando turma','transferido','trancado','cancelado','concluido','desistente'].map((item) => `<option value="${item}"${item === (enrollmentDetail.enrollment?.enrollment_status || 'aguardando turma') ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div><label>Data matrícula</label><input id="academicEnrollmentDate" type="date" value="${escapeHtml(enrollmentDetail.enrollment?.enrollment_date || '')}" /></div><div><label>Início</label><input id="academicEnrollmentStartDate" type="date" value="${escapeHtml(enrollmentDetail.enrollment?.start_date || '')}" /></div><div><label>Fim</label><input id="academicEnrollmentEndDate" type="date" value="${escapeHtml(enrollmentDetail.enrollment?.end_date || '')}" /></div><div><label>Status contratual</label><input id="academicEnrollmentContractStatus" value="${escapeHtml(enrollmentDetail.enrollment?.contract_status || '')}" /></div><div><label>Status financeiro</label><input id="academicEnrollmentPaymentStatus" value="${escapeHtml(enrollmentDetail.enrollment?.payment_status || '')}" /></div><div><label>Status pedagógico</label><input id="academicEnrollmentPedagogicalStatus" value="${escapeHtml(enrollmentDetail.enrollment?.pedagogical_status || '')}" /></div><div><label>Canal de origem</label><input id="academicEnrollmentSourceChannel" value="${escapeHtml(enrollmentDetail.enrollment?.source_channel || '')}" /></div><div class="academic-grid-span"><label>Origem / observações</label><textarea id="academicEnrollmentSourceNotes" rows="2">${escapeHtml(enrollmentDetail.enrollment?.source_notes || '')}</textarea></div><div class="academic-grid-span"><label>Observações</label><textarea id="academicEnrollmentNotes" rows="3">${escapeHtml(enrollmentDetail.enrollment?.notes || '')}</textarea></div></div><div class="academic-form-actions"><button class="btn primary" type="submit">Salvar matrícula</button></div></form><div class="academic-inline-split"><form id="academicTransferForm" class="academic-inline-form"><h5>Troca de turma</h5><label>Nova turma</label><select id="academicTransferClassId"><option value="">Selecione</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select><label>Motivo</label><input id="academicTransferReason" placeholder="Motivo da troca" /><button class="btn" type="submit">Transferir</button></form><form id="academicScheduleForm" class="academic-inline-form"><h5>Troca de horário</h5><label>Turma base</label><select id="academicScheduleClassId"><option value="">Manter turma atual</option>${classes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name || item.code || 'Turma')}</option>`).join('')}</select><label>Motivo</label><input id="academicScheduleReason" placeholder="Motivo do ajuste" /><button class="btn" type="submit">Registrar mudança</button></form></div><div class="academic-history-grid"><article class="academic-history-panel"><h5>Histórico de turma</h5>${(enrollmentDetail.class_history || []).length ? enrollmentDetail.class_history.map((item) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(item.reason || 'Troca')}</strong><div>${escapeHtml(item.old_class_name || '-')} → ${escapeHtml(item.new_class_name || '-')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))}</div></div>`).join('') : `<div class="intranet-empty-card">Sem histórico de turma.</div>`}</article><article class="academic-history-panel"><h5>Histórico de horário</h5>${(enrollmentDetail.schedule_history || []).length ? enrollmentDetail.schedule_history.map((item) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(item.reason || 'Mudança')}</strong><div>${escapeHtml(item.old_class_name || '-')} → ${escapeHtml(item.new_class_name || '-')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))}</div></div>`).join('') : `<div class="intranet-empty-card">Sem histórico de horário.</div>`}</article></div>`}
+        </aside>
+      </div>
+    `;
+  } else if (viewKey === 'academic-movements') {
+    sectionMarkup = `<section class="workspace-section-panel"><div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${isTeacherView ? 'Professor' : 'Pedagógico'}</div><h4 class="intranet-section-title">Movimentações acadêmicas</h4></div></div><div class="academic-history-grid">${movements.length ? movements.map((item) => `<article class="intranet-sales-history-item"><strong>${escapeHtml(formatAcademicMovementTypeLabel(item.movement_type))}</strong><div>${escapeHtml(item.student_name || 'Aluno não identificado')}</div><div>${escapeHtml(item.reason || item.notes || 'Sem motivo informado')}</div><div class="small muted">${escapeHtml(formatAcademicDateTime(item.changed_at))} · ${escapeHtml(item.changed_by_name || 'Sistema')}</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma movimentação recente.</div>`}</div></section>`;
+  } else {
+    const schedules = Array.isArray(classDetail.schedules) && classDetail.schedules.length ? classDetail.schedules : [{ weekday: '', start_time: '', end_time: '', notes: '' }];
+    sectionMarkup = `
+      <div class="academic-layout">
+        <section class="academic-list-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">${isTeacherView ? 'Professor' : 'Pedagógico'}</div><h4 class="intranet-section-title">${isTeacherView ? 'Minhas turmas' : 'Turmas'}</h4></div>${!isTeacherView ? `<button class="btn" type="button" id="btnNewAcademicClass">Nova turma</button>` : ''}</div>
+          <div class="academic-list">
+            ${classes.length ? classes.map((item) => `<article class="academic-record${Number(item.id) === Number(academicState.selectedClassId || 0) ? ' is-active' : ''}" data-academic-class="${escapeHtml(item.id)}"><div class="academic-record-head"><div><h4>${escapeHtml(item.name || item.code || 'Turma')}</h4><div class="small muted">${escapeHtml(formatAcademicClassKindLabel(item.class_kind || 'regular'))} · ${escapeHtml(item.language || '-')} · ${escapeHtml(item.modality || '-')}</div></div><span class="intranet-chip ${getAcademicStatusTone(item.status)}">${escapeHtml(item.status || 'planejada')}</span></div><div class="small muted">${escapeHtml((item.teachers || []).map((teacher) => teacher.display_name).join(', ') || 'Sem professor')} · ${escapeHtml(String(item.enrolled_total || 0))} aluno(s)</div></article>`).join('') : `<div class="intranet-empty-card">Nenhuma turma encontrada.</div>`}
+          </div>
+        </section>
+        <aside class="academic-detail-panel">
+          <div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Turma</div><h4 class="intranet-section-title">${escapeHtml(classDetail.class?.name || 'Selecione uma turma')}</h4></div></div>
+          ${academicState.classDetailLoading ? `<div class="small muted">Carregando turma...</div>` : `<form id="academicClassForm" class="academic-form"><input type="hidden" id="academicClassId" value="${escapeHtml(classDetail.class?.id || '')}" /><div class="academic-form-grid"><div><label>Código</label><input id="academicClassCode" value="${escapeHtml(classDetail.class?.code || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Nome</label><input id="academicClassName" value="${escapeHtml(classDetail.class?.name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Período letivo</label><select id="academicClassSchoolTermId" ${isTeacherView ? 'disabled' : ''}><option value="">Selecione</option>${schoolTerms.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(classDetail.class?.school_term_id || 0) ? ' selected' : ''}>${escapeHtml(item.code || item.name || ('Período #' + item.id))}</option>`).join('')}</select></div><div><label>Programa</label><select id="academicClassProgramId" ${isTeacherView ? 'disabled' : ''}><option value="">Selecione</option>${programs.map((item) => `<option value="${escapeHtml(item.id)}"${Number(item.id) === Number(classDetail.class?.academic_program_id || 0) ? ' selected' : ''}>${escapeHtml(item.program_name || item.level_name || ('Programa #' + item.id))}</option>`).join('')}</select></div><div><label>Idioma</label><input id="academicClassLanguage" value="${escapeHtml(classDetail.class?.language || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Modalidade</label><input id="academicClassModality" value="${escapeHtml(classDetail.class?.modality || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Nível</label><input id="academicClassLevel" value="${escapeHtml(classDetail.class?.level_name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Semestre</label><input id="academicClassSemester" value="${escapeHtml(classDetail.class?.semester_label || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Capacidade</label><input id="academicClassCapacity" type="number" value="${escapeHtml(classDetail.class?.capacity || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Mínimo</label><input id="academicClassMinStudents" type="number" value="${escapeHtml(classDetail.class?.min_students || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Status</label><select id="academicClassStatus" ${isTeacherView ? 'disabled' : ''}>${['planejada','ativa','encerrada','cancelada'].map((item) => `<option value="${item}"${item === (classDetail.class?.status || 'planejada') ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div><label>Sala</label><input id="academicClassRoom" value="${escapeHtml(classDetail.class?.room_name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div><label>Unidade</label><input id="academicClassUnit" value="${escapeHtml(classDetail.class?.unit_name || '')}" ${isTeacherView ? 'disabled' : ''} /></div><div class="academic-grid-span"><label>Observações</label><textarea id="academicClassNotes" rows="2" ${isTeacherView ? 'disabled' : ''}>${escapeHtml(classDetail.class?.notes || '')}</textarea></div></div><div class="workspace-section-head academic-inline-head"><div><div class="intranet-section-eyebrow">Horários</div><h5 class="intranet-section-title">Grade da turma</h5></div>${!isTeacherView ? `<button class="btn" type="button" id="btnAddAcademicSchedule">Adicionar horário</button>` : ''}</div><div id="academicSchedulesWrap" class="academic-schedules-wrap">${schedules.map((schedule, index) => `<div class="academic-schedule-row" data-academic-schedule-row="${index}"><input data-schedule-field="weekday" value="${escapeHtml(schedule.weekday || '')}" placeholder="Dia da semana" ${isTeacherView ? 'disabled' : ''} /><input data-schedule-field="start_time" value="${escapeHtml(schedule.start_time || '')}" placeholder="Início" ${isTeacherView ? 'disabled' : ''} /><input data-schedule-field="end_time" value="${escapeHtml(schedule.end_time || '')}" placeholder="Fim" ${isTeacherView ? 'disabled' : ''} /><input data-schedule-field="notes" value="${escapeHtml(schedule.notes || '')}" placeholder="Observações" ${isTeacherView ? 'disabled' : ''} /></div>`).join('')}</div>${!isTeacherView ? `<div class="academic-form-actions"><button class="btn primary" type="submit">Salvar turma</button></div>` : ''}</form>${!isTeacherView ? `<form id="academicTeacherLinkForm" class="academic-inline-form"><h5>Vincular professor</h5><label>Professor</label><select id="academicTeacherProfileId"><option value="">Selecione</option>${teachers.map((teacher) => `<option value="${escapeHtml(teacher.id)}">${escapeHtml(teacher.display_name || teacher.user_name || 'Professor')}</option>`).join('')}</select><label>Papel</label><select id="academicTeacherRole"><option value="teacher">Professor</option><option value="assistant">Assistente</option><option value="substitute">Substituto</option><option value="coordinator">Coordenador</option></select><label>Início</label><input id="academicTeacherStartDate" type="date" /><button class="btn" type="submit">Vincular</button></form>` : ''}<div class="academic-class-columns"><article class="academic-history-panel"><h5>Professores vinculados</h5>${(classDetail.teachers || []).length ? classDetail.teachers.map((teacher) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(teacher.display_name || teacher.user_name || 'Professor')}</strong><div>${escapeHtml(teacher.role_in_class || 'teacher')}</div><div class="small muted">${escapeHtml(teacher.start_date || '')}</div></div>`).join('') : `<div class="intranet-empty-card">Nenhum professor vinculado.</div>`}</article><article class="academic-history-panel"><h5>Alunos da turma</h5>${(classDetail.students || []).length ? classDetail.students.map((student) => `<div class="intranet-sales-history-item"><strong>${escapeHtml(student.full_name || 'Aluno')}</strong><div>${escapeHtml(student.language || '-')} · ${escapeHtml(student.modality || '-')}</div><div class="small muted">${escapeHtml(student.enrollment_status || '')}</div></div>`).join('') : `<div class="intranet-empty-card">Nenhum aluno matriculado.</div>`}</article></div><section class="workspace-section-panel academic-attendance-panel"><div class="workspace-section-head"><div><div class="intranet-section-eyebrow">Chamada</div><h5 class="intranet-section-title">Frequência da turma</h5></div></div><form id="academicAttendanceForm" class="academic-form"><input type="hidden" id="academicAttendanceClassId" value="${escapeHtml(classDetail.class?.id || '')}" /><div class="academic-filter-grid academic-filter-grid-compact"><div><label>Data</label><input id="academicAttendanceDate" type="date" value="${escapeHtml(academicState.attendanceDate || getTodayDateKey())}" /></div><div><label>Horário</label><select id="academicAttendanceScheduleId"><option value="">Principal</option>${(classDetail.schedules || []).map((schedule) => `<option value="${escapeHtml(schedule.id)}">${escapeHtml([schedule.weekday, schedule.start_time, schedule.end_time].filter(Boolean).join(' · '))}</option>`).join('')}</select></div><div><label>Status da sessão</label><select id="academicAttendanceSessionStatus">${['planejada','realizada','cancelada','remarcada'].map((item) => `<option value="${item}"${item === 'realizada' ? ' selected' : ''}>${item}</option>`).join('')}</select></div><div class="academic-grid-span"><label>Observações da aula</label><input id="academicAttendanceSessionNotes" value="" placeholder="Resumo da aula, recados ou ocorrências" /></div></div><div class="academic-attendance-list">${(classDetail.students || []).length ? (classDetail.students || []).map((student) => { const recorded = (academicState.attendanceData || []).find((item) => Number(item.enrollment_id || 0) === Number(student.enrollment_id || 0)); return `<div class="academic-attendance-row" data-attendance-enrollment-id="${escapeHtml(student.enrollment_id)}"><div><strong>${escapeHtml(student.full_name || 'Aluno')}</strong><small>${escapeHtml(student.language || '-')} · ${escapeHtml(student.modality || '-')}</small></div><select data-attendance-field="status">${['presente','falta','falta_justificada','reposicao','atraso'].map((item) => `<option value="${item}"${item === (recorded?.attendance_status || 'presente') ? ' selected' : ''}>${item}</option>`).join('')}</select><input data-attendance-field="notes" value="${escapeHtml(recorded?.notes || '')}" placeholder="Observações" /></div>`; }).join('') : `<div class="intranet-empty-card">Nenhum aluno disponível para chamada.</div>`}</div><div class="academic-form-actions"><button class="btn" type="button" id="btnRefreshAcademicAttendance">Atualizar frequência</button><button class="btn primary" type="submit">Salvar frequência</button></div></form></section>`}
+        </aside>
+      </div>
+    `;
+  }
+
+  customWrap.hidden = false;
+  customWrap.innerHTML = `<section class="academic-workspace"><div class="academic-toolbar"><div><div class="intranet-section-eyebrow">${escapeHtml(isTeacherView ? 'Professor' : 'Pedagógico')}</div><h3 class="intranet-section-title">${escapeHtml(isTeacherView ? 'Operação do professor' : 'Base acadêmica da escola')}</h3><p class="small muted">${escapeHtml(isTeacherView ? 'Turmas, alunos e chamada dentro do seu escopo.' : 'Alunos, matrículas, turmas, horários, professores, frequência e movimentações integrados à intranet.')}</p></div><div class="academic-toolbar-side">${importMarkup}</div></div>${noticeMarkup}${summaryMarkup}${filtersMarkup}${sectionMarkup}</section>`;
+
+  el('btnDismissAcademicNotice')?.addEventListener('click', () => { setAcademicNotice('', ''); renderAcademicWorkspace(); });
+  el('btnRefreshAcademicWorkspace')?.addEventListener('click', async () => { applyAcademicFiltersFromUi(); await fetchAcademicBootstrap({ viewKey, preserveSelection: true }); });
+  el('academicSearchInput')?.addEventListener('keydown', async (event) => { if (event.key !== 'Enter') return; event.preventDefault(); applyAcademicFiltersFromUi(); await fetchAcademicBootstrap({ viewKey, preserveSelection: true }); });
+  ['academicLanguageFilter', 'academicModalityFilter', 'academicTeacherFilter', 'academicStudentStatusFilter', 'academicEnrollmentStatusFilter', 'academicClassStatusFilter', 'academicTermFilter'].forEach((id) => {
+    el(id)?.addEventListener('change', async () => { applyAcademicFiltersFromUi(); await fetchAcademicBootstrap({ viewKey, preserveSelection: true }); });
+  });
+  el('academicImportForm')?.addEventListener('submit', handleAcademicImportSubmit);
+  Array.from(customWrap.querySelectorAll('[data-academic-student]')).forEach((button) => button.addEventListener('click', () => selectAcademicStudent(button.getAttribute('data-academic-student'))));
+  Array.from(customWrap.querySelectorAll('[data-academic-enrollment]')).forEach((button) => button.addEventListener('click', () => selectAcademicEnrollment(button.getAttribute('data-academic-enrollment'))));
+  Array.from(customWrap.querySelectorAll('[data-academic-class]')).forEach((button) => button.addEventListener('click', () => selectAcademicClass(button.getAttribute('data-academic-class'))));
+  el('btnNewAcademicStudent')?.addEventListener('click', () => { academicState.selectedStudentId = null; academicState.studentDetail = buildEmptyAcademicStudentDetail(); renderAcademicWorkspace(); });
+  el('btnNewAcademicEnrollment')?.addEventListener('click', () => { academicState.selectedEnrollmentId = null; academicState.enrollmentDetail = buildEmptyAcademicEnrollmentDetail(); renderAcademicWorkspace(); });
+  el('btnNewAcademicClass')?.addEventListener('click', () => { academicState.selectedClassId = null; academicState.classDetail = buildEmptyAcademicClassDetail(); renderAcademicWorkspace(); });
+  el('academicStudentForm')?.addEventListener('submit', handleAcademicStudentSubmit);
+  el('academicEnrollmentForm')?.addEventListener('submit', handleAcademicEnrollmentSubmit);
+  el('academicTransferForm')?.addEventListener('submit', handleAcademicTransferSubmit);
+  el('academicScheduleForm')?.addEventListener('submit', handleAcademicScheduleSubmit);
+  el('academicClassForm')?.addEventListener('submit', handleAcademicClassSubmit);
+  el('academicTeacherLinkForm')?.addEventListener('submit', handleAcademicTeacherLinkSubmit);
+  el('academicAttendanceForm')?.addEventListener('submit', handleAcademicAttendanceSubmit);
+  el('btnRefreshAcademicAttendance')?.addEventListener('click', async () => { await fetchAcademicAttendance(Number(el('academicAttendanceClassId')?.value || 0), el('academicAttendanceDate')?.value || academicState.attendanceDate); renderAcademicWorkspace(); });
+  el('academicAttendanceDate')?.addEventListener('change', async () => { await fetchAcademicAttendance(Number(el('academicAttendanceClassId')?.value || 0), el('academicAttendanceDate')?.value || academicState.attendanceDate); renderAcademicWorkspace(); });
+  el('btnAddAcademicGuardian')?.addEventListener('click', () => { const baseDetail = academicState.studentDetail || buildEmptyAcademicStudentDetail(); const guardians = Array.isArray(baseDetail.guardians) ? [...baseDetail.guardians] : []; guardians.push({ name: '', relation_type: '', phone: '', whatsapp: '', email: '', financial_responsible: false, pedagogical_responsible: false, receives_notifications: true, notes: '' }); academicState.studentDetail = { ...baseDetail, guardians }; renderAcademicWorkspace(); });
+  Array.from(customWrap.querySelectorAll('[data-remove-guardian]')).forEach((button) => button.addEventListener('click', () => { const index = Number(button.getAttribute('data-remove-guardian') || -1); const baseDetail = academicState.studentDetail || buildEmptyAcademicStudentDetail(); const guardians = (baseDetail.guardians || []).filter((_, guardianIndex) => guardianIndex !== index); academicState.studentDetail = { ...baseDetail, guardians }; renderAcademicWorkspace(); }));
+  el('btnAddAcademicSchedule')?.addEventListener('click', () => { const baseDetail = academicState.classDetail || buildEmptyAcademicClassDetail(); const schedules = Array.isArray(baseDetail.schedules) ? [...baseDetail.schedules] : []; schedules.push({ weekday: '', start_time: '', end_time: '', notes: '' }); academicState.classDetail = { ...baseDetail, schedules }; renderAcademicWorkspace(); });
 }
 
 function canManageCommunication() {
@@ -4410,7 +6271,7 @@ async function init() {
     bootstrapData = await api('/api/intranet/bootstrap');
   } catch (err) {
     if (String(err.message || '').includes('intranet_access_denied')) {
-      window.location.href = '/index.html';
+      window.location.href = '/login.html';
       return;
     }
     alert(t('intranet.loadError', { error: err.message }, `Não foi possível carregar a intranet: ${err.message}`));
@@ -4421,7 +6282,6 @@ async function init() {
     await i18n()?.setLocale?.(bootstrapData.user.preferred_locale, { persist: false });
   }
 
-  await fetchTrainingBootstrap();
   await fetchCalendarBootstrap().catch(() => {});
   expandedDepartmentSlugs = readExpandedDepartmentPreference();
   applySidebarPreference();
@@ -4433,6 +6293,14 @@ async function init() {
   }
 
   el('documentSearch').addEventListener('input', applyDocumentFilter);
+  ['sidebarLogoutBtn', 'topbarLogoutBtn'].forEach((id) => {
+    el(id)?.addEventListener('click', async () => {
+      try {
+        await api('/api/logout', { method: 'POST' });
+      } catch {}
+      window.location.href = '/login.html';
+    });
+  });
   el('communicationAudienceScope')?.addEventListener('change', syncCommunicationAudienceControls);
   el('btnCancelCommunicationEdit')?.addEventListener('click', () => {
     resetCommunicationForm();
@@ -4557,6 +6425,8 @@ async function init() {
   el('btnRefreshSales')?.addEventListener('click', fetchSalesRecords);
   el('salesCloserFilter')?.addEventListener('change', fetchSalesRecords);
   el('salesStatusFilter')?.addEventListener('change', fetchSalesRecords);
+  el('salesLanguageFilter')?.addEventListener('change', fetchSalesRecords);
+  el('salesModalityFilter')?.addEventListener('change', fetchSalesRecords);
   el('salesSearchInput')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -4568,8 +6438,10 @@ async function init() {
     if (!salesState.selectedRecordId) return;
     const payload = {
       operational_status: el('salesOperationalStatus').value.trim(),
+      post_sale_rating: el('salesPostSaleRating').value.trim(),
       next_action: el('salesNextAction').value.trim(),
       next_action_date: el('salesNextActionDate').value,
+      feedback: el('salesFeedback').value.trim(),
       follow_up_notes: el('salesFollowUpNotes').value.trim(),
       observations: el('salesObservations').value.trim(),
     };

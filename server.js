@@ -14,6 +14,10 @@ const jwt = require("jsonwebtoken");
 const {
   DATA_DIR,
   DB_CLIENT,
+  DB_RUNTIME_CONFIG,
+  DATABASE_URL_PRESENT,
+  POSTGRES_HOST,
+  REQUESTED_DB_CLIENT,
   migrate,
   get,
   all,
@@ -23,10 +27,8 @@ const {
   logEvent,
   searchDocuments,
   importLegacySqliteIntoPostgres,
-  getLatestArtifactSession,
-  saveArtifactSession,
-  updateArtifactSessionStatus,
 } = require("./db");
+const { seedDemoSchoolData } = require("./scripts/seed_demo_school_data");
 const { createLogger } = require("./lib/appLogger");
 const {
   DEFAULT_LOCALE,
@@ -56,33 +58,14 @@ const {
 } = require("./lib/calendar");
 const { signSession, requireAuth, requireRole } = require("./auth");
 const { detectExt, extractText } = require("./lib/extract");
-const { generateArtifact, detectArtifactKind } = require("./lib/generate");
 const { buildDocumentKnowledgeProfile, normalizeDisplayName } = require("./lib/knowledge");
-const { buildTurnExecutionPlan } = require("./lib/chatOrchestrator");
-const { buildStructuredFileContext, parseStructuredConversationFile } = require("./lib/filePipeline");
 const { ocrImage } = require("./lib/ocr");
-const { isAudioFile, isMediaFile, isVideoFile, transcribeAudio, transcribeMedia } = require("./lib/audio");
 const {
   buildSanitizationSummary,
   deepSanitizeForPostgres,
   safeJsonStringifyForPostgres,
   sanitizeTextForPostgres,
 } = require("./lib/postgresSanitizer");
-const {
-  attachFileToVectorStore,
-  buildOpenAIInputFilePart,
-  getOpenAIFileStatus,
-  getVectorStoreFileStatus,
-  isSupportedOpenAIInputFile,
-  uploadFileToOpenAI,
-} = require("./lib/rag");
-const { queryLooksCurrent, resolveExternalToolContext } = require("./lib/webSearch");
-const talkersPublicKnowledge = require("./lib/talkersPublicKnowledge");
-const {
-  buildTalkersPublicKnowledgeBundle,
-  getTalkersPublicKnowledgeDiagnostics,
-  queryLooksAboutTalkers,
-} = talkersPublicKnowledge;
 const {
   analyzeBusinessIntent,
   buildBusinessContextBlock,
@@ -93,10 +76,27 @@ const {
   DEFAULT_CLOSER_ALIAS_SEEDS,
   SALES_PRIMARY_SHEET,
   extractCloserSheetNames,
+  listCommercialSalesSheetNames,
   normalizeSalesText,
   parseMatriculasWorkbook,
+  parsePostSaleWorkbook,
   readWorkbookFromFile,
 } = require("./lib/sales");
+const {
+  ACADEMIC_PRIMARY_SHEET,
+  ACADEMIC_TIMETABLE_SHEETS,
+  deriveSchoolTermName,
+  deriveSemesterCode,
+  detectLanguageFromText: detectAcademicLanguageFromText,
+  detectModalityFromText: detectAcademicModalityFromText,
+  normalizeAcademicText,
+  normalizePersonKey,
+  parseAcademicWorkbook,
+  readWorkbookFromFile: readAcademicWorkbookFromFile,
+  sanitizeWorkbookName: sanitizeAcademicWorkbookName,
+  stripTrailingStudentAnnotations,
+  toTitleCase: toAcademicTitleCase,
+} = require("./lib/academic");
 const {
   WORKBOOK_SOURCE: MARKETING_INDICATOR_WORKBOOK_SOURCE,
   MARKETING_INDICATOR_SEEDS,
@@ -113,6 +113,11 @@ const DEFAULT_ADMIN_PASSWORD = "Talkers#2026!";
 const INLINE_OPENAI_FILE_LIMIT = 10 * 1024 * 1024;
 const MAX_UPLOAD_SIZE_MB = Math.max(1, Number(process.env.MAX_UPLOAD_SIZE_MB || 25));
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
+const SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB = Math.max(
+  MAX_UPLOAD_SIZE_MB,
+  Number(process.env.SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB || 80)
+);
+const SQLITE_IMPORT_MAX_UPLOAD_SIZE_BYTES = SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 const MAX_CONCURRENT_JOBS = Math.max(1, Number(process.env.MAX_CONCURRENT_JOBS || 5));
 const MAX_CONVERSATION_MEMORY = 6000;
 const OPENAI_VECTOR_STORE_ID = String(process.env.OPENAI_VECTOR_STORE_ID || "").trim();
@@ -146,7 +151,13 @@ const FIXED_DEPARTMENT_BY_EMAIL = {
   'laura@talkers.com': ['Administrativo'],
 };
 const SALES_VIEW_DEPARTMENTS = new Set(['comercial', 'gestao', 'administrativo', 'financeiro', 'atendimento']);
-const SALES_EDITABLE_FIELDS = ['operational_status', 'follow_up_notes', 'next_action', 'next_action_date', 'observations'];
+const SALES_EDITABLE_FIELDS = ['operational_status', 'follow_up_notes', 'next_action', 'next_action_date', 'observations', 'feedback', 'post_sale_rating'];
+const SALES_OPERATIONAL_STATUS_OPTIONS = ['Novo', 'Pendente', 'Em andamento', 'Realizado', 'Sem retorno', 'Reagendado'];
+const SALES_PENDING_STATUS_SET = new Set(['novo', 'pendente', 'em andamento', 'reagendado']);
+const SALES_REALIZED_STATUS_SET = new Set(['realizado']);
+const POST_SALE_RATING_OPTIONS = ['ruim', 'bom', 'otimo'];
+const POST_SALE_SUBMENU_VIEW_KEY = 'sales-post-sale';
+const DEFAULT_POST_SALE_CLOSER_NAMES = ['Bruna Rafaela', 'Bruna Gonçalves', 'Cristiana'];
 const SALES_SOURCE_KEY = 'matriculas-novas';
 const MARKETING_INFLUENCER_STATUSES = new Set(['ativo', 'em teste', 'pausado', 'encerrado']);
 const MARKETING_INFLUENCE_TYPE_SUGGESTIONS = ['Stories', 'Reels', 'Postagens', 'UGC', 'Presenca em evento', 'Campanha local'];
@@ -156,6 +167,24 @@ const PEDAGOGICAL_WHATSAPP_GROUP_STATUSES = new Set(["active", "inactive"]);
 const PEDAGOGICAL_WHATSAPP_CAMPAIGN_STATUSES = new Set(["draft", "prepared", "running", "completed", "error", "cancelled"]);
 const PEDAGOGICAL_WHATSAPP_ITEM_STATUSES = new Set(["queued", "sending", "sent", "error", "pending_provider", "cancelled"]);
 const PEDAGOGICAL_WHATSAPP_DEFAULT_INTERVAL_SECONDS = 30;
+const ACADEMIC_IMPORT_SOURCE_KEY = "academic-consolidated";
+const ACADEMIC_TEACHER_TEMP_PASSWORD = String(process.env.ACADEMIC_TEACHER_TEMP_PASSWORD || "Professor#2026!").trim() || "Professor#2026!";
+const OPERATIONAL_USER_SEED_PASSWORD = String(process.env.OPERATIONAL_USER_SEED_PASSWORD || "Talkers#2026!").trim() || "Talkers#2026!";
+const ACADEMIC_STUDENT_STATUS_OPTIONS = ["ativo", "inativo", "aguardando", "cancelado", "trancado", "desistente"];
+const ACADEMIC_ENROLLMENT_STATUS_OPTIONS = ["pre-matricula", "matriculado", "aguardando turma", "transferido", "trancado", "cancelado", "concluido", "desistente"];
+const ACADEMIC_CLASS_STATUS_OPTIONS = ["planejada", "ativa", "encerrada", "cancelada"];
+const ACADEMIC_ATTENDANCE_STATUS_OPTIONS = ["presente", "falta", "falta_justificada", "reposicao", "atraso"];
+const ACADEMIC_SESSION_STATUS_OPTIONS = ["planejada", "realizada", "cancelada", "remarcada"];
+const ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS = ["teacher-classes", "teacher-attendance", "teacher-class-students"];
+const ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS = ["academic-students", "academic-enrollments", "academic-classes", "academic-schedules", "academic-teachers", "academic-attendance", "academic-movements"];
+const ACADEMIC_ALL_SUBMENU_VIEW_KEYS = [...ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS, ...ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS];
+const STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS = ["student-search", "student-profile", "student-history"];
+const STUDENT_HUB_COMMERCIAL_VIEW_KEYS = ["commercial-leads", "commercial-negotiations", "commercial-enrollment-conversion"];
+const STUDENT_HUB_FINANCIAL_VIEW_KEYS = ["financial-contracts", "financial-installments", "financial-receivables", "financial-delinquency", "financial-student-profile"];
+const STUDENT_HUB_ALL_VIEW_KEYS = [...STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS, ...STUDENT_HUB_COMMERCIAL_VIEW_KEYS, ...STUDENT_HUB_FINANCIAL_VIEW_KEYS];
+const STUDENT_HUB_LEAD_STAGE_OPTIONS = ["lead", "negociacao", "fechado", "convertido", "perdido"];
+const FINANCIAL_CONTRACT_STATUS_OPTIONS = ["draft", "pending", "active", "signed", "cancelled", "completed"];
+const FINANCIAL_INSTALLMENT_STATUS_OPTIONS = ["pending", "paid", "overdue", "cancelled", "negotiated"];
 const CHAT_PERFORMANCE_SAMPLE_LIMIT = 60;
 const CHAT_HISTORY_CONTEXT_LIMIT = 8;
 const CHAT_HISTORY_CONTEXT_MAX_CHARS = 2200;
@@ -167,6 +196,8 @@ const WHATSAPP_PROVIDER_ENABLED = String(process.env.WHATSAPP_PROVIDER_ENABLED |
 const WHATSAPP_PROVIDER_NAME = String(process.env.WHATSAPP_PROVIDER_NAME || "").trim();
 const WHATSAPP_PROVIDER_API_URL = String(process.env.WHATSAPP_PROVIDER_API_URL || "").trim();
 const WHATSAPP_PROVIDER_TOKEN = String(process.env.WHATSAPP_PROVIDER_TOKEN || "").trim();
+const SUBMENU_ICON_SOURCE_PATH = path.join(__dirname, "src", "constants", "icons.js");
+let submenuIconOptionsCache = null;
 
 const startupLogger = createLogger("startup");
 const databaseLogger = createLogger("database");
@@ -176,11 +207,63 @@ const jobsLogger = createLogger("jobs");
 const authLogger = createLogger("auth");
 const openaiLogger = createLogger("openai");
 
+function extractNamedStringArrayFromSource(source, exportName) {
+  const match = String(source || "").match(new RegExp(`export\\s+const\\s+${exportName}\\s*=\\s*(\\[[\\s\\S]*?\\])`, "m"));
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[1]);
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function listAvailableSubmenuIcons() {
+  if (Array.isArray(submenuIconOptionsCache) && submenuIconOptionsCache.length) {
+    return submenuIconOptionsCache;
+  }
+  try {
+    const source = fs.readFileSync(SUBMENU_ICON_SOURCE_PATH, "utf8");
+    const parsed = extractNamedStringArrayFromSource(source, "ICONS");
+    if (parsed.length) {
+      submenuIconOptionsCache = Array.from(new Set(parsed));
+      return submenuIconOptionsCache;
+    }
+  } catch (err) {
+    startupLogger.warn("Nao foi possivel carregar o catalogo de icones dos submenus.", {
+      message: err?.message || String(err || "submenu_icon_catalog_failed"),
+    });
+  }
+  submenuIconOptionsCache = ["folder"];
+  return submenuIconOptionsCache;
+}
+
+function normalizeSubmenuIconName(value, options = {}) {
+  const availableIcons = listAvailableSubmenuIcons();
+  const fallback = String(options.fallback || "folder").trim().toLowerCase();
+  const allowedLegacy = new Set(
+    (Array.isArray(options.allowLegacy) ? options.allowLegacy : [options.allowLegacy])
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized && (availableIcons.includes(normalized) || allowedLegacy.has(normalized))) {
+    return normalized;
+  }
+  if (availableIcons.includes(fallback)) {
+    return fallback;
+  }
+  return availableIcons[0] || "folder";
+}
+
 const JWT_SECRET =
   String(process.env.JWT_SECRET || "").trim() || (IS_PRODUCTION ? "" : DEFAULT_JWT_SECRET);
 const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).trim().toLowerCase();
 const ADMIN_NAME = String(process.env.ADMIN_NAME || DEFAULT_ADMIN_NAME).trim() || DEFAULT_ADMIN_NAME;
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || (IS_PRODUCTION ? "" : DEFAULT_ADMIN_PASSWORD));
+const ADMIN_FORCE_PASSWORD_SYNC = ["1", "true", "yes"].includes(String(process.env.ADMIN_FORCE_PASSWORD_SYNC || "").trim().toLowerCase());
 
 const knowledgeDir = path.join(kbDir, "manual");
 const RAG_ALLOWED_EXTS = new Set([
@@ -313,19 +396,25 @@ fs.mkdirSync(kbDir, { recursive: true });
 fs.mkdirSync(knowledgeDir, { recursive: true });
 logEnvironmentWarnings();
 
-function logEnvironmentWarnings() {
-  if (IS_PRODUCTION && DB_CLIENT === "sqlite" && process.env.DATABASE_URL) {
-    console.log(`Aviso: DATABASE_URL esta configurado, mas DB_CLIENT esta em SQLite usando ${DATA_DIR}.`);
+  function logEnvironmentWarnings() {
+    if (REQUESTED_DB_CLIENT && REQUESTED_DB_CLIENT !== DB_CLIENT) {
+      console.log(
+        `Aviso: DB_CLIENT solicitado (${REQUESTED_DB_CLIENT}) foi sobrescrito para ${DB_CLIENT} porque DATABASE_URL ${DATABASE_URL_PRESENT ? "esta" : "nao esta"} configurado.`
+      );
+    }
+  
+    if (IS_PRODUCTION && DB_CLIENT === "postgres") {
+      console.log(`Banco configurado: Postgres (${POSTGRES_HOST || "host_indisponivel"}).`);
+    }
+  
+    if (!IS_PRODUCTION && DB_CLIENT === "sqlite") {
+      console.log(`Banco configurado: SQLite (${DB_RUNTIME_CONFIG.sqlite_path}).`);
+    }
+  
+    if (IS_PRODUCTION && !String(process.env.DATA_DIR || "").trim()) {
+      console.log(`Aviso: DATA_DIR nao foi definido no ambiente. O servidor vai usar ${DATA_DIR}.`);
+    }
   }
-
-  if (IS_PRODUCTION && DB_CLIENT === "postgres") {
-    console.log("Banco configurado: Postgres.");
-  }
-
-  if (IS_PRODUCTION && !String(process.env.DATA_DIR || "").trim()) {
-    console.log(`Aviso: DATA_DIR nao foi definido no ambiente. O servidor vai usar ${DATA_DIR}.`);
-  }
-}
 
 function validateConfig() {
   if (!JWT_SECRET) {
@@ -369,8 +458,32 @@ async function ensureAdmin() {
       return;
     }
 
-    const existing = await get("SELECT id FROM users WHERE email=?", [ADMIN_EMAIL]);
-    if (existing) return;
+    const existing = await get("SELECT id, name, role, can_access_intranet, password_hash FROM users WHERE email=?", [ADMIN_EMAIL]);
+    if (existing) {
+      if (!ADMIN_FORCE_PASSWORD_SYNC) return;
+
+      const passwordMatches = existing.password_hash
+        ? await bcrypt.compare(ADMIN_PASSWORD, existing.password_hash).catch(() => false)
+        : false;
+      const needsUpdate = !passwordMatches
+        || String(existing.name || "").trim() !== ADMIN_NAME
+        || String(existing.role || "").trim().toLowerCase() !== "admin"
+        || !parseBooleanInput(existing.can_access_intranet);
+
+      if (!needsUpdate) return;
+
+      const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+      await run(
+        "UPDATE users SET name=?, password_hash=?, role='admin', can_access_intranet=? WHERE id=?",
+        [ADMIN_NAME, hash, true, existing.id]
+      );
+      await logEvent(existing.id, "admin_bootstrap_password_synced", {
+        email: ADMIN_EMAIL,
+        forced_sync: true,
+      });
+      console.log("Senha do admin sincronizada a partir das variaveis de ambiente.");
+      return;
+    }
 
     const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
     const created = await run(
@@ -544,6 +657,200 @@ function safeJsonParse(value) {
 
 function safeJsonStringify(value, fallback = "{}") {
   return safeJsonStringifyForPostgres(value, fallback);
+}
+
+function normalizeStringArray(values = []) {
+  return Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  ));
+}
+
+function normalizeAdditionalPermissions(value) {
+  const parsed = typeof value === "string"
+    ? (safeJsonParse(value || "{}") || {})
+    : (value && typeof value === "object" ? value : {});
+  return {
+    allowed_department_slugs: normalizeStringArray(parsed.allowed_department_slugs || []),
+    allowed_submenu_view_keys: normalizeStringArray(parsed.allowed_submenu_view_keys || []),
+    allowed_global_views: normalizeStringArray(parsed.allowed_global_views || []),
+    commercial_role: String(parsed.commercial_role || "").trim(),
+    academic_role: String(parsed.academic_role || "").trim(),
+    intranet_scope: String(parsed.intranet_scope || "").trim(),
+  };
+}
+
+function buildPostSaleCloserPermissions() {
+  return {
+    allowed_department_slugs: ["comercial"],
+    allowed_submenu_view_keys: [POST_SALE_SUBMENU_VIEW_KEY],
+    allowed_global_views: ["sales"],
+    commercial_role: "post_sale_closer",
+    intranet_scope: "restricted_post_sale",
+  };
+}
+
+function buildOperationalDepartmentPermissions(departmentName = "") {
+  const departmentKey = normalizeDepartmentValue(departmentName);
+  if (departmentKey === "atendimento") {
+    return {
+      allowed_department_slugs: ["atendimento"],
+      allowed_submenu_view_keys: STUDENT_HUB_ATTENDIMENTO_VIEW_KEYS.slice(),
+      allowed_global_views: ["student_hub"],
+      intranet_scope: "attendance_student_hub",
+    };
+  }
+  if (departmentKey === "financeiro") {
+    return {
+      allowed_department_slugs: ["financeiro"],
+      allowed_submenu_view_keys: STUDENT_HUB_FINANCIAL_VIEW_KEYS.slice(),
+      allowed_global_views: ["student_hub", "financial"],
+      intranet_scope: "finance_student_hub",
+    };
+  }
+  if (departmentKey === "comercial") {
+    return {
+      allowed_department_slugs: ["comercial"],
+      allowed_submenu_view_keys: [...STUDENT_HUB_COMMERCIAL_VIEW_KEYS, POST_SALE_SUBMENU_VIEW_KEY],
+      allowed_global_views: ["student_hub", "sales"],
+      intranet_scope: "commercial_student_hub",
+    };
+  }
+  return {
+    allowed_department_slugs: departmentKey ? [departmentKey] : [],
+    allowed_submenu_view_keys: [],
+    allowed_global_views: [],
+    intranet_scope: "",
+  };
+}
+
+async function ensureOperationalDepartmentUser(seed = {}, actorUserId = null) {
+  const departmentName = String(seed.department || "").trim();
+  const email = String(seed.email || "").trim().toLowerCase();
+  const name = String(seed.name || "").trim();
+  if (!departmentName || !email || !name) return null;
+
+  const permissions = buildOperationalDepartmentPermissions(departmentName);
+  let user = await get(
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name FROM users WHERE lower(email)=lower(?) LIMIT 1",
+    [email]
+  );
+  if (!user) {
+    user = await get(
+      "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name FROM users WHERE lower(name)=lower(?) AND lower(coalesce(department, ''))=lower(?) LIMIT 1",
+      [name, departmentName]
+    );
+  }
+
+  let created = false;
+  if (!user?.id) {
+    const passwordHash = await bcrypt.hash(OPERATIONAL_USER_SEED_PASSWORD, 10);
+    const result = await run(
+      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?)",
+      [
+        email,
+        name,
+        passwordHash,
+        departmentName,
+        true,
+        String(seed.job_title || departmentName).trim() || departmentName,
+        String(seed.unit_name || departmentName).trim() || departmentName,
+        safeJsonStringify(permissions, "{}"),
+      ]
+    );
+    created = true;
+    user = await get(
+      "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name FROM users WHERE id=? LIMIT 1",
+      [result.lastID]
+    );
+  }
+
+  if (!user?.id) return null;
+  await syncUserDepartments(user.id, [departmentName]);
+  await run(
+    "UPDATE users SET role=?, department=?, can_access_intranet=?, job_title=?, unit_name=?, additional_permissions_json=? WHERE id=?",
+    [
+      String(user.role || "").trim() === "admin" ? "admin" : "user",
+      departmentName,
+      true,
+      String(seed.job_title || user.job_title || departmentName).trim() || departmentName,
+      String(seed.unit_name || user.unit_name || departmentName).trim() || departmentName,
+      safeJsonStringify(permissions, "{}"),
+      user.id,
+    ]
+  );
+
+  if (actorUserId) {
+    await logEvent(actorUserId, created ? "admin_seed_operational_user" : "admin_sync_operational_user", {
+      user_id: user.id,
+      email,
+      department: departmentName,
+    });
+  }
+
+  return {
+    user_id: user.id,
+    email,
+    name,
+    department: departmentName,
+    created,
+  };
+}
+
+async function ensureOperationalDepartmentUsers(actorUserId = null) {
+  const seeds = [
+    {
+      department: "Atendimento",
+      email: "atendimento@talkers.local",
+      name: "Equipe Atendimento",
+      job_title: "Atendimento",
+      unit_name: "Atendimento",
+    },
+    {
+      department: "Comercial",
+      email: "comercial@talkers.local",
+      name: "Equipe Comercial",
+      job_title: "Consultor comercial",
+      unit_name: "Comercial",
+    },
+    {
+      department: "Financeiro",
+      email: "financeiro@talkers.local",
+      name: "Equipe Financeiro",
+      job_title: "Financeiro",
+      unit_name: "Financeiro",
+    },
+  ];
+  const results = [];
+  for (const seed of seeds) {
+    const ensured = await ensureOperationalDepartmentUser(seed, actorUserId);
+    if (ensured) results.push(ensured);
+  }
+  return results;
+}
+
+function hasRestrictedPostSaleScope(user = {}) {
+  return String(user?.additional_permissions?.commercial_role || "").trim() === "post_sale_closer"
+    || String(user?.additional_permissions?.intranet_scope || "").trim() === "restricted_post_sale";
+}
+
+function hasAcademicTeacherScope(user = {}) {
+  return String(user?.additional_permissions?.academic_role || "").trim() === "teacher"
+    || String(user?.additional_permissions?.intranet_scope || "").trim() === "teacher_academic"
+    || userHasDepartmentAccess(user, "professor");
+}
+
+function getAllowedDepartmentSlugSet(user = {}) {
+  return new Set((user?.additional_permissions?.allowed_department_slugs || []).map((item) => normalizeDepartmentValue(item)).filter(Boolean));
+}
+
+function getAllowedSubmenuViewKeySet(user = {}) {
+  return new Set((user?.additional_permissions?.allowed_submenu_view_keys || []).map((item) => String(item || "").trim()).filter(Boolean));
+}
+
+function getAllowedGlobalViewSet(user = {}) {
+  return new Set((user?.additional_permissions?.allowed_global_views || []).map((item) => String(item || "").trim()).filter(Boolean));
 }
 
 function sanitizePersistedText(value, options = {}) {
@@ -1323,6 +1630,7 @@ async function hydrateUserRecord(user) {
   const departments = details.filter((item) => item.is_active !== false).map((item) => item.name);
   const fallbackDepartments = details.map((item) => item.name);
   const primaryDepartment = user.department || getPrimaryDepartmentName(departments) || getPrimaryDepartmentName(fallbackDepartments);
+  const additionalPermissions = normalizeAdditionalPermissions(user.additional_permissions_json || user.additional_permissions || {});
   return {
     ...user,
     department: primaryDepartment,
@@ -1330,6 +1638,7 @@ async function hydrateUserRecord(user) {
     department_details: details,
     can_access_intranet: coerceDbBoolean(user.can_access_intranet),
     preferred_locale: normalizeLocaleCode(user.preferred_locale || DEFAULT_LOCALE),
+    additional_permissions: additionalPermissions,
   };
 }
 
@@ -1368,6 +1677,7 @@ function buildSessionUserFallback(sessionUser = null, fallbackUserId = null) {
         : true
     ),
     preferred_locale: normalizeLocaleCode(safeSession.preferred_locale || DEFAULT_LOCALE),
+    additional_permissions: normalizeAdditionalPermissions(safeSession.additional_permissions_json || safeSession.additional_permissions || {}),
     job_title: String(safeSession.job_title || "").trim(),
     unit_name: String(safeSession.unit_name || "").trim(),
     created_at: null,
@@ -1537,10 +1847,78 @@ function normalizeSqlTextValue(value) {
   return value === null || value === undefined ? '' : String(value).trim();
 }
 
+function normalizeSalesOperationalStatus(value) {
+  const safe = String(value || "").trim();
+  if (!safe) return 'Novo';
+  const matched = SALES_OPERATIONAL_STATUS_OPTIONS.find((item) => item.toLowerCase() === safe.toLowerCase());
+  return matched || '';
+}
+
+function normalizePostSaleRating(value) {
+  const safe = normalizeBusinessText(String(value || "").trim()).replace(/\s+/g, ' ').trim();
+  if (!safe) return null;
+  if (safe === 'otimo' || safe === 'ótimo') return 'otimo';
+  if (safe === 'bom') return 'bom';
+  if (safe === 'ruim') return 'ruim';
+  return '';
+}
+
+function hasImportedSalesChanges(existing = {}, nextValues = {}) {
+  return listSalesImportedFields().some((field) => normalizeSqlTextValue(existing[field]) !== normalizeSqlTextValue(nextValues[field]));
+}
+
+function mergeImportedSalesRecord(existing = null, prepared = {}) {
+  const merged = {
+    ...prepared,
+    phone: prepared.phone || null,
+    level_name: prepared.level_name || null,
+    teacher_name: prepared.teacher_name || null,
+    attendant_name: prepared.attendant_name || null,
+    feedback: prepared.feedback || null,
+    contact_email: prepared.contact_email || null,
+    observations: prepared.observations || null,
+    lead_stage: normalizeLeadStage(prepared.lead_stage || (prepared.sale_date ? "fechado" : "lead")),
+    post_sale_rating: null,
+  };
+
+  if (!existing) {
+    return merged;
+  }
+
+  merged.operational_status = existing.operational_status || 'Novo';
+  merged.follow_up_notes = existing.follow_up_notes || null;
+  merged.next_action = existing.next_action || null;
+  merged.next_action_date = existing.next_action_date || null;
+  merged.observations = normalizeSqlTextValue(existing.observations) ? existing.observations : (prepared.observations || null);
+  merged.contact_email = normalizeSqlTextValue(existing.contact_email) ? existing.contact_email : (prepared.contact_email || null);
+  merged.lead_stage = normalizeLeadStage(existing.lead_stage || prepared.lead_stage || (existing.converted_at ? "convertido" : "lead"));
+  merged.post_sale_rating = existing.post_sale_rating || null;
+  merged.last_modified_by = existing.last_modified_by || null;
+  merged.custom_fields_json = existing.custom_fields_json || null;
+  merged.feedback = normalizeSqlTextValue(existing.feedback) ? existing.feedback : (prepared.feedback || null);
+  return merged;
+}
+
+function summarizeSalesStatus(statusValue = '') {
+  const safe = normalizeBusinessText(String(statusValue || '').trim()).replace(/\s+/g, ' ').trim();
+  if (!safe) return 'novo';
+  if (SALES_REALIZED_STATUS_SET.has(safe)) return 'realizado';
+  if (safe === 'sem retorno') return 'sem retorno';
+  if (safe === 'reagendado') return 'reagendado';
+  if (safe === 'pendente') return 'pendente';
+  if (safe === 'em andamento') return 'em andamento';
+  return 'novo';
+}
+
 function listSalesImportedFields() {
   return [
     'student_name',
+    'phone',
+    'contact_email',
     'course_name',
+    'level_name',
+    'teacher_name',
+    'attendant_name',
     'sale_month',
     'sale_date',
     'semester_label',
@@ -1557,6 +1935,9 @@ function listSalesImportedFields() {
     'media_source',
     'profession',
     'indication',
+    'feedback',
+    'observations',
+    'lead_stage',
     'source_payload_json',
     'row_hash',
     'source_workbook',
@@ -1652,6 +2033,31 @@ async function ensureDefaultCloserCatalog() {
   }
 }
 
+async function ensurePostSaleCloserCatalog(closerNames = DEFAULT_POST_SALE_CLOSER_NAMES, actorUserId = null) {
+  const safeCloserNames = Array.from(new Set((Array.isArray(closerNames) ? closerNames : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)));
+
+  const synced = [];
+  for (const officialName of safeCloserNames) {
+    const closer = await ensureCloserRecord({
+      official_name: officialName,
+      display_name: officialName,
+      status: 'active',
+    }, { aliasOrigin: 'post_sale_seed' });
+    if (closer) synced.push(closer);
+  }
+
+  if (actorUserId && synced.length) {
+    await logEvent(actorUserId, 'admin_seed_post_sale_closers', {
+      closer_ids: synced.map((item) => Number(item.id || 0)).filter(Boolean),
+      closer_names: synced.map((item) => item.official_name || item.display_name).filter(Boolean),
+    });
+  }
+
+  return synced;
+}
+
 async function syncClosersFromWorkbook(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return [];
   const workbook = readWorkbookFromFile(filePath);
@@ -1662,6 +2068,124 @@ async function syncClosersFromWorkbook(filePath) {
     if (closer) synced.push(closer.official_name);
   }
   return synced;
+}
+
+function buildCloserEmailCandidates(closerName = '') {
+  const normalized = normalizeCloserValue(closerName);
+  if (!normalized) return [];
+  const tokens = normalized.split(/\s+/g).filter(Boolean);
+  const candidates = new Set();
+  if (tokens.length) {
+    candidates.add(`${tokens.join('.')}@talkers.com`);
+    candidates.add(`${tokens.join('.')}@talkers.local`);
+    candidates.add(`postvenda.${tokens.join('.')}@talkers.local`);
+    if (tokens.length === 1) {
+      candidates.add(`${tokens[0]}@talkers.com`);
+      candidates.add(`${tokens[0]}@talkers.local`);
+    }
+  }
+  return [...candidates];
+}
+
+async function ensureCloserOperationalUser(closer, actorUserId = null) {
+  if (!closer?.id || !closer?.official_name) return null;
+  const officialName = String(closer.official_name || closer.display_name || '').trim();
+  const normalizedName = normalizeCloserValue(officialName);
+  if (!normalizedName) return null;
+
+  const users = await all(
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json FROM users ORDER BY id ASC"
+  );
+  const emailCandidates = new Set(buildCloserEmailCandidates(officialName).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));
+  let matchedUser = users.find((user) => normalizeCloserValue(user.name) === normalizedName) || null;
+  if (!matchedUser) {
+    matchedUser = users.find((user) => emailCandidates.has(String(user.email || '').trim().toLowerCase())) || null;
+  }
+
+  let temporaryPassword = '';
+  let createdUser = false;
+  const permissions = buildPostSaleCloserPermissions();
+  if (!matchedUser) {
+    const occupiedEmails = new Set(users.map((user) => String(user.email || '').trim().toLowerCase()).filter(Boolean));
+    let generatedEmail = buildCloserEmailCandidates(officialName).find((candidate) => !occupiedEmails.has(candidate.toLowerCase())) || '';
+    if (!generatedEmail) {
+      const fallbackSlug = normalizedName.replace(/\s+/g, '.');
+      generatedEmail = `postvenda.${fallbackSlug}.${Date.now()}@talkers.local`;
+    }
+    temporaryPassword = `PV!${crypto.randomBytes(6).toString('base64url')}`;
+    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+    const created = await run(
+      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?)",
+      [
+        generatedEmail,
+        officialName,
+        passwordHash,
+        'Comercial',
+        true,
+        'Closer de pós-venda',
+        'Pós-venda',
+        safeJsonStringify(permissions, "{}"),
+      ]
+    );
+    matchedUser = await get(
+      "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json FROM users WHERE id=?",
+      [created.lastID]
+    );
+    createdUser = true;
+    if (actorUserId) {
+      await logEvent(actorUserId, 'admin_create_post_sale_user', {
+        user_id: created.lastID,
+        closer_id: closer.id,
+        closer_name: officialName,
+        email: generatedEmail,
+      });
+    }
+  }
+
+  if (!matchedUser?.id) return null;
+  await syncUserDepartments(matchedUser.id, ['Comercial']);
+  await run(
+    "UPDATE users SET role=?, department=?, can_access_intranet=?, job_title=?, unit_name=?, additional_permissions_json=? WHERE id=?",
+    [
+      String(matchedUser.role || '').trim() === 'admin' ? 'admin' : 'user',
+      'Comercial',
+      true,
+      normalizeSqlTextValue(matchedUser.job_title) || 'Closer de pós-venda',
+      normalizeSqlTextValue(matchedUser.unit_name) || 'Pós-venda',
+      safeJsonStringify(permissions, "{}"),
+      matchedUser.id,
+    ]
+  );
+  await run(
+    "UPDATE closers SET user_id=?, status=?, updated_at=datetime('now') WHERE id=?",
+    [matchedUser.id, 'active', closer.id]
+  );
+
+  return {
+    closer_id: closer.id,
+    closer_name: officialName,
+    user_id: matchedUser.id,
+    user_email: matchedUser.email,
+    created_user: createdUser,
+    temporary_password: temporaryPassword || null,
+  };
+}
+
+async function ensureCloserOperationalUsers(closerNames = [], actorUserId = null) {
+  const normalizedNames = Array.from(new Set((Array.isArray(closerNames) ? closerNames : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)));
+  await ensurePostSaleCloserCatalog(normalizedNames.length ? normalizedNames : DEFAULT_POST_SALE_CLOSER_NAMES);
+  const allClosers = await listClosers({ includeInactive: true });
+  const targetClosers = normalizedNames.length
+    ? allClosers.filter((closer) => normalizedNames.some((name) => normalizeCloserValue(name) === normalizeCloserValue(closer.official_name || closer.display_name)))
+    : allClosers.filter((closer) => String(closer.status || 'active').trim().toLowerCase() !== 'inactive');
+  const results = [];
+  for (const closer of targetClosers) {
+    const result = await ensureCloserOperationalUser(closer, actorUserId);
+    if (result) results.push(result);
+  }
+  return results;
 }
 
 async function listClosers(options = {}) {
@@ -1828,13 +2352,15 @@ async function getSalesAccessScope(user) {
     return { enabled: false, canViewAll: false, canEditAll: false, closer: null };
   }
   const departmentKeys = [...getUserDepartmentKeySet(user)];
-  const canViewAll = user.role === 'admin' || departmentKeys.some((key) => SALES_VIEW_DEPARTMENTS.has(key));
+  const restrictedPostSale = hasRestrictedPostSaleScope(user);
+  const canViewAll = !restrictedPostSale && (user.role === 'admin' || departmentKeys.some((key) => SALES_VIEW_DEPARTMENTS.has(key)));
   const closer = await get('SELECT id, official_name, display_name, user_id, status FROM closers WHERE user_id=? AND status<>? LIMIT 1', [user.id || user.sub, 'inactive']);
   return {
     enabled: canViewAll || Boolean(closer),
     canViewAll,
     canEditAll: user.role === 'admin',
     closer,
+    restrictedPostSale,
   };
 }
 
@@ -1861,10 +2387,25 @@ function buildSalesWhereClause(scope, filters = {}) {
     params.push(String(filters.status).trim());
   }
 
+  if (filters.language) {
+    clauses.push('lower(coalesce(sr.language, \'\'))=lower(?)');
+    params.push(String(filters.language).trim());
+  }
+
+  if (filters.modality) {
+    clauses.push('lower(coalesce(sr.modality, \'\'))=lower(?)');
+    params.push(String(filters.modality).trim());
+  }
+
+  if (filters.rating) {
+    clauses.push('lower(coalesce(sr.post_sale_rating, \'\'))=lower(?)');
+    params.push(String(filters.rating).trim());
+  }
+
   if (filters.search) {
     const search = `%${String(filters.search).trim()}%`;
-    clauses.push("(lower(coalesce(sr.student_name, '')) LIKE lower(?) OR lower(coalesce(sr.course_name, '')) LIKE lower(?) OR lower(coalesce(sr.closer_original, '')) LIKE lower(?) OR lower(coalesce(sr.media_source, '')) LIKE lower(?))");
-    params.push(search, search, search, search);
+    clauses.push("(lower(coalesce(sr.student_name, '')) LIKE lower(?) OR lower(coalesce(sr.course_name, '')) LIKE lower(?) OR lower(coalesce(sr.level_name, '')) LIKE lower(?) OR lower(coalesce(sr.phone, '')) LIKE lower(?) OR lower(coalesce(sr.closer_original, '')) LIKE lower(?) OR lower(coalesce(sr.attendant_name, '')) LIKE lower(?) OR lower(coalesce(sr.media_source, '')) LIKE lower(?) OR lower(coalesce(sr.feedback, '')) LIKE lower(?))");
+    params.push(search, search, search, search, search, search, search, search);
   }
 
   return {
@@ -1876,17 +2417,27 @@ function buildSalesWhereClause(scope, filters = {}) {
 async function getSalesSummaryForScope(scope, filters = {}) {
   const where = buildSalesWhereClause(scope, filters);
   const limit = Math.min(200, Math.max(1, Number(filters.limit || 80)));
-  const [rows, totalRow, closerTotals, statusTotals] = await Promise.all([
+  const todayKey = brazilDateKey();
+  const [rows, totalRow, closerTotals, statusTotals, ratingTotals, filterTotals] = await Promise.all([
     all(
-      `SELECT sr.id, sr.student_name, sr.course_name, sr.sale_date, sr.modality, sr.language, sr.media_source, sr.operational_status,
+      `SELECT sr.id, sr.student_name, sr.phone, sr.course_name, sr.level_name, sr.teacher_name, sr.attendant_name, sr.sale_date, sr.semester_label,
+              sr.modality, sr.class_type, sr.language, sr.media_source, sr.feedback, sr.operational_status,
+              sr.post_sale_rating, sr.next_action, sr.next_action_date, sr.follow_up_notes, sr.observations,
               sr.closer_original, sr.closer_normalized, sr.closer_id, sr.user_id, sr.updated_at,
               COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
          FROM sales_records sr
          LEFT JOIN closers c ON c.id = sr.closer_id
          ${where.sql}
-         ORDER BY COALESCE(sr.sale_date, sr.created_at) DESC, sr.id DESC
+         ORDER BY
+           CASE
+             WHEN sr.next_action_date IS NOT NULL AND sr.next_action_date <> '' AND sr.next_action_date < ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 0
+             WHEN sr.next_action_date = ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 1
+             ELSE 2
+           END ASC,
+           COALESCE(sr.next_action_date, sr.sale_date, substr(sr.updated_at, 1, 10), substr(sr.created_at, 1, 10)) ASC,
+           sr.id DESC
          LIMIT ?`,
-      [...where.params, limit]
+      [...where.params, todayKey, todayKey, limit]
     ),
     get(
       `SELECT COUNT(*) AS total
@@ -1898,13 +2449,18 @@ async function getSalesSummaryForScope(scope, filters = {}) {
     all(
       `SELECT sr.closer_id,
               COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name,
-              COUNT(*) AS total
+              COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(sr.operational_status, ''))='realizado' THEN 1 ELSE 0 END) AS realized_total,
+              SUM(CASE WHEN sr.next_action_date IS NOT NULL AND sr.next_action_date<>'' AND sr.next_action_date < ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 1 ELSE 0 END) AS overdue_total,
+              SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='ruim' THEN 1 ELSE 0 END) AS rating_ruim_total,
+              SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='bom' THEN 1 ELSE 0 END) AS rating_bom_total,
+              SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='otimo' THEN 1 ELSE 0 END) AS rating_otimo_total
          FROM sales_records sr
          LEFT JOIN closers c ON c.id = sr.closer_id
          ${where.sql}
         GROUP BY sr.closer_id, COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer')
         ORDER BY COUNT(*) DESC, closer_name ASC`,
-      where.params
+      [todayKey, ...where.params]
     ),
     all(
       `SELECT COALESCE(sr.operational_status, 'Novo') AS status_name, COUNT(*) AS total
@@ -1914,6 +2470,30 @@ async function getSalesSummaryForScope(scope, filters = {}) {
         GROUP BY COALESCE(sr.operational_status, 'Novo')
         ORDER BY COUNT(*) DESC, status_name ASC`,
       where.params
+    ),
+    all(
+      `SELECT COALESCE(sr.post_sale_rating, '') AS rating_name, COUNT(*) AS total
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}
+        GROUP BY COALESCE(sr.post_sale_rating, '')
+        ORDER BY rating_name ASC`,
+      where.params
+    ),
+    get(
+      `SELECT
+          SUM(CASE WHEN lower(coalesce(sr.operational_status, ''))='realizado' THEN 1 ELSE 0 END) AS realized_total,
+          SUM(CASE WHEN lower(coalesce(sr.operational_status, '')) IN ('novo', 'pendente', 'em andamento', 'reagendado') THEN 1 ELSE 0 END) AS pending_total,
+          SUM(CASE WHEN sr.next_action_date=? THEN 1 ELSE 0 END) AS action_today_total,
+          SUM(CASE WHEN sr.next_action_date IS NOT NULL AND sr.next_action_date<>'' AND sr.next_action_date < ? AND lower(coalesce(sr.operational_status, '')) <> 'realizado' THEN 1 ELSE 0 END) AS overdue_total,
+          SUM(CASE WHEN coalesce(nullif(trim(sr.observations), ''), nullif(trim(sr.follow_up_notes), '')) IS NULL THEN 1 ELSE 0 END) AS no_observation_total,
+          SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='ruim' THEN 1 ELSE 0 END) AS rating_ruim_total,
+          SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='bom' THEN 1 ELSE 0 END) AS rating_bom_total,
+          SUM(CASE WHEN lower(coalesce(sr.post_sale_rating, ''))='otimo' THEN 1 ELSE 0 END) AS rating_otimo_total
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+         ${where.sql}`,
+      [todayKey, todayKey, ...where.params]
     ),
   ]);
 
@@ -1926,12 +2506,24 @@ async function getSalesSummaryForScope(scope, filters = {}) {
 
   const totals = {
     total: Number(totalRow?.total || 0),
+    pending_total: Number(filterTotals?.pending_total || 0),
+    realized_total: Number(filterTotals?.realized_total || 0),
+    action_today_total: Number(filterTotals?.action_today_total || 0),
+    overdue_total: Number(filterTotals?.overdue_total || 0),
+    no_observation_total: Number(filterTotals?.no_observation_total || 0),
     by_closer: closerTotals.map((item) => {
       const key = `${item.closer_id || 'none'}:${item.closer_name || 'Sem closer'}`;
       return {
         closer_id: item.closer_id || null,
         closer_name: item.closer_name || 'Sem closer',
         total: Number(item.total || 0),
+        realized_total: Number(item.realized_total || 0),
+        overdue_total: Number(item.overdue_total || 0),
+        ratings: {
+          ruim: Number(item.rating_ruim_total || 0),
+          bom: Number(item.rating_bom_total || 0),
+          otimo: Number(item.rating_otimo_total || 0),
+        },
         recent_records: groupedRecent.get(key) || [],
       };
     }),
@@ -1939,6 +2531,22 @@ async function getSalesSummaryForScope(scope, filters = {}) {
       acc[String(item.status_name || 'Novo').trim() || 'Novo'] = Number(item.total || 0);
       return acc;
     }, {}),
+    ratings: {
+      ruim: Number(filterTotals?.rating_ruim_total || 0),
+      bom: Number(filterTotals?.rating_bom_total || 0),
+      otimo: Number(filterTotals?.rating_otimo_total || 0),
+    },
+    rating_percentages: {
+      ruim: Number(totalRow?.total || 0) ? Math.round((Number(filterTotals?.rating_ruim_total || 0) / Number(totalRow.total || 0)) * 100) : 0,
+      bom: Number(totalRow?.total || 0) ? Math.round((Number(filterTotals?.rating_bom_total || 0) / Number(totalRow.total || 0)) * 100) : 0,
+      otimo: Number(totalRow?.total || 0) ? Math.round((Number(filterTotals?.rating_otimo_total || 0) / Number(totalRow.total || 0)) * 100) : 0,
+    },
+    rating_breakdown: ratingTotals.reduce((acc, item) => {
+      const key = String(item.rating_name || '').trim() || 'sem_avaliacao';
+      acc[key] = Number(item.total || 0);
+      return acc;
+    }, {}),
+    today_key: todayKey,
   };
 
   return {
@@ -1963,8 +2571,15 @@ async function getSalesRecordById(recordId) {
 
 function serializeSalesRecord(record) {
   if (!record) return null;
+  const closerName = record.closer_name
+    || record.closer_original
+    || record.closer_normalized
+    || record.attendant_name
+    || null;
   return {
     ...record,
+    closer_name: closerName,
+    first_contact_at: record.first_contact_at || record.sale_date || null,
     source_payload: safeJsonParse(record.source_payload_json || '{}') || null,
     custom_fields: safeJsonParse(record.custom_fields_json || '{}') || null,
   };
@@ -1996,6 +2611,20 @@ async function updateSalesRecord(recordId, payload = {}, actorUser) {
   const updates = {};
   for (const field of SALES_EDITABLE_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(payload || {}, field)) {
+      if (field === 'operational_status') {
+        const normalizedStatus = normalizeSalesOperationalStatus(payload[field]);
+        if (!normalizedStatus) throw new Error('invalid_operational_status');
+        updates[field] = normalizedStatus;
+        continue;
+      }
+      if (field === 'post_sale_rating') {
+        const normalizedRating = normalizePostSaleRating(payload[field]);
+        if (payload[field] !== null && payload[field] !== undefined && String(payload[field]).trim() && !normalizedRating) {
+          throw new Error('invalid_post_sale_rating');
+        }
+        updates[field] = normalizedRating;
+        continue;
+      }
       updates[field] = String(payload[field] ?? '').trim() || null;
     }
   }
@@ -2006,13 +2635,15 @@ async function updateSalesRecord(recordId, payload = {}, actorUser) {
 
   const merged = { ...existing, ...updates };
   await run(
-    "UPDATE sales_records SET operational_status=?, follow_up_notes=?, next_action=?, next_action_date=?, observations=?, last_modified_by=?, updated_at=datetime('now') WHERE id=?",
+    "UPDATE sales_records SET operational_status=?, follow_up_notes=?, next_action=?, next_action_date=?, observations=?, feedback=?, post_sale_rating=?, last_modified_by=?, updated_at=datetime('now') WHERE id=?",
     [
       merged.operational_status || 'Novo',
       merged.follow_up_notes,
       merged.next_action,
       merged.next_action_date,
       merged.observations,
+      merged.feedback,
+      merged.post_sale_rating,
       actorId,
       recordId,
     ]
@@ -2060,29 +2691,106 @@ async function recordSalesImportChange(existing, nextValues, actorUserId, origin
 }
 
 async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, postSaleWorkbookPath = '', postSaleWorkbookName = '', actorUserId = null }) {
-  if (!salesWorkbookPath || !fs.existsSync(salesWorkbookPath)) {
-    throw new Error('missing_sales_workbook');
+  const availableInputs = [
+    salesWorkbookPath && fs.existsSync(salesWorkbookPath) ? {
+      kind: 'sales_workbook',
+      filePath: salesWorkbookPath,
+      workbookName: salesWorkbookName || path.basename(salesWorkbookPath),
+    } : null,
+    postSaleWorkbookPath && fs.existsSync(postSaleWorkbookPath) ? {
+      kind: 'post_sale_workbook',
+      filePath: postSaleWorkbookPath,
+      workbookName: postSaleWorkbookName || path.basename(postSaleWorkbookPath),
+    } : null,
+  ].filter(Boolean);
+
+  if (!availableInputs.length) {
+    throw new Error('missing_sales_or_post_sale_workbook');
   }
 
   const source = await ensureSalesImportSource();
   await ensureDefaultCloserCatalog();
-  const syncedCloserNames = postSaleWorkbookPath ? await syncClosersFromWorkbook(postSaleWorkbookPath) : [];
+  await ensurePostSaleCloserCatalog(DEFAULT_POST_SALE_CLOSER_NAMES);
+
+  const parsedDatasets = [];
+  const processedPaths = new Set();
+  const syncedCloserNames = [];
+
+  for (const input of availableInputs) {
+    const fileKey = path.resolve(input.filePath);
+    if (processedPaths.has(fileKey)) continue;
+    processedPaths.add(fileKey);
+    const workbook = readWorkbookFromFile(input.filePath);
+    const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames : [];
+    const hasSalesPrimarySheet = sheetNames.includes(SALES_PRIMARY_SHEET);
+    const supportedCommercialSheets = hasSalesPrimarySheet ? [SALES_PRIMARY_SHEET] : listCommercialSalesSheetNames(workbook);
+    const closerSheets = extractCloserSheetNames(workbook);
+
+    for (const salesSheetName of supportedCommercialSheets) {
+      const salesParsed = parseMatriculasWorkbook(workbook, {
+        workbookName: input.workbookName,
+        sheetName: salesSheetName,
+      });
+      if (salesParsed.records.length) {
+        parsedDatasets.push({
+          source_kind: 'sales',
+          workbook_name: salesParsed.workbook_name,
+          sheet_name: salesParsed.sheet_name,
+          records: salesParsed.records,
+        });
+      }
+    }
+
+    if (closerSheets.length) {
+      const postSaleParsed = parsePostSaleWorkbook(workbook, {
+        workbookName: input.workbookName,
+      });
+      if (postSaleParsed.records.length) {
+        parsedDatasets.push({
+          source_kind: 'post_sale',
+          workbook_name: postSaleParsed.workbook_name,
+          sheet_names: postSaleParsed.sheet_names,
+          records: postSaleParsed.records,
+        });
+      }
+      syncedCloserNames.push(...closerSheets);
+      for (const officialName of closerSheets) {
+        await ensureCloserRecord({ official_name: officialName, display_name: officialName, status: 'active' }, { aliasOrigin: 'post_sale_workbook' });
+      }
+    }
+  }
+
+  if (!parsedDatasets.length) {
+    throw new Error('sales_workbook_without_supported_sheets');
+  }
+
+  const uniqueCloserNames = Array.from(new Set(syncedCloserNames.map((item) => String(item || '').trim()).filter(Boolean)));
+  const closerUsersProvisioned = uniqueCloserNames.length
+    ? await ensureCloserOperationalUsers(uniqueCloserNames, actorUserId)
+    : [];
   const closerCatalog = await getCloserCatalog();
-  const parsed = parseMatriculasWorkbook(readWorkbookFromFile(salesWorkbookPath), {
-    workbookName: salesWorkbookName || path.basename(salesWorkbookPath),
-    sheetName: SALES_PRIMARY_SHEET,
-  });
+  const flattenedRecords = parsedDatasets.flatMap((item) => item.records || []);
+  const primaryDataset = parsedDatasets.find((item) => item.source_kind === 'sales') || parsedDatasets[0];
+  const sourceWorkbookLabel = Array.from(new Set(parsedDatasets.map((item) => item.workbook_name).filter(Boolean))).join(' | ');
 
   const runResult = await run(
     "INSERT INTO sales_import_runs (source_id, origin_type, source_workbook, post_sale_workbook, source_sheet, total_rows, status, triggered_by, summary_json, updated_at) VALUES (?, 'manual_upload', ?, ?, ?, ?, 'running', ?, ?, datetime('now'))",
     [
       source?.id || null,
-      parsed.workbook_name,
-      postSaleWorkbookName ? path.basename(postSaleWorkbookName) : (postSaleWorkbookPath ? path.basename(postSaleWorkbookPath) : null),
-      parsed.sheet_name,
-      parsed.records.length,
+      primaryDataset?.workbook_name || sourceWorkbookLabel || null,
+      uniqueCloserNames.length ? (postSaleWorkbookName ? path.basename(postSaleWorkbookName) : (postSaleWorkbookPath ? path.basename(postSaleWorkbookPath) : sourceWorkbookLabel || null)) : null,
+      primaryDataset?.sheet_name || SALES_PRIMARY_SHEET,
+      flattenedRecords.length,
       actorUserId,
-      JSON.stringify({ synced_closers: syncedCloserNames }),
+      JSON.stringify({
+        synced_closers: uniqueCloserNames,
+        provisioned_users: closerUsersProvisioned.map((item) => ({
+          closer_id: item.closer_id,
+          user_id: item.user_id,
+          user_email: item.user_email,
+          created_user: item.created_user,
+        })),
+      }),
     ]
   );
 
@@ -2093,52 +2801,70 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
   let ignoredRows = 0;
   const importedRecordIds = [];
 
-  for (const item of parsed.records) {
+  for (const item of flattenedRecords) {
     const match = await resolveCloserMatch(item.closer_original, closerCatalog);
     const prepared = {
       ...item,
       source_id: source?.id || null,
       import_run_id: importRunId,
+      origin_type: String(item.origin_type || (item.source_sheet && item.source_sheet !== SALES_PRIMARY_SHEET ? 'post_sale_import' : 'spreadsheet_import')).trim(),
       closer_normalized: match.normalizedName || item.closer_original,
       closer_id: match.closer?.id || null,
       user_id: match.closer?.user_id || null,
-      source_payload_json: JSON.stringify(item.source_payload || {}),
+      lead_stage: normalizeLeadStage(item.lead_stage || (item.origin_type === 'post_sale_import' ? 'convertido' : (item.sale_date ? 'fechado' : 'lead'))),
+      source_payload_json: safeJsonStringify(item.source_payload || {}, "{}"),
       last_synced_at: new Date().toISOString(),
     };
 
+    if (!prepared.student_name && !prepared.phone && !prepared.language) {
+      ignoredRows += 1;
+      continue;
+    }
+
     const existing = await get('SELECT * FROM sales_records WHERE dedupe_hash=? LIMIT 1', [prepared.dedupe_hash]);
+    const persisted = mergeImportedSalesRecord(existing, prepared);
     if (!existing) {
       const created = await run(
-        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, course_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, 'spreadsheet_import', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        "INSERT INTO sales_records (source_id, import_run_id, origin_type, source_workbook, source_sheet, source_row_number, source_row_identifier, dedupe_hash, row_hash, student_name, phone, contact_email, course_name, level_name, teacher_name, attendant_name, sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language, closer_original, closer_normalized, closer_id, user_id, media_source, profession, indication, feedback, observations, lead_stage, post_sale_rating, source_payload_json, last_synced_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
         [
-          prepared.source_id,
-          prepared.import_run_id,
-          prepared.source_workbook,
-          prepared.source_sheet,
-          prepared.source_row_number,
-          prepared.source_row_identifier,
-          prepared.dedupe_hash,
-          prepared.row_hash,
-          prepared.student_name,
-          prepared.course_name,
-          prepared.sale_month,
-          prepared.sale_date,
-          prepared.semester_label,
-          prepared.availability,
-          prepared.modality,
-          prepared.class_type,
-          prepared.system_name,
-          prepared.contract_status,
-          prepared.language,
-          prepared.closer_original,
-          prepared.closer_normalized,
-          prepared.closer_id,
-          prepared.user_id,
-          prepared.media_source,
-          prepared.profession,
-          prepared.indication,
-          prepared.source_payload_json,
-          prepared.last_synced_at,
+          persisted.source_id,
+          persisted.import_run_id,
+          persisted.origin_type,
+          persisted.source_workbook,
+          persisted.source_sheet,
+          persisted.source_row_number,
+          persisted.source_row_identifier,
+          persisted.dedupe_hash,
+          persisted.row_hash,
+          persisted.student_name,
+          persisted.phone,
+          persisted.contact_email,
+          persisted.course_name,
+          persisted.level_name,
+          persisted.teacher_name,
+          persisted.attendant_name,
+          persisted.sale_month,
+          persisted.sale_date,
+          persisted.semester_label,
+          persisted.availability,
+          persisted.modality,
+          persisted.class_type,
+          persisted.system_name,
+          persisted.contract_status,
+          persisted.language,
+          persisted.closer_original,
+          persisted.closer_normalized,
+          persisted.closer_id,
+          persisted.user_id,
+          persisted.media_source,
+          persisted.profession,
+          persisted.indication,
+          persisted.feedback,
+          persisted.observations,
+          persisted.lead_stage,
+          persisted.post_sale_rating,
+          persisted.source_payload_json,
+          persisted.last_synced_at,
         ]
       );
       insertedRows += 1;
@@ -2148,53 +2874,62 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
         entityId: created.lastID,
         action: 'created',
         actorUserId,
-        closerId: prepared.closer_id,
-        origin: 'spreadsheet_import',
+        closerId: persisted.closer_id,
+        origin: persisted.origin_type,
         detail: {
-          source_workbook: prepared.source_workbook,
-          source_sheet: prepared.source_sheet,
-          source_row_identifier: prepared.source_row_identifier,
+          source_workbook: persisted.source_workbook,
+          source_sheet: persisted.source_sheet,
+          source_row_identifier: persisted.source_row_identifier,
         },
       });
       continue;
     }
 
-    if (String(existing.row_hash || '') === String(prepared.row_hash || '')) {
+    if (!hasImportedSalesChanges(existing, persisted)) {
       duplicateRows += 1;
       continue;
     }
 
-    await recordSalesImportChange(existing, prepared, actorUserId, 'spreadsheet_sync');
+    await recordSalesImportChange(existing, persisted, actorUserId, 'spreadsheet_sync');
     await run(
-      "UPDATE sales_records SET source_id=?, import_run_id=?, source_workbook=?, source_sheet=?, source_row_number=?, source_row_identifier=?, row_hash=?, student_name=?, course_name=?, sale_month=?, sale_date=?, semester_label=?, availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, closer_id=?, user_id=?, media_source=?, profession=?, indication=?, source_payload_json=?, last_synced_at=?, updated_at=datetime('now') WHERE id=?",
+      "UPDATE sales_records SET source_id=?, import_run_id=?, origin_type=?, source_workbook=?, source_sheet=?, source_row_number=?, source_row_identifier=?, row_hash=?, student_name=?, phone=?, contact_email=?, course_name=?, level_name=?, teacher_name=?, attendant_name=?, sale_month=?, sale_date=?, semester_label=?, availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, closer_id=?, user_id=?, media_source=?, profession=?, indication=?, feedback=?, observations=?, lead_stage=?, source_payload_json=?, last_synced_at=?, updated_at=datetime('now') WHERE id=?",
       [
-        prepared.source_id,
-        prepared.import_run_id,
-        prepared.source_workbook,
-        prepared.source_sheet,
-        prepared.source_row_number,
-        prepared.source_row_identifier,
-        prepared.row_hash,
-        prepared.student_name,
-        prepared.course_name,
-        prepared.sale_month,
-        prepared.sale_date,
-        prepared.semester_label,
-        prepared.availability,
-        prepared.modality,
-        prepared.class_type,
-        prepared.system_name,
-        prepared.contract_status,
-        prepared.language,
-        prepared.closer_original,
-        prepared.closer_normalized,
-        prepared.closer_id,
-        prepared.user_id,
-        prepared.media_source,
-        prepared.profession,
-        prepared.indication,
-        prepared.source_payload_json,
-        prepared.last_synced_at,
+        persisted.source_id,
+        persisted.import_run_id,
+        persisted.origin_type,
+        persisted.source_workbook,
+        persisted.source_sheet,
+        persisted.source_row_number,
+        persisted.source_row_identifier,
+        persisted.row_hash,
+        persisted.student_name,
+        persisted.phone,
+        persisted.contact_email,
+        persisted.course_name,
+        persisted.level_name,
+        persisted.teacher_name,
+        persisted.attendant_name,
+        persisted.sale_month,
+        persisted.sale_date,
+        persisted.semester_label,
+        persisted.availability,
+        persisted.modality,
+        persisted.class_type,
+        persisted.system_name,
+        persisted.contract_status,
+        persisted.language,
+        persisted.closer_original,
+        persisted.closer_normalized,
+        persisted.closer_id,
+        persisted.user_id,
+        persisted.media_source,
+        persisted.profession,
+        persisted.indication,
+        persisted.feedback,
+        persisted.observations,
+        persisted.lead_stage,
+        persisted.source_payload_json,
+        persisted.last_synced_at,
         existing.id,
       ]
     );
@@ -2202,9 +2937,20 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
     importedRecordIds.push(existing.id);
   }
 
+  const reconciliation = await reconcileSalesImportRun(importRunId, actorUserId);
+
   const summary = {
-    synced_closers: syncedCloserNames,
+    synced_closers: uniqueCloserNames,
+    provisioned_users: closerUsersProvisioned,
     imported_record_ids: importedRecordIds.slice(0, 20),
+    imported_sources: parsedDatasets.map((dataset) => ({
+      source_kind: dataset.source_kind,
+      workbook_name: dataset.workbook_name,
+      sheet_name: dataset.sheet_name || null,
+      sheet_names: dataset.sheet_names || [],
+      total_records: Number((dataset.records || []).length || 0),
+    })),
+    reconciliation,
   };
 
   await run(
@@ -2218,21 +2964,30 @@ async function importSalesWorkbookBatch({ salesWorkbookPath, salesWorkbookName, 
       inserted_rows: insertedRows,
       updated_rows: updatedRows,
       duplicate_rows: duplicateRows,
-      synced_closers: syncedCloserNames,
-      workbook: parsed.workbook_name,
+      ignored_rows: ignoredRows,
+      synced_closers: uniqueCloserNames,
+      provisioned_users: closerUsersProvisioned.map((item) => ({
+        closer_id: item.closer_id,
+        user_id: item.user_id,
+        created_user: item.created_user,
+      })),
+      workbook: sourceWorkbookLabel,
     });
   }
 
   return {
     import_run_id: importRunId,
-    total_rows: parsed.records.length,
+    total_rows: flattenedRecords.length,
     inserted_rows: insertedRows,
     updated_rows: updatedRows,
     duplicate_rows: duplicateRows,
     ignored_rows: ignoredRows,
-    synced_closers: syncedCloserNames,
-    workbook: parsed.workbook_name,
-    sheet_name: parsed.sheet_name,
+    synced_closers: uniqueCloserNames,
+    provisioned_users: closerUsersProvisioned,
+    reconciliation,
+    workbook: sourceWorkbookLabel,
+    sheet_name: primaryDataset?.sheet_name || null,
+    sources: summary.imported_sources,
   };
 }
 
@@ -2262,6 +3017,9 @@ async function buildSalesIntranetPayload(user) {
     can_view_all: scope.canViewAll,
     can_edit_all: scope.canEditAll,
     scope_closer_id: scope.closer?.id || null,
+    restricted_scope: scope.restrictedPostSale,
+    status_options: SALES_OPERATIONAL_STATUS_OPTIONS.slice(),
+    rating_options: POST_SALE_RATING_OPTIONS.slice(),
     summary: salesSummary.totals,
     records: salesSummary.records.map(serializeSalesRecord),
     closers: visibleClosers.map((closer) => ({
@@ -2274,6 +3032,4846 @@ async function buildSalesIntranetPayload(user) {
       status: closer.status,
     })),
   };
+}
+
+function normalizeStudentHubViewKey(value = "") {
+  const safe = String(value || "").trim();
+  return STUDENT_HUB_ALL_VIEW_KEYS.includes(safe) ? safe : "student-search";
+}
+
+function getStudentHubAreaByViewKey(viewKey = "") {
+  const safe = normalizeStudentHubViewKey(viewKey);
+  if (STUDENT_HUB_COMMERCIAL_VIEW_KEYS.includes(safe)) return "commercial";
+  if (STUDENT_HUB_FINANCIAL_VIEW_KEYS.includes(safe)) return "financial";
+  return "attendance";
+}
+
+function normalizeLeadStage(value = "", fallback = "lead") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return fallback;
+  const matched = STUDENT_HUB_LEAD_STAGE_OPTIONS.find((item) => normalizeAcademicText(item) === safe);
+  return matched || fallback;
+}
+
+function normalizeFinancialContractStatus(value = "", fallback = "draft") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return fallback;
+  const matched = FINANCIAL_CONTRACT_STATUS_OPTIONS.find((item) => normalizeAcademicText(item) === safe);
+  return matched || fallback;
+}
+
+function normalizeFinancialInstallmentStatus(value = "", fallback = "pending") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return fallback;
+  const matched = FINANCIAL_INSTALLMENT_STATUS_OPTIONS.find((item) => normalizeAcademicText(item) === safe);
+  return matched || fallback;
+}
+
+function normalizeDigits(value = "") {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+function parseMoneyValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const normalized = String(value)
+    .replace(/\s+/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+    .replace(/[^\d.-]/g, "");
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function formatMoneyValue(value, currency = "BRL") {
+  const numeric = Number(value || 0);
+  try {
+    return new Intl.NumberFormat("pt-BR", { style: "currency", currency }).format(numeric);
+  } catch {
+    return String(numeric.toFixed(2));
+  }
+}
+
+function computeAcademicAge(birthDate = "", fallbackAge = null) {
+  const safeBirthDate = normalizeAcademicDateInput(birthDate);
+  const safeFallback = Number.isFinite(Number(fallbackAge)) ? Math.max(0, Number(fallbackAge)) : null;
+  if (!safeBirthDate) return safeFallback;
+  try {
+    const [year, month, day] = safeBirthDate.split("-").map(Number);
+    const today = new Date();
+    let age = today.getFullYear() - year;
+    const monthDelta = (today.getMonth() + 1) - month;
+    if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < day)) age -= 1;
+    return Math.max(0, age);
+  } catch {
+    return safeFallback;
+  }
+}
+
+function addMonthsToDateKey(dateKey = "", months = 0) {
+  const safe = normalizeAcademicDateInput(dateKey);
+  if (!safe) return null;
+  const [year, month, day] = safe.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day || 1, 12, 0, 0));
+  date.setUTCMonth(date.getUTCMonth() + Number(months || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function buildDefaultFinancialInstallments(totalAmount, installmentsCount = 0, firstDueDate = "") {
+  const safeCount = Math.max(0, Number(installmentsCount || 0) || 0);
+  const safeFirstDueDate = normalizeAcademicDateInput(firstDueDate);
+  const numericAmount = Number(totalAmount || 0);
+  if (!safeCount || !safeFirstDueDate || !Number.isFinite(numericAmount) || numericAmount <= 0) return [];
+  const totalCents = Math.round(numericAmount * 100);
+  const baseInstallmentCents = Math.floor(totalCents / safeCount);
+  const remainderCents = totalCents - (baseInstallmentCents * safeCount);
+  return Array.from({ length: safeCount }).map((_, index) => {
+    const amountCents = baseInstallmentCents + (index === safeCount - 1 ? remainderCents : 0);
+    return {
+      installment_number: index + 1,
+      due_date: addMonthsToDateKey(safeFirstDueDate, index),
+      amount: Number((amountCents / 100).toFixed(2)),
+      status: "pending",
+      reference_label: `Parcela ${index + 1}/${safeCount}`,
+    };
+  });
+}
+
+async function createStudentTimelineEntry(payload = {}) {
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) return null;
+  const created = await run(
+    `INSERT INTO student_timeline
+       (student_id, enrollment_id, sales_record_id, contract_id, installment_id, event_type, title, description, actor_user_id, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, coalesce(?, datetime('now')))`,
+    [
+      studentId,
+      Number(payload.enrollment_id || 0) || null,
+      Number(payload.sales_record_id || 0) || null,
+      Number(payload.contract_id || 0) || null,
+      Number(payload.installment_id || 0) || null,
+      sanitizePersistedText(payload.event_type || "note"),
+      sanitizePersistedText(payload.title || "Atualização do aluno"),
+      sanitizePersistedText(payload.description || "", { trim: false }) || null,
+      Number(payload.actor_user_id || 0) || null,
+      safeJsonStringify(payload.metadata || {}, "{}"),
+      normalizeAcademicDateTimeInput(payload.created_at || "") || null,
+    ]
+  );
+  return created.lastID || null;
+}
+
+async function ensureStudentTimelineEntry(payload = {}) {
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) return null;
+  const enrollmentId = Number(payload.enrollment_id || 0) || null;
+  const salesRecordId = Number(payload.sales_record_id || 0) || null;
+  const contractId = Number(payload.contract_id || 0) || null;
+  const installmentId = Number(payload.installment_id || 0) || null;
+  const eventType = sanitizePersistedText(payload.event_type || "note");
+  const title = sanitizePersistedText(payload.title || "Atualizacao do aluno");
+  const description = sanitizePersistedText(payload.description || "", { trim: false }) || null;
+  const existing = await get(
+    `SELECT id
+       FROM student_timeline
+      WHERE student_id=?
+        AND coalesce(enrollment_id, 0)=coalesce(?, 0)
+        AND coalesce(sales_record_id, 0)=coalesce(?, 0)
+        AND coalesce(contract_id, 0)=coalesce(?, 0)
+        AND coalesce(installment_id, 0)=coalesce(?, 0)
+        AND event_type=?
+        AND coalesce(title, '')=?
+        AND coalesce(description, '')=?
+      LIMIT 1`,
+    [studentId, enrollmentId, salesRecordId, contractId, installmentId, eventType, title, description || ""]
+  );
+  if (existing?.id) return existing.id;
+  return createStudentTimelineEntry({
+    ...payload,
+    student_id: studentId,
+    enrollment_id: enrollmentId,
+    sales_record_id: salesRecordId,
+    contract_id: contractId,
+    installment_id: installmentId,
+    event_type: eventType,
+    title,
+    description,
+    created_at: payload.created_at || null,
+  });
+}
+
+function inferLeadStageFromImportedRecord(record = {}) {
+  const currentStage = normalizeLeadStage(record.lead_stage || "", "");
+  if (currentStage) return currentStage;
+  if (String(record.origin_type || "").trim().toLowerCase() === "post_sale_import") return "convertido";
+  return record.sale_date ? "fechado" : "lead";
+}
+
+function normalizeSalesContractSignal(value = "") {
+  return normalizeBusinessText(String(value || "").trim()).replace(/\s+/g, " ").trim();
+}
+
+function inferContractStatusFromSalesRecord(record = {}) {
+  const raw = normalizeSalesContractSignal(record.contract_status || "");
+  const leadStage = normalizeLeadStage(record.lead_stage || inferLeadStageFromImportedRecord(record), "lead");
+  if (raw.includes("cancel") || raw.includes("desist")) return "cancelled";
+  if (raw.includes("pendente") || raw.includes("pend")) return "pending";
+  if (raw && (raw.includes("ok") || raw.includes("sim") || raw.includes("plataforma") || raw.includes("empresa"))) {
+    return "active";
+  }
+  if (leadStage === "convertido") return "active";
+  if (leadStage === "fechado") return "pending";
+  return "draft";
+}
+
+async function findEnrollmentMatchForSalesRecord(studentId, record = {}) {
+  const safeStudentId = Number(studentId || 0) || null;
+  if (!safeStudentId) return null;
+  const semester = String(record.semester_label || "").trim();
+  const language = String(record.language || "").trim();
+  const modality = String(record.modality || "").trim();
+  return get(
+    `SELECT e.id, e.class_id, e.enrollment_number, e.enrollment_status, e.contract_status, e.payment_status, e.pedagogical_status,
+            ap.language, ap.modality, ap.semester_label,
+            st.code AS school_term_code
+       FROM enrollments e
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+      WHERE e.student_id=?
+      ORDER BY
+        CASE
+          WHEN ? <> '' AND (lower(coalesce(st.code, ''))=lower(?) OR lower(coalesce(ap.semester_label, ''))=lower(?)) THEN 0
+          ELSE 1
+        END ASC,
+        CASE
+          WHEN ? <> '' AND lower(coalesce(ap.language, ''))=lower(?) THEN 0
+          ELSE 1
+        END ASC,
+        CASE
+          WHEN ? <> '' AND lower(coalesce(ap.modality, ''))=lower(?) THEN 0
+          ELSE 1
+        END ASC,
+        CASE
+          WHEN lower(coalesce(e.enrollment_status, '')) IN ('matriculado', 'aguardando turma', 'pre-matricula') THEN 0
+          ELSE 1
+        END ASC,
+        CASE WHEN e.class_id IS NOT NULL THEN 0 ELSE 1 END ASC,
+        datetime(e.updated_at) DESC,
+        e.id DESC
+      LIMIT 1`,
+    [safeStudentId, semester, semester, semester, language, language, modality, modality]
+  );
+}
+
+async function findExistingContractForSalesContext(studentId, enrollmentId = null, salesRecordId = null) {
+  if (salesRecordId) {
+    const bySalesRecord = await get("SELECT * FROM financial_contracts WHERE sales_record_id=? ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1", [salesRecordId]);
+    if (bySalesRecord) return bySalesRecord;
+  }
+  if (!studentId) return null;
+  return get(
+    "SELECT * FROM financial_contracts WHERE student_id=? AND coalesce(enrollment_id, 0)=coalesce(?, 0) ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1",
+    [studentId, Number(enrollmentId || 0) || null]
+  );
+}
+
+async function reconcileImportedSalesRecord(record = {}, actorUserId = null) {
+  const safeRecordId = Number(record.id || 0) || null;
+  if (!safeRecordId) {
+    return { linked_student: false, linked_enrollment: false, contract_created: false, timeline_events: 0 };
+  }
+
+  const actorUser = actorUserId ? { id: actorUserId, sub: actorUserId } : null;
+  let student = null;
+  if (Number(record.student_id || 0)) {
+    student = await get("SELECT id, full_name, cpf, phone, whatsapp, email FROM students WHERE id=? LIMIT 1", [record.student_id]);
+  }
+  if (!student) {
+    student = await findAcademicStudentMatch({
+      fullName: record.student_name,
+      normalizedName: normalizePersonKey(record.student_name || ""),
+      phone: record.phone,
+    });
+  }
+  if (!student?.id) {
+    return { linked_student: false, linked_enrollment: false, contract_created: false, timeline_events: 0 };
+  }
+
+  const enrollment = Number(record.enrollment_id || 0)
+    ? await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [record.enrollment_id])
+    : await findEnrollmentMatchForSalesRecord(student.id, record);
+  const leadStage = normalizeLeadStage(
+    record.lead_stage
+      || (enrollment?.id ? "convertido" : inferLeadStageFromImportedRecord(record)),
+    enrollment?.id ? "convertido" : inferLeadStageFromImportedRecord(record)
+  );
+
+  await run(
+    "UPDATE sales_records SET student_id=?, enrollment_id=?, lead_stage=?, updated_at=datetime('now') WHERE id=?",
+    [student.id, enrollment?.id || null, leadStage, safeRecordId]
+  );
+
+  let timelineEvents = 0;
+  if (leadStage === "convertido") {
+    const eventId = await ensureStudentTimelineEntry({
+      student_id: student.id,
+      enrollment_id: enrollment?.id || null,
+      sales_record_id: safeRecordId,
+      actor_user_id: actorUserId,
+      event_type: "commercial_linked",
+      title: "Lead vinculado ao aluno",
+      description: `${record.student_name || student.full_name} foi relacionado ao fluxo comercial importado.`,
+      metadata: {
+        source_workbook: record.source_workbook || null,
+        source_sheet: record.source_sheet || null,
+        closer_name: record.closer_normalized || record.closer_original || null,
+      },
+    });
+    if (eventId) timelineEvents += 1;
+  }
+
+  let contract = await findExistingContractForSalesContext(student.id, enrollment?.id || null, safeRecordId);
+  let contractCreated = false;
+  if (!contract?.id && (leadStage === "convertido" || leadStage === "fechado" || String(record.origin_type || "").trim().toLowerCase() === "post_sale_import")) {
+    const contractDetail = await saveFinancialContractRecord({
+      student_id: student.id,
+      enrollment_id: enrollment?.id || null,
+      sales_record_id: safeRecordId,
+      responsible_name: null,
+      responsible_cpf: null,
+      contract_number: generateContractNumber(student.id, enrollment?.id || 0),
+      contract_type: "course_enrollment",
+      contract_status: inferContractStatusFromSalesRecord({ ...record, lead_stage: leadStage }),
+      total_amount: null,
+      installments_count: 0,
+      first_due_date: null,
+      notes: "Contrato inicial criado a partir da consolidacao comercial. Parcelas dependem de preenchimento operacional/manual.",
+      source_workbook: record.source_workbook || null,
+      source_sheet: record.source_sheet || null,
+      source_row_identifier: record.source_row_identifier || `sales_record:${safeRecordId}`,
+      source_payload: {
+        imported_from_sales_record_id: safeRecordId,
+        workbook: record.source_workbook || null,
+        sheet: record.source_sheet || null,
+      },
+      metadata: {
+        auto_created_from_sales_import: true,
+      },
+    }, actorUser, { createTimeline: true });
+    contract = contractDetail?.contract || null;
+    contractCreated = Boolean(contract?.id);
+  }
+
+  if (contract?.id && Number(record.financial_contract_id || 0) !== Number(contract.id)) {
+    await run(
+      "UPDATE sales_records SET financial_contract_id=?, lead_stage=?, converted_at=COALESCE(converted_at, CURRENT_TIMESTAMP), updated_at=datetime('now') WHERE id=?",
+      [contract.id, leadStage === "lead" ? "fechado" : leadStage, safeRecordId]
+    );
+  }
+
+  return {
+    linked_student: true,
+    linked_enrollment: Boolean(enrollment?.id),
+    contract_created: contractCreated,
+    timeline_events: timelineEvents,
+  };
+}
+
+async function reconcileSalesImportRun(importRunId, actorUserId = null) {
+  const safeImportRunId = Number(importRunId || 0) || null;
+  if (!safeImportRunId) {
+    return { linked_students: 0, linked_enrollments: 0, contracts_created: 0, timeline_events: 0 };
+  }
+  const rows = await all("SELECT * FROM sales_records WHERE import_run_id=? ORDER BY id ASC", [safeImportRunId]);
+  const totals = { linked_students: 0, linked_enrollments: 0, contracts_created: 0, timeline_events: 0 };
+  for (const row of rows) {
+    const result = await reconcileImportedSalesRecord(row, actorUserId);
+    if (result.linked_student) totals.linked_students += 1;
+    if (result.linked_enrollment) totals.linked_enrollments += 1;
+    if (result.contract_created) totals.contracts_created += 1;
+    totals.timeline_events += Number(result.timeline_events || 0);
+  }
+  return totals;
+}
+
+function normalizeWeekdayValue(value = "") {
+  const safe = normalizeAcademicText(value);
+  if (!safe) return "";
+  if (safe.startsWith("seg")) return "segunda";
+  if (safe.startsWith("ter")) return "terca";
+  if (safe.startsWith("qua")) return "quarta";
+  if (safe.startsWith("qui")) return "quinta";
+  if (safe.startsWith("sex")) return "sexta";
+  if (safe.startsWith("sab")) return "sabado";
+  if (safe.startsWith("dom")) return "domingo";
+  return "";
+}
+
+function weekdayToIndex(value = "") {
+  const safe = normalizeWeekdayValue(value);
+  if (safe === "domingo") return 0;
+  if (safe === "segunda") return 1;
+  if (safe === "terca") return 2;
+  if (safe === "quarta") return 3;
+  if (safe === "quinta") return 4;
+  if (safe === "sexta") return 5;
+  if (safe === "sabado") return 6;
+  return null;
+}
+
+function iterateDateKeys(startDate = "", endDate = "") {
+  const start = normalizeAcademicDateInput(startDate);
+  const end = normalizeAcademicDateInput(endDate);
+  if (!start || !end) return [];
+  const current = new Date(`${start}T12:00:00`);
+  const finish = new Date(`${end}T12:00:00`);
+  const out = [];
+  while (current <= finish) {
+    out.push(current.toISOString().slice(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+  return out;
+}
+
+async function ensureAcademicClassSessionsSeed(actorUserId = null) {
+  const today = new Date();
+  const windowStart = new Date(today);
+  windowStart.setDate(windowStart.getDate() - 45);
+  const windowEnd = new Date(today);
+  windowEnd.setDate(windowEnd.getDate() + 120);
+  const rows = await all(
+    `SELECT cs.id AS schedule_id, cs.class_id, cs.weekday, cs.start_time, cs.end_time, cs.notes AS schedule_notes,
+            c.name AS class_name, c.status AS class_status,
+            st.start_date AS term_start_date, st.end_date AS term_end_date
+       FROM class_schedules cs
+       JOIN classes c ON c.id = cs.class_id
+       LEFT JOIN school_terms st ON st.id = c.school_term_id
+      WHERE lower(coalesce(c.status, '')) <> 'cancelada'
+      ORDER BY cs.class_id ASC, cs.id ASC`
+  );
+  let created = 0;
+  for (const row of rows) {
+    const weekdayIndex = weekdayToIndex(row.weekday);
+    if (weekdayIndex === null) continue;
+    const startDate = normalizeAcademicDateInput(row.term_start_date) || windowStart.toISOString().slice(0, 10);
+    const endDate = normalizeAcademicDateInput(row.term_end_date) || windowEnd.toISOString().slice(0, 10);
+    const boundedStart = startDate < windowStart.toISOString().slice(0, 10) ? windowStart.toISOString().slice(0, 10) : startDate;
+    const boundedEnd = endDate > windowEnd.toISOString().slice(0, 10) ? windowEnd.toISOString().slice(0, 10) : endDate;
+    for (const dateKey of iterateDateKeys(boundedStart, boundedEnd)) {
+      const probe = new Date(`${dateKey}T12:00:00`);
+      if (probe.getDay() !== weekdayIndex) continue;
+      const existing = await get(
+        "SELECT id FROM class_sessions WHERE class_id=? AND coalesce(class_schedule_id, 0)=coalesce(?, 0) AND class_date=? LIMIT 1",
+        [row.class_id, row.schedule_id, dateKey]
+      );
+      if (existing?.id) continue;
+      await run(
+        "INSERT INTO class_sessions (class_id, class_schedule_id, class_date, start_time, end_time, session_status, notes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        [
+          row.class_id,
+          row.schedule_id,
+          dateKey,
+          row.start_time || null,
+          row.end_time || null,
+          dateKey < brazilDateKey() ? "realizada" : "planejada",
+          row.schedule_notes || null,
+        ]
+      );
+      created += 1;
+    }
+  }
+  if (actorUserId && created) {
+    await logEvent(actorUserId, "academic_sessions_seeded", {
+      created_sessions: created,
+      source: "class_schedule_seed",
+    });
+  }
+  return { created_sessions: created };
+}
+
+async function ensureAcademicTimelineBackfill(actorUserId = null) {
+  const classHistoryRows = await all(
+    `SELECT ech.enrollment_id, ech.reason, ech.notes, ech.changed_at, ech.changed_by_user_id,
+            e.student_id, old_class.name AS old_class_name, new_class.name AS new_class_name
+       FROM enrollment_class_history ech
+       JOIN enrollments e ON e.id = ech.enrollment_id
+       LEFT JOIN classes old_class ON old_class.id = ech.old_class_id
+       LEFT JOIN classes new_class ON new_class.id = ech.new_class_id
+      ORDER BY ech.id ASC`
+  );
+  const transferRows = await all(
+    `SELECT st.enrollment_id, st.transfer_type, st.reason, st.notes, st.changed_at, st.changed_by_user_id,
+            st.old_value_json, st.new_value_json, e.student_id
+       FROM student_transfers st
+       JOIN enrollments e ON e.id = st.enrollment_id
+      ORDER BY st.id ASC`
+  );
+
+  let created = 0;
+  for (const row of classHistoryRows) {
+    const timelineId = await ensureStudentTimelineEntry({
+      student_id: row.student_id,
+      enrollment_id: row.enrollment_id,
+      actor_user_id: row.changed_by_user_id || actorUserId,
+      event_type: "academic_class_change",
+      title: "Troca de turma",
+      description: `${row.old_class_name || "Sem turma"} -> ${row.new_class_name || "Sem turma"}${row.reason ? ` (${row.reason})` : ""}`,
+      metadata: {
+        old_class_name: row.old_class_name || null,
+        new_class_name: row.new_class_name || null,
+        reason: row.reason || null,
+        notes: row.notes || null,
+      },
+      created_at: row.changed_at,
+    });
+    if (timelineId) created += 1;
+  }
+
+  for (const row of transferRows) {
+    const oldValue = safeJsonParse(row.old_value_json || "{}") || {};
+    const newValue = safeJsonParse(row.new_value_json || "{}") || {};
+    const title = row.transfer_type === "schedule_change"
+      ? "Mudanca de horario"
+      : row.transfer_type === "remanejamento"
+        ? "Remanejamento"
+        : row.transfer_type === "reversao_pedagogica"
+          ? "Reversao pedagogica"
+          : "Movimentacao academica";
+    const descriptionParts = [];
+    if (oldValue.class_name || newValue.target_class_label || newValue.class_name) {
+      descriptionParts.push(`${oldValue.class_name || "Sem turma"} -> ${newValue.target_class_label || newValue.class_name || "Sem turma"}`);
+    }
+    if (row.reason) descriptionParts.push(row.reason);
+    const timelineId = await ensureStudentTimelineEntry({
+      student_id: row.student_id,
+      enrollment_id: row.enrollment_id,
+      actor_user_id: row.changed_by_user_id || actorUserId,
+      event_type: row.transfer_type || "academic_transfer",
+      title,
+      description: descriptionParts.join(" | ") || row.notes || "Movimentacao academica registrada.",
+      metadata: {
+        transfer_type: row.transfer_type || null,
+        old_value: oldValue,
+        new_value: newValue,
+        notes: row.notes || null,
+      },
+      created_at: row.changed_at,
+    });
+    if (timelineId) created += 1;
+  }
+
+  if (actorUserId && created) {
+    await logEvent(actorUserId, "academic_timeline_backfilled", {
+      created_entries: created,
+    });
+  }
+  return { created_entries: created };
+}
+
+async function resolveStudentHubScope(user, viewKey = "") {
+  if (!user) throw new Error("student_hub_access_denied");
+  const requestedView = normalizeStudentHubViewKey(viewKey || "");
+  const requestedArea = getStudentHubAreaByViewKey(requestedView);
+  const hasAttendance = userHasDepartmentAccess(user, "atendimento");
+  const hasCommercial = userHasDepartmentAccess(user, "comercial");
+  const hasFinancial = userHasDepartmentAccess(user, "financeiro");
+  const isAdmin = user.role === "admin";
+
+  const scope = {
+    enabled: isAdmin || hasAttendance || hasCommercial || hasFinancial,
+    kind: isAdmin ? "admin" : (hasCommercial ? "commercial" : (hasFinancial ? "financial" : "attendance")),
+    requested_view_key: requestedView,
+    canSearchStudents: Boolean(isAdmin || hasAttendance || hasCommercial || hasFinancial),
+    canManageCommercial: Boolean(isAdmin || hasCommercial),
+    canManageFinancial: Boolean(isAdmin || hasFinancial || hasCommercial),
+    canManageStudentData: Boolean(isAdmin || hasCommercial),
+    canConvertLead: Boolean(isAdmin || hasCommercial),
+    visible_areas: ["attendance", "commercial", "financial"].filter((item) => (
+      isAdmin
+      || (item === "attendance" && hasAttendance)
+      || (item === "commercial" && hasCommercial)
+      || (item === "financial" && hasFinancial)
+    )),
+  };
+
+  if (!scope.enabled) throw new Error("student_hub_access_denied");
+  if (!isAdmin && !scope.visible_areas.includes(requestedArea)) {
+    throw new Error("student_hub_access_denied");
+  }
+  return scope;
+}
+
+function buildStudentHubSearchWhere(filters = {}) {
+  const clauses = [];
+  const params = [];
+  const search = String(filters.search || "").trim();
+  if (search) {
+    const like = buildAcademicSearchLike(search);
+    const digitsLike = `%${normalizeDigits(search)}%`;
+    clauses.push(`(
+      lower(coalesce(s.full_name, '')) LIKE lower(?)
+      OR lower(coalesce(s.preferred_name, '')) LIKE lower(?)
+      OR lower(coalesce(s.email, '')) LIKE lower(?)
+      OR lower(coalesce(s.phone, '')) LIKE lower(?)
+      OR lower(coalesce(s.whatsapp, '')) LIKE lower(?)
+      OR replace(replace(replace(coalesce(s.cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?
+      OR replace(replace(replace(coalesce(s.rg, ''), '.', ''), '-', ''), '/', '') LIKE ?
+      OR EXISTS (
+        SELECT 1
+          FROM student_guardians sg
+         WHERE sg.student_id=s.id
+           AND (
+             lower(coalesce(sg.name, '')) LIKE lower(?)
+             OR lower(coalesce(sg.email, '')) LIKE lower(?)
+             OR lower(coalesce(sg.phone, '')) LIKE lower(?)
+             OR lower(coalesce(sg.whatsapp, '')) LIKE lower(?)
+             OR replace(replace(replace(coalesce(sg.cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?
+           )
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM enrollments e
+         WHERE e.student_id=s.id
+           AND lower(coalesce(e.enrollment_number, '')) LIKE lower(?)
+      )
+      OR EXISTS (
+        SELECT 1
+          FROM financial_contracts fc
+         WHERE fc.student_id=s.id
+           AND (
+             lower(coalesce(fc.contract_number, '')) LIKE lower(?)
+             OR replace(replace(replace(coalesce(fc.responsible_cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?
+           )
+      )
+    )`);
+    params.push(like, like, like, like, like, digitsLike, digitsLike, like, like, like, like, digitsLike, like, like, digitsLike);
+  }
+  if (filters.status) {
+    clauses.push("lower(coalesce(s.status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+async function listStudentHubStudents(scope, filters = {}) {
+  const where = buildStudentHubSearchWhere(filters);
+  const limit = Math.min(140, Math.max(1, Number(filters.limit || 60)));
+  const params = [brazilDateKey(), ...where.params, limit];
+  const rows = await all(
+    `SELECT s.id, s.full_name, s.preferred_name, s.cpf, s.rg, s.email, s.phone, s.whatsapp, s.status, s.updated_at,
+            (SELECT COUNT(*) FROM student_guardians sg WHERE sg.student_id=s.id) AS guardians_total,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.student_id=s.id) AS enrollments_total,
+            (SELECT COALESCE(e.enrollment_status, '')
+               FROM enrollments e
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS current_enrollment_status,
+            (SELECT COALESCE(c.name, '')
+               FROM enrollments e
+               LEFT JOIN classes c ON c.id = e.class_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS current_class_name,
+            (SELECT COALESCE(ap.language, '')
+               FROM enrollments e
+               LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS current_language,
+            (SELECT COUNT(*) FROM financial_contracts fc WHERE fc.student_id=s.id) AS contracts_total,
+            (SELECT COUNT(*)
+               FROM financial_contracts fc
+               JOIN financial_installments fi ON fi.contract_id = fc.id
+              WHERE fc.student_id=s.id
+                AND (
+                  lower(coalesce(fi.status, ''))='overdue'
+                  OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?)
+                )) AS overdue_installments
+       FROM students s
+       ${where.sql}
+      ORDER BY CASE WHEN lower(coalesce(s.status, ''))='ativo' THEN 0 ELSE 1 END, datetime(s.updated_at) DESC, lower(s.full_name) ASC
+      LIMIT ?`,
+    params
+  );
+  const summary = await get(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN lower(coalesce(s.status, ''))='ativo' THEN 1 ELSE 0 END) AS active_total,
+            SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM student_guardians sg WHERE sg.student_id=s.id) THEN 1 ELSE 0 END) AS no_guardian_total,
+            SUM(CASE WHEN EXISTS (SELECT 1 FROM financial_contracts fc WHERE fc.student_id=s.id) THEN 1 ELSE 0 END) AS students_with_contract_total,
+            SUM(CASE WHEN EXISTS (
+              SELECT 1
+                FROM financial_contracts fc
+                JOIN financial_installments fi ON fi.contract_id = fc.id
+               WHERE fc.student_id=s.id
+                 AND (
+                   lower(coalesce(fi.status, ''))='overdue'
+                   OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?)
+                 )
+            ) THEN 1 ELSE 0 END) AS overdue_students
+       FROM students s
+       ${where.sql}`,
+    [brazilDateKey(), ...where.params]
+  );
+  return {
+    rows: rows.map(mapAcademicStudentRow),
+    summary: {
+      total: Number(summary?.total || 0),
+      active_total: Number(summary?.active_total || 0),
+      no_guardian_total: Number(summary?.no_guardian_total || 0),
+      students_with_contract_total: Number(summary?.students_with_contract_total || 0),
+      without_contract_total: Math.max(0, Number(summary?.total || 0) - Number(summary?.students_with_contract_total || 0)),
+      overdue_students: Number(summary?.overdue_students || 0),
+    },
+  };
+}
+
+function buildResolvedLeadStageSql(alias = "sr") {
+  return `COALESCE(NULLIF(${alias}.lead_stage, ''), CASE WHEN ${alias}.converted_at IS NOT NULL THEN 'convertido' ELSE 'lead' END)`;
+}
+
+function buildStudentHubLeadWhere(filters = {}) {
+  const clauses = [];
+  const params = [];
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    clauses.push("(lower(coalesce(sr.student_name, '')) LIKE lower(?) OR lower(coalesce(sr.phone, '')) LIKE lower(?) OR lower(coalesce(sr.contact_email, '')) LIKE lower(?) OR lower(coalesce(sr.language, '')) LIKE lower(?) OR lower(coalesce(sr.attendant_name, '')) LIKE lower(?) OR lower(coalesce(sr.media_source, '')) LIKE lower(?) OR lower(coalesce(sr.observations, '')) LIKE lower(?))");
+    params.push(like, like, like, like, like, like, like);
+  }
+  if (filters.leadStage) {
+    clauses.push(`lower(${buildResolvedLeadStageSql("sr")})=lower(?)`);
+    params.push(normalizeLeadStage(filters.leadStage));
+  }
+  if (filters.language) {
+    clauses.push("lower(coalesce(sr.language, ''))=lower(?)");
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    clauses.push("lower(coalesce(sr.modality, ''))=lower(?)");
+    params.push(String(filters.modality).trim());
+  }
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+async function listStudentHubLeads(scope, filters = {}) {
+  const where = buildStudentHubLeadWhere(filters);
+  const limit = Math.min(140, Math.max(1, Number(filters.limit || 60)));
+  const stageSql = buildResolvedLeadStageSql("sr");
+  const rows = await all(
+    `SELECT sr.*, ${stageSql} AS resolved_lead_stage,
+            COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name,
+            s.full_name AS linked_student_name,
+            e.enrollment_number AS linked_enrollment_number
+       FROM sales_records sr
+       LEFT JOIN closers c ON c.id = sr.closer_id
+       LEFT JOIN students s ON s.id = sr.student_id
+       LEFT JOIN enrollments e ON e.id = sr.enrollment_id
+       ${where.sql}
+      ORDER BY CASE WHEN sr.converted_at IS NOT NULL THEN 1 ELSE 0 END ASC, datetime(coalesce(sr.updated_at, sr.created_at)) DESC, sr.id DESC
+      LIMIT ?`,
+    [...where.params, limit]
+  );
+  const summary = await get(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN lower(${stageSql})='lead' THEN 1 ELSE 0 END) AS lead_total,
+            SUM(CASE WHEN lower(${stageSql})='negociacao' THEN 1 ELSE 0 END) AS negotiation_total,
+            SUM(CASE WHEN lower(${stageSql})='fechado' THEN 1 ELSE 0 END) AS closed_total,
+            SUM(CASE WHEN lower(${stageSql})='convertido' THEN 1 ELSE 0 END) AS converted_total,
+            SUM(CASE WHEN sr.student_id IS NULL THEN 1 ELSE 0 END) AS unlinked_total
+       FROM sales_records sr
+       ${where.sql}`,
+    where.params
+  );
+  return {
+    rows: rows.map((row) => ({
+      ...serializeSalesRecord(row),
+      resolved_lead_stage: row.resolved_lead_stage || "lead",
+    })),
+    summary: {
+      total: Number(summary?.total || 0),
+      lead_total: Number(summary?.lead_total || 0),
+      negotiation_total: Number(summary?.negotiation_total || 0),
+      closed_total: Number(summary?.closed_total || 0),
+      converted_total: Number(summary?.converted_total || 0),
+      unlinked_total: Number(summary?.unlinked_total || 0),
+    },
+  };
+}
+
+function buildStudentHubContractWhere(filters = {}) {
+  const clauses = [];
+  const params = [];
+  const search = String(filters.search || "").trim();
+  if (search) {
+    const like = buildAcademicSearchLike(search);
+    const digitsLike = `%${normalizeDigits(search)}%`;
+    clauses.push("(lower(coalesce(s.full_name, '')) LIKE lower(?) OR lower(coalesce(fc.contract_number, '')) LIKE lower(?) OR lower(coalesce(fc.responsible_name, '')) LIKE lower(?) OR replace(replace(replace(coalesce(fc.responsible_cpf, ''), '.', ''), '-', ''), '/', '') LIKE ?)");
+    params.push(like, like, like, digitsLike);
+  }
+  if (filters.contractStatus) {
+    clauses.push("lower(coalesce(fc.contract_status, ''))=lower(?)");
+    params.push(normalizeFinancialContractStatus(filters.contractStatus));
+  }
+  if (filters.onlyDelinquent) {
+    clauses.push(`EXISTS (
+      SELECT 1
+        FROM financial_installments fi
+       WHERE fi.contract_id=fc.id
+         AND (
+           lower(coalesce(fi.status, ''))='overdue'
+           OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?)
+         )
+    )`);
+    params.push(brazilDateKey());
+  }
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+function computeInstallmentEffectiveStatus(installment = {}) {
+  const explicit = normalizeFinancialInstallmentStatus(installment.status || "", "pending");
+  if (["paid", "cancelled", "negotiated", "overdue"].includes(explicit)) return explicit;
+  if (installment.due_date && String(installment.due_date).slice(0, 10) < brazilDateKey()) return "overdue";
+  return "pending";
+}
+
+async function listFinancialInstallmentsByContractId(contractId) {
+  const rows = await all(
+    `SELECT id, contract_id, installment_number, due_date, amount, status, paid_at, payment_method, reference_label, notes, metadata_json, created_at, updated_at
+       FROM financial_installments
+      WHERE contract_id=?
+      ORDER BY installment_number ASC, due_date ASC, id ASC`,
+    [contractId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    amount: Number(row.amount || 0),
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+    effective_status: computeInstallmentEffectiveStatus(row),
+  }));
+}
+
+function summarizeContractInstallments(installments = []) {
+  return (Array.isArray(installments) ? installments : []).reduce((acc, item) => {
+    acc.total += 1;
+    acc.amount_total += Number(item.amount || 0);
+    acc[`${item.effective_status}_total`] = Number(acc[`${item.effective_status}_total`] || 0) + 1;
+    return acc;
+  }, {
+    total: 0,
+    amount_total: 0,
+    pending_total: 0,
+    paid_total: 0,
+    overdue_total: 0,
+    cancelled_total: 0,
+    negotiated_total: 0,
+  });
+}
+
+async function listStudentHubContracts(scope, filters = {}) {
+  const where = buildStudentHubContractWhere(filters);
+  const limit = Math.min(140, Math.max(1, Number(filters.limit || 60)));
+  const todayKey = brazilDateKey();
+  const rows = await all(
+    `SELECT fc.*, s.full_name AS student_name, s.cpf AS student_cpf, s.phone AS student_phone, e.enrollment_number,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id) AS installments_total,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id AND lower(coalesce(fi.status, ''))='paid') AS paid_total,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id AND lower(coalesce(fi.status, ''))='pending') AS pending_total,
+            (SELECT COUNT(*) FROM financial_installments fi WHERE fi.contract_id=fc.id AND (lower(coalesce(fi.status, ''))='overdue' OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?))) AS overdue_total
+       FROM financial_contracts fc
+       JOIN students s ON s.id = fc.student_id
+       LEFT JOIN enrollments e ON e.id = fc.enrollment_id
+       ${where.sql}
+      ORDER BY CASE WHEN lower(coalesce(fc.contract_status, '')) IN ('active', 'signed') THEN 0 ELSE 1 END, datetime(fc.updated_at) DESC, fc.id DESC
+      LIMIT ?`,
+    [todayKey, ...where.params, limit]
+  );
+  const summary = await get(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN lower(coalesce(fc.contract_status, '')) IN ('active', 'signed') THEN 1 ELSE 0 END) AS active_total,
+            SUM(CASE WHEN EXISTS (SELECT 1 FROM financial_installments fi WHERE fi.contract_id=fc.id AND lower(coalesce(fi.status, ''))='pending') THEN 1 ELSE 0 END) AS pending_contracts,
+            SUM(CASE WHEN EXISTS (
+              SELECT 1 FROM financial_installments fi
+               WHERE fi.contract_id=fc.id
+                 AND (lower(coalesce(fi.status, ''))='overdue' OR (lower(coalesce(fi.status, ''))='pending' AND fi.due_date IS NOT NULL AND fi.due_date < ?))
+            ) THEN 1 ELSE 0 END) AS overdue_contracts
+       FROM financial_contracts fc
+       JOIN students s ON s.id = fc.student_id
+       ${where.sql}`,
+    [todayKey, ...where.params]
+  );
+  return {
+    rows: rows.map((row) => ({
+      ...row,
+      total_amount: Number(row.total_amount || 0),
+    })),
+    summary: {
+      total: Number(summary?.total || 0),
+      active_total: Number(summary?.active_total || 0),
+      pending_contracts: Number(summary?.pending_contracts || 0),
+      overdue_contracts: Number(summary?.overdue_contracts || 0),
+    },
+  };
+}
+
+async function buildStudentHubOptions() {
+  const [languagesRows, modalitiesRows, termsRows, classesRows] = await Promise.all([
+    all(`SELECT DISTINCT language AS value FROM academic_programs WHERE coalesce(language, '')<>'' ORDER BY value ASC LIMIT 80`),
+    all(`SELECT DISTINCT modality AS value FROM academic_programs WHERE coalesce(modality, '')<>'' ORDER BY value ASC LIMIT 80`),
+    all(`SELECT id, code, name FROM school_terms ORDER BY lower(code) DESC, lower(name) DESC LIMIT 40`),
+    all(`SELECT c.id, c.name, c.code, c.language, c.modality, st.code AS school_term_code
+           FROM classes c
+           LEFT JOIN school_terms st ON st.id = c.school_term_id
+          WHERE lower(coalesce(c.status, ''))<>'cancelada'
+          ORDER BY datetime(c.updated_at) DESC, lower(c.name) ASC
+          LIMIT 240`),
+  ]);
+  return {
+    lead_stage_options: STUDENT_HUB_LEAD_STAGE_OPTIONS.slice(),
+    contract_status_options: FINANCIAL_CONTRACT_STATUS_OPTIONS.slice(),
+    installment_status_options: FINANCIAL_INSTALLMENT_STATUS_OPTIONS.slice(),
+    student_status_options: ACADEMIC_STUDENT_STATUS_OPTIONS.slice(),
+    enrollment_status_options: ACADEMIC_ENROLLMENT_STATUS_OPTIONS.slice(),
+    languages: languagesRows.map((item) => item.value).filter(Boolean),
+    modalities: modalitiesRows.map((item) => item.value).filter(Boolean),
+    terms: termsRows,
+    classes: classesRows,
+  };
+}
+
+async function getStudentHubStudentDetail(studentId, scope) {
+  const detail = await getAcademicStudentDetail(studentId, { canViewAll: true, teacherUserId: null });
+  if (!detail?.student) return null;
+  const student = detail.student;
+  const commercialWhereClauses = ["sr.student_id=?"];
+  const commercialParams = [studentId];
+  if (student.full_name) {
+    commercialWhereClauses.push("lower(coalesce(sr.student_name, ''))=lower(?)");
+    commercialParams.push(student.full_name);
+  }
+  if (student.phone) {
+    commercialWhereClauses.push("lower(coalesce(sr.phone, ''))=lower(?)");
+    commercialParams.push(student.phone);
+  }
+  if (student.email) {
+    commercialWhereClauses.push("lower(coalesce(sr.contact_email, ''))=lower(?)");
+    commercialParams.push(student.email);
+  }
+  const [commercialRows, contracts, timeline, classHistoryRows, scheduleHistoryRows, transferHistoryRows] = await Promise.all([
+    all(
+      `SELECT sr.*, ${buildResolvedLeadStageSql("sr")} AS resolved_lead_stage,
+              COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
+         FROM sales_records sr
+         LEFT JOIN closers c ON c.id = sr.closer_id
+        WHERE ${commercialWhereClauses.join("\n           OR ")}
+        ORDER BY datetime(coalesce(sr.converted_at, sr.closed_at, sr.updated_at, sr.created_at)) DESC, sr.id DESC
+        LIMIT 20`,
+      commercialParams
+    ),
+    all(
+      `SELECT fc.*, e.enrollment_number
+         FROM financial_contracts fc
+         LEFT JOIN enrollments e ON e.id = fc.enrollment_id
+        WHERE fc.student_id=?
+        ORDER BY datetime(fc.updated_at) DESC, fc.id DESC`,
+      [studentId]
+    ),
+    all(
+      `SELECT st.*, u.name AS actor_name
+         FROM student_timeline st
+         LEFT JOIN users u ON u.id = st.actor_user_id
+        WHERE st.student_id=?
+        ORDER BY datetime(st.created_at) DESC, st.id DESC
+        LIMIT 80`,
+      [studentId]
+    ),
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_class_history h
+         JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE e.student_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 30`,
+      [studentId]
+    ),
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_schedule_history h
+         JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE e.student_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 30`,
+      [studentId]
+    ),
+    all(
+      `SELECT st.*, u.name AS changed_by_name
+         FROM student_transfers st
+         JOIN enrollments e ON e.id = st.enrollment_id
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        WHERE e.student_id=?
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC
+        LIMIT 40`,
+      [studentId]
+    ),
+  ]);
+  const contractDetails = [];
+  for (const contract of contracts) {
+    const installments = await listFinancialInstallmentsByContractId(contract.id);
+    contractDetails.push({
+      ...contract,
+      total_amount: Number(contract.total_amount || 0),
+      installments,
+      summary: summarizeContractInstallments(installments),
+    });
+  }
+  const primaryContract = contractDetails.find((item) => ["active", "signed", "pending", "draft"].includes(String(item.contract_status || "").toLowerCase()))
+    || contractDetails[0]
+    || null;
+  const normalizedEnrollments = detail.enrollments || [];
+  const currentEnrollment = normalizedEnrollments.find((item) => ["matriculado", "aguardando turma", "pre-matricula"].includes(normalizeAcademicText(item.enrollment_status || "")))
+    || detail.enrollments?.[0]
+    || null;
+  const specialTrackLabels = Array.from(new Set(normalizedEnrollments.map((item) => {
+    const safeKind = normalizeAcademicText(item.class_kind || "");
+    if (safeKind === "vip") return "VIP";
+    if (safeKind === "semi_vip") return "Semi VIP";
+    if (safeKind === "intensive") return "Intensivo";
+    if (safeKind === "special_project") return "Projeto especial";
+    return "";
+  }).filter(Boolean)));
+  const pedagogicalStatusSummary = normalizedEnrollments.reduce((acc, item) => {
+    const enrollmentStatus = normalizeAcademicText(item.enrollment_status || "");
+    if (enrollmentStatus === "trancado") acc.trancado_total += 1;
+    if (["desistente", "cancelado"].includes(enrollmentStatus)) acc.inactive_total += 1;
+    if (enrollmentStatus === "aguardando turma") acc.waiting_total += 1;
+    const classKind = normalizeAcademicText(item.class_kind || "");
+    if (["vip", "semi_vip"].includes(classKind)) acc.vip_total += 1;
+    if (classKind === "intensive") acc.intensive_total += 1;
+    return acc;
+  }, { trancado_total: 0, inactive_total: 0, waiting_total: 0, vip_total: 0, intensive_total: 0 });
+  let currentTeachers = [];
+  let currentSchedules = [];
+  if (currentEnrollment?.class_id) {
+    currentTeachers = await listClassTeachersByClassId(currentEnrollment.class_id);
+    currentSchedules = await listClassSchedulesByClassId(currentEnrollment.class_id);
+  }
+
+  return {
+    student: detail.student,
+    guardians: detail.guardians || [],
+    commercial: {
+      records: commercialRows.map((row) => ({
+        ...serializeSalesRecord(row),
+        resolved_lead_stage: row.resolved_lead_stage || "lead",
+      })),
+      latest_record: commercialRows[0] ? {
+        ...serializeSalesRecord(commercialRows[0]),
+        resolved_lead_stage: commercialRows[0].resolved_lead_stage || "lead",
+      } : null,
+    },
+    enrollment_summary: currentEnrollment || null,
+    enrollments: detail.enrollments || [],
+    attendance_summary: detail.attendance_summary || { total: 0, present_total: 0, absent_total: 0 },
+    pedagogical: {
+      current_class_name: currentEnrollment?.class_name || null,
+      current_teacher_names: currentTeachers.map((item) => item.display_name || item.user_name).filter(Boolean),
+      current_schedule_labels: currentSchedules.map((item) => [item.weekday, item.start_time, item.end_time].filter(Boolean).join(" · ")).filter(Boolean),
+      current_status: currentEnrollment?.enrollment_status || detail.student?.status || null,
+      current_class_kind: currentEnrollment?.class_kind || null,
+      current_class_metadata: currentEnrollment?.class_metadata || {},
+      special_track_labels: specialTrackLabels,
+      status_summary: pedagogicalStatusSummary,
+      class_history: classHistoryRows.map((row) => ({
+        ...row,
+        old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+        new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+      })),
+      schedule_history: scheduleHistoryRows.map((row) => ({
+        ...row,
+        old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+        new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+      })),
+      transfer_history: transferHistoryRows.map((row) => ({
+        ...row,
+        old_value: safeJsonParse(row.old_value_json || "null"),
+        new_value: safeJsonParse(row.new_value_json || "null"),
+      })),
+    },
+    financial: {
+      contracts: contractDetails,
+      primary_contract: primaryContract,
+      summary: contractDetails.reduce((acc, item) => {
+        acc.contracts_total += 1;
+        acc.amount_total += Number(item.total_amount || 0);
+        acc.installments_total += Number(item.summary?.total || 0);
+        acc.pending_total += Number(item.summary?.pending_total || 0);
+        acc.paid_total += Number(item.summary?.paid_total || 0);
+        acc.overdue_total += Number(item.summary?.overdue_total || 0);
+        return acc;
+      }, { contracts_total: 0, amount_total: 0, installments_total: 0, pending_total: 0, paid_total: 0, overdue_total: 0 }),
+    },
+    timeline: timeline.map((item) => ({
+      ...item,
+      metadata: safeJsonParse(item.metadata_json || "{}") || {},
+    })),
+    commercial_history: commercialRows.map((row) => ({
+      ...serializeSalesRecord(row),
+      resolved_lead_stage: row.resolved_lead_stage || "lead",
+    })),
+    scope,
+  };
+}
+
+async function getStudentHubLeadDetail(recordId, scope) {
+  const record = await get(
+    `SELECT sr.*, ${buildResolvedLeadStageSql("sr")} AS resolved_lead_stage,
+            COALESCE(c.display_name, c.official_name, sr.closer_normalized, sr.closer_original, 'Sem closer') AS closer_name
+       FROM sales_records sr
+       LEFT JOIN closers c ON c.id = sr.closer_id
+      WHERE sr.id=?`,
+    [recordId]
+  );
+  if (!record) return null;
+  const history = await getSalesRecordHistory(recordId);
+  const linkedStudent = Number(record.student_id || 0)
+    ? await getStudentHubStudentDetail(Number(record.student_id), scope).catch(() => null)
+    : null;
+  return {
+    record: {
+      ...serializeSalesRecord(record),
+      resolved_lead_stage: record.resolved_lead_stage || "lead",
+    },
+    history,
+    linked_student: linkedStudent,
+  };
+}
+
+async function getStudentHubContractDetail(contractId, scope) {
+  const contract = await get(
+    `SELECT fc.*, s.full_name AS student_name, s.cpf AS student_cpf, s.phone AS student_phone, e.enrollment_number
+       FROM financial_contracts fc
+       JOIN students s ON s.id = fc.student_id
+       LEFT JOIN enrollments e ON e.id = fc.enrollment_id
+      WHERE fc.id=?`,
+    [contractId]
+  );
+  if (!contract) return null;
+  const installments = await listFinancialInstallmentsByContractId(contractId);
+  const studentDetail = await getStudentHubStudentDetail(Number(contract.student_id), scope).catch(() => null);
+  return {
+    contract: {
+      ...contract,
+      total_amount: Number(contract.total_amount || 0),
+    },
+    installments,
+    summary: summarizeContractInstallments(installments),
+    student: studentDetail,
+  };
+}
+
+function generateEnrollmentNumber(studentId, schoolTermCode = "") {
+  const safeCode = sanitizeAcademicIdentifier(schoolTermCode || String(new Date().getFullYear()), "term").toUpperCase();
+  return `MAT-${safeCode}-${String(studentId).padStart(5, "0")}`;
+}
+
+function generateContractNumber(studentId, enrollmentId = 0) {
+  const year = new Date().getFullYear();
+  return `CTR-${year}-${String(studentId || 0).padStart(5, "0")}-${String(enrollmentId || 0).padStart(5, "0")}`;
+}
+
+async function saveStudentHubLeadRecord(payload = {}, actorUser, existingId = null) {
+  const actorId = actorUser?.id || actorUser?.sub || null;
+  const fullName = sanitizeAcademicTextValue(payload.student_name, { maxLength: 180 });
+  if (!fullName) throw new Error("missing_student_name");
+  const leadStage = normalizeLeadStage(payload.lead_stage || "lead");
+  const closerOriginal = sanitizeAcademicTextValue(payload.closer_original || payload.closer_name, { maxLength: 120 }) || null;
+  const firstContactAt = normalizeAcademicDateTimeInput(payload.first_contact_at || payload.sale_date || "") || null;
+  const explicitClosedAt = normalizeAcademicDateTimeInput(payload.closed_at || "") || null;
+  const explicitLostAt = normalizeAcademicDateTimeInput(payload.lost_at || "") || null;
+  const nowIso = new Date().toISOString();
+  const persisted = {
+    student_name: fullName,
+    phone: sanitizeAcademicTextValue(payload.phone, { maxLength: 40 }) || null,
+    contact_email: sanitizeAcademicTextValue(payload.contact_email, { maxLength: 180 }) || null,
+    course_name: sanitizeAcademicTextValue(payload.course_name, { maxLength: 180 }) || null,
+    level_name: sanitizeAcademicTextValue(payload.level_name, { maxLength: 120 }) || null,
+    teacher_name: sanitizeAcademicTextValue(payload.teacher_name, { maxLength: 120 }) || null,
+    attendant_name: sanitizeAcademicTextValue(payload.attendant_name, { maxLength: 120 }) || null,
+    sale_month: sanitizeAcademicTextValue(payload.sale_month, { maxLength: 32 }) || null,
+    sale_date: normalizeAcademicDateInput(payload.sale_date) || brazilDateKey(),
+    semester_label: sanitizeAcademicTextValue(payload.semester_label, { maxLength: 60 }) || null,
+    availability: sanitizeAcademicTextValue(payload.availability, { maxLength: 180 }) || null,
+    modality: sanitizeAcademicTextValue(payload.modality, { maxLength: 80 }) || null,
+    class_type: sanitizeAcademicTextValue(payload.class_type, { maxLength: 80 }) || null,
+    system_name: sanitizeAcademicTextValue(payload.system_name, { maxLength: 120 }) || null,
+    contract_status: sanitizeAcademicTextValue(payload.contract_status, { maxLength: 80 }) || null,
+    language: sanitizeAcademicTextValue(payload.language, { maxLength: 80 }) || null,
+    closer_original: closerOriginal,
+    closer_normalized: normalizeAcademicText(closerOriginal || ""),
+    media_source: sanitizeAcademicTextValue(payload.media_source, { maxLength: 120 }) || null,
+    interest_goal: sanitizeAcademicTextValue(payload.interest_goal, { maxLength: 240 }) || null,
+    negotiation_notes: sanitizeAcademicTextValue(payload.negotiation_notes, { maxLength: 4000 }) || null,
+    profession: sanitizeAcademicTextValue(payload.profession, { maxLength: 120 }) || null,
+    indication: sanitizeAcademicTextValue(payload.indication, { maxLength: 120 }) || null,
+    observations: sanitizeAcademicTextValue(payload.observations, { maxLength: 4000 }) || null,
+    feedback: sanitizeAcademicTextValue(payload.feedback, { maxLength: 4000 }) || null,
+    lead_stage: leadStage,
+    first_contact_at: firstContactAt,
+    closed_at: explicitClosedAt || (leadStage === "fechado" ? nowIso : null),
+    lost_at: explicitLostAt || (leadStage === "perdido" ? nowIso : null),
+    lost_reason: sanitizeAcademicTextValue(payload.lost_reason, { maxLength: 400 }) || null,
+    source_payload_json: safeJsonStringify(payload.source_payload || payload, "{}"),
+  };
+
+  if (existingId) {
+    const existing = await get("SELECT * FROM sales_records WHERE id=? LIMIT 1", [existingId]);
+    if (!existing) throw new Error("lead_not_found");
+    await run(
+      `UPDATE sales_records
+          SET student_name=?, phone=?, contact_email=?, course_name=?, level_name=?, teacher_name=?, attendant_name=?, sale_month=?, sale_date=?, semester_label=?,
+              availability=?, modality=?, class_type=?, system_name=?, contract_status=?, language=?, closer_original=?, closer_normalized=?, media_source=?, interest_goal=?,
+              negotiation_notes=?, profession=?, indication=?, observations=?, feedback=?, lead_stage=?, first_contact_at=?, closed_at=?, lost_at=?, lost_reason=?,
+              source_payload_json=?, last_modified_by=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        persisted.student_name,
+        persisted.phone,
+        persisted.contact_email,
+        persisted.course_name,
+        persisted.level_name,
+        persisted.teacher_name,
+        persisted.attendant_name,
+        persisted.sale_month,
+        persisted.sale_date,
+        persisted.semester_label,
+        persisted.availability,
+        persisted.modality,
+        persisted.class_type,
+        persisted.system_name,
+        persisted.contract_status,
+        persisted.language,
+        persisted.closer_original,
+        persisted.closer_normalized,
+        persisted.media_source,
+        persisted.interest_goal,
+        persisted.negotiation_notes,
+        persisted.profession,
+        persisted.indication,
+        persisted.observations,
+        persisted.feedback,
+        persisted.lead_stage,
+        persisted.first_contact_at,
+        persisted.closed_at || existing.closed_at || null,
+        persisted.lost_at || existing.lost_at || null,
+        persisted.lost_reason,
+        persisted.source_payload_json,
+        actorId,
+        existingId,
+      ]
+    );
+    if (actorId && Number(existing.student_id || 0)) {
+      await createStudentTimelineEntry({
+        student_id: Number(existing.student_id),
+        enrollment_id: Number(existing.enrollment_id || 0) || null,
+        sales_record_id: existingId,
+        actor_user_id: actorId,
+        event_type: persisted.lead_stage === "perdido" ? "lead_lost" : "lead_updated",
+        title: persisted.lead_stage === "perdido" ? "Lead encerrada sem conversao" : "Lead atualizada",
+        description: persisted.lead_stage === "perdido"
+          ? `${persisted.student_name} foi marcada como perdida no Comercial.`
+          : `Comercial atualizado para ${persisted.lead_stage}.`,
+        metadata: {
+          lead_stage: persisted.lead_stage,
+          media_source: persisted.media_source,
+          closer_name: persisted.closer_original || null,
+          lost_reason: persisted.lost_reason,
+        },
+      });
+    }
+    return getStudentHubLeadDetail(existingId, { canViewAll: true });
+  }
+
+  const dedupeHash = hashText(`${fullName}|${persisted.phone || ""}|${persisted.contact_email || ""}|${Date.now()}|${Math.random()}`);
+  const created = await run(
+    `INSERT INTO sales_records
+       (origin_type, source_workbook, source_sheet, dedupe_hash, student_name, phone, contact_email, course_name, level_name, teacher_name, attendant_name,
+        sale_month, sale_date, semester_label, availability, modality, class_type, system_name, contract_status, language,
+        closer_original, closer_normalized, media_source, interest_goal, negotiation_notes, profession, indication,
+        feedback, observations, lead_stage, first_contact_at, closed_at, lost_at, lost_reason, source_payload_json, last_modified_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      "manual_lead",
+      "manual_entry",
+      "commercial-leads",
+      dedupeHash,
+      persisted.student_name,
+      persisted.phone,
+      persisted.contact_email,
+      persisted.course_name,
+      persisted.level_name,
+      persisted.teacher_name,
+      persisted.attendant_name,
+      persisted.sale_month,
+      persisted.sale_date,
+      persisted.semester_label,
+      persisted.availability,
+      persisted.modality,
+      persisted.class_type,
+      persisted.system_name,
+      persisted.contract_status,
+      persisted.language,
+      persisted.closer_original,
+      persisted.closer_normalized,
+      persisted.media_source,
+      persisted.interest_goal,
+      persisted.negotiation_notes,
+      persisted.profession,
+      persisted.indication,
+      persisted.feedback,
+      persisted.observations,
+      persisted.lead_stage,
+      persisted.first_contact_at,
+      persisted.closed_at,
+      persisted.lost_at,
+      persisted.lost_reason,
+      persisted.source_payload_json,
+      actorId,
+    ]
+  );
+  if (actorId && Number(payload.student_id || 0)) {
+    await createStudentTimelineEntry({
+      student_id: Number(payload.student_id),
+      enrollment_id: Number(payload.enrollment_id || 0) || null,
+      sales_record_id: created.lastID,
+      actor_user_id: actorId,
+      event_type: "lead_created",
+      title: "Lead criada",
+      description: `${persisted.student_name} entrou no fluxo comercial.`,
+      metadata: {
+        lead_stage: persisted.lead_stage,
+        media_source: persisted.media_source,
+        closer_name: persisted.closer_original || null,
+      },
+      created_at: persisted.first_contact_at,
+    });
+  }
+  await logEntityChange({
+    entityType: "sales_record",
+    entityId: created.lastID,
+    action: "created",
+    actorUserId: actorId,
+    origin: "manual_lead",
+    detail: { lead_stage: persisted.lead_stage },
+  });
+  return getStudentHubLeadDetail(created.lastID, { canViewAll: true });
+}
+
+async function saveFinancialContractRecord(payload = {}, actorUser = null, options = {}) {
+  const actorUserId = actorUser?.id || actorUser?.sub || null;
+  const contractId = Number(payload.id || 0) || null;
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) throw new Error("missing_student_id");
+  const persisted = {
+    student_id: studentId,
+    enrollment_id: Number(payload.enrollment_id || 0) || null,
+    sales_record_id: Number(payload.sales_record_id || 0) || null,
+    responsible_guardian_id: Number(payload.responsible_guardian_id || 0) || null,
+    contract_number: sanitizeAcademicTextValue(payload.contract_number, { maxLength: 80 }) || null,
+    contract_type: sanitizeAcademicTextValue(payload.contract_type, { maxLength: 80 }) || "course_enrollment",
+    contract_status: normalizeFinancialContractStatus(payload.contract_status || "draft"),
+    total_amount: parseMoneyValue(payload.total_amount),
+    currency: sanitizeAcademicTextValue(payload.currency, { maxLength: 12 }) || "BRL",
+    installments_count: Math.max(0, Number(payload.installments_count || 0) || 0),
+    first_due_date: normalizeAcademicDateInput(payload.first_due_date),
+    billing_cycle_day: Number(payload.billing_cycle_day || 0) || null,
+    responsible_name: sanitizeAcademicTextValue(payload.responsible_name, { maxLength: 180 }) || null,
+    responsible_cpf: sanitizeAcademicTextValue(payload.responsible_cpf, { maxLength: 32 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
+    source_payload_json: safeJsonStringify(payload.source_payload || {}, "{}"),
+    metadata_json: safeJsonStringify(payload.metadata || {}, "{}"),
+  };
+
+  let finalId = contractId;
+  if (contractId) {
+    const existing = await get("SELECT * FROM financial_contracts WHERE id=? LIMIT 1", [contractId]);
+    if (!existing) throw new Error("contract_not_found");
+    await run(
+      `UPDATE financial_contracts
+          SET student_id=?, enrollment_id=?, sales_record_id=?, responsible_guardian_id=?, contract_number=?, contract_type=?, contract_status=?, total_amount=?, currency=?,
+              installments_count=?, first_due_date=?, billing_cycle_day=?, responsible_name=?, responsible_cpf=?, notes=?, source_workbook=?, source_sheet=?, source_row_identifier=?,
+              source_payload_json=?, metadata_json=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        persisted.student_id,
+        persisted.enrollment_id,
+        persisted.sales_record_id,
+        persisted.responsible_guardian_id,
+        persisted.contract_number,
+        persisted.contract_type,
+        persisted.contract_status,
+        persisted.total_amount,
+        persisted.currency,
+        persisted.installments_count,
+        persisted.first_due_date,
+        persisted.billing_cycle_day,
+        persisted.responsible_name,
+        persisted.responsible_cpf,
+        persisted.notes,
+        persisted.source_workbook,
+        persisted.source_sheet,
+        persisted.source_row_identifier,
+        persisted.source_payload_json,
+        persisted.metadata_json,
+        contractId,
+      ]
+    );
+  } else {
+    const created = await run(
+      `INSERT INTO financial_contracts
+         (student_id, enrollment_id, sales_record_id, responsible_guardian_id, contract_number, contract_type, contract_status, total_amount, currency, installments_count,
+          first_due_date, billing_cycle_day, responsible_name, responsible_cpf, notes, source_workbook, source_sheet, source_row_identifier, source_payload_json, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        persisted.student_id,
+        persisted.enrollment_id,
+        persisted.sales_record_id,
+        persisted.responsible_guardian_id,
+        persisted.contract_number,
+        persisted.contract_type,
+        persisted.contract_status,
+        persisted.total_amount,
+        persisted.currency,
+        persisted.installments_count,
+        persisted.first_due_date,
+        persisted.billing_cycle_day,
+        persisted.responsible_name,
+        persisted.responsible_cpf,
+        persisted.notes,
+        persisted.source_workbook,
+        persisted.source_sheet,
+        persisted.source_row_identifier,
+        persisted.source_payload_json,
+        persisted.metadata_json,
+      ]
+    );
+    finalId = created.lastID;
+  }
+
+  const contract = await get("SELECT * FROM financial_contracts WHERE id=?", [finalId]);
+  const suppliedInstallments = Array.isArray(payload.installments) ? payload.installments : [];
+  const generatedInstallments = !suppliedInstallments.length
+    ? buildDefaultFinancialInstallments(
+        contract?.total_amount ?? persisted.total_amount,
+        contract?.installments_count ?? persisted.installments_count,
+        contract?.first_due_date || persisted.first_due_date || ""
+      )
+    : [];
+  const installmentItems = suppliedInstallments.length ? suppliedInstallments : generatedInstallments;
+  const createdInstallments = [];
+  for (let index = 0; index < installmentItems.length; index += 1) {
+    const item = installmentItems[index] || {};
+    const installmentNumber = Math.max(1, Number(item.installment_number || index + 1) || index + 1);
+    const dueDate = normalizeAcademicDateInput(item.due_date || addMonthsToDateKey(contract.first_due_date, index));
+    const amount = parseMoneyValue(item.amount);
+    const existingInstallment = await get("SELECT * FROM financial_installments WHERE contract_id=? AND installment_number=? LIMIT 1", [finalId, installmentNumber]);
+    const baseStatus = normalizeFinancialInstallmentStatus(item.status || existingInstallment?.status || "pending");
+    const finalStatus = baseStatus === "pending" && dueDate && dueDate < brazilDateKey() ? "overdue" : baseStatus;
+    if (existingInstallment?.id) {
+      await run(
+        `UPDATE financial_installments
+            SET due_date=?, amount=?, status=?, paid_at=?, payment_method=?, reference_label=?, notes=?, metadata_json=?, updated_at=datetime('now')
+          WHERE id=?`,
+        [
+          dueDate,
+          amount,
+          finalStatus,
+          normalizeAcademicDateTimeInput(item.paid_at) || existingInstallment.paid_at || null,
+          sanitizeAcademicTextValue(item.payment_method, { maxLength: 80 }) || existingInstallment.payment_method || null,
+          sanitizeAcademicTextValue(item.reference_label, { maxLength: 120 }) || existingInstallment.reference_label || null,
+          sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || existingInstallment.notes || null,
+          safeJsonStringify(item.metadata || {}, "{}"),
+          existingInstallment.id,
+        ]
+      );
+    } else {
+      const createdInstallment = await run(
+        `INSERT INTO financial_installments
+           (contract_id, installment_number, due_date, amount, status, paid_at, payment_method, reference_label, notes, metadata_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          finalId,
+          installmentNumber,
+          dueDate,
+          amount,
+          finalStatus,
+          normalizeAcademicDateTimeInput(item.paid_at),
+          sanitizeAcademicTextValue(item.payment_method, { maxLength: 80 }) || null,
+          sanitizeAcademicTextValue(item.reference_label, { maxLength: 120 }) || null,
+          sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || null,
+          safeJsonStringify(item.metadata || {}, "{}"),
+        ]
+      );
+      createdInstallments.push({
+        id: createdInstallment.lastID,
+        installment_number: installmentNumber,
+        due_date: dueDate,
+        amount,
+        status: finalStatus,
+        reference_label: sanitizeAcademicTextValue(item.reference_label, { maxLength: 120 }) || null,
+      });
+    }
+  }
+
+  if (actorUserId && options.createTimeline !== false) {
+    await createStudentTimelineEntry({
+      student_id: persisted.student_id,
+      enrollment_id: persisted.enrollment_id,
+      sales_record_id: persisted.sales_record_id,
+      contract_id: finalId,
+      actor_user_id: actorUserId,
+      event_type: contractId ? "financial_contract_updated" : "financial_contract_created",
+      title: contractId ? "Contrato atualizado" : "Contrato criado",
+      description: `Contrato ${persisted.contract_number || finalId} em status ${persisted.contract_status}.`,
+      metadata: {
+        contract_status: persisted.contract_status,
+        installments_count: persisted.installments_count,
+      },
+    });
+    for (const installment of createdInstallments) {
+      await ensureStudentTimelineEntry({
+        student_id: persisted.student_id,
+        enrollment_id: persisted.enrollment_id,
+        sales_record_id: persisted.sales_record_id,
+        contract_id: finalId,
+        installment_id: installment.id,
+        actor_user_id: actorUserId,
+        event_type: "financial_installment_created",
+        title: "Parcela gerada",
+        description: `${installment.reference_label || `Parcela ${installment.installment_number}`} criada com vencimento ${installment.due_date || "-"} no valor de ${formatMoneyValue(installment.amount)}.`,
+        metadata: {
+          installment_number: installment.installment_number,
+          due_date: installment.due_date,
+          amount: installment.amount,
+          status: installment.status,
+        },
+      });
+    }
+  }
+
+  return getStudentHubContractDetail(finalId, { canViewAll: true });
+}
+
+async function updateFinancialInstallmentRecord(installmentId, payload = {}, actorUser = null) {
+  const actorUserId = actorUser?.id || actorUser?.sub || null;
+  const existing = await get("SELECT * FROM financial_installments WHERE id=? LIMIT 1", [installmentId]);
+  if (!existing) throw new Error("installment_not_found");
+  const dueDate = normalizeAcademicDateInput(payload.due_date || existing.due_date);
+  const baseStatus = normalizeFinancialInstallmentStatus(payload.status || existing.status || "pending");
+  const finalStatus = baseStatus === "pending" && dueDate && dueDate < brazilDateKey() ? "overdue" : baseStatus;
+  await run(
+    `UPDATE financial_installments
+        SET due_date=?, amount=?, status=?, paid_at=?, payment_method=?, reference_label=?, notes=?, metadata_json=?, updated_at=datetime('now')
+      WHERE id=?`,
+    [
+      dueDate,
+      parseMoneyValue(payload.amount ?? existing.amount),
+      finalStatus,
+      normalizeAcademicDateTimeInput(payload.paid_at || existing.paid_at),
+      sanitizeAcademicTextValue(payload.payment_method, { maxLength: 80 }) || existing.payment_method || null,
+      sanitizeAcademicTextValue(payload.reference_label, { maxLength: 120 }) || existing.reference_label || null,
+      sanitizeAcademicTextValue(payload.notes, { maxLength: 1200 }) || existing.notes || null,
+      safeJsonStringify(payload.metadata || safeJsonParse(existing.metadata_json || "{}") || {}, "{}"),
+      installmentId,
+    ]
+  );
+  const contract = await get("SELECT student_id, enrollment_id, id FROM financial_contracts WHERE id=? LIMIT 1", [existing.contract_id]);
+  if (contract?.student_id && actorUserId) {
+    await createStudentTimelineEntry({
+      student_id: contract.student_id,
+      enrollment_id: contract.enrollment_id,
+      contract_id: contract.id,
+      installment_id: installmentId,
+      actor_user_id: actorUserId,
+      event_type: "financial_installment_updated",
+      title: "Parcela atualizada",
+      description: `Parcela ${existing.installment_number} atualizada para ${finalStatus}.`,
+      metadata: { installment_number: existing.installment_number, status: finalStatus, due_date: dueDate },
+    });
+  }
+  return get("SELECT * FROM financial_installments WHERE id=?", [installmentId]);
+}
+
+async function convertLeadToStudentHubRecord(recordId, payload = {}, actorUser = null) {
+  const actorId = actorUser?.id || actorUser?.sub || null;
+  const lead = await getSalesRecordById(recordId);
+  if (!lead) throw new Error("lead_not_found");
+
+  const incomingStudent = payload.student || {};
+  const matchedStudent = lead.student_id
+    ? await get("SELECT * FROM students WHERE id=? LIMIT 1", [lead.student_id])
+    : await findAcademicStudentMatch({
+        fullName: incomingStudent.full_name || lead.student_name,
+        normalizedName: normalizePersonKey(incomingStudent.full_name || lead.student_name || ""),
+        phone: incomingStudent.phone || lead.phone,
+      });
+
+  const savedStudent = await saveAcademicStudentRecord({
+    id: matchedStudent?.id || null,
+    full_name: incomingStudent.full_name || lead.student_name,
+    preferred_name: incomingStudent.preferred_name || matchedStudent?.preferred_name || null,
+    birth_date: incomingStudent.birth_date || matchedStudent?.birth_date || null,
+    cpf: incomingStudent.cpf || matchedStudent?.cpf || null,
+    rg: incomingStudent.rg || matchedStudent?.rg || null,
+    email: incomingStudent.email || lead.contact_email || matchedStudent?.email || null,
+    phone: incomingStudent.phone || lead.phone || matchedStudent?.phone || null,
+    whatsapp: incomingStudent.whatsapp || lead.phone || matchedStudent?.whatsapp || null,
+    notes: incomingStudent.notes || matchedStudent?.notes || lead.observations || null,
+    status: incomingStudent.status || matchedStudent?.status || "ativo",
+  }, actorId);
+
+  await ensureStudentTimelineEntry({
+    student_id: savedStudent.id,
+    sales_record_id: recordId,
+    actor_user_id: actorId,
+    event_type: "lead_created",
+    title: "Lead criada",
+    description: `${lead.student_name || savedStudent.full_name} entrou no fluxo comercial.`,
+    metadata: {
+      lead_stage: lead.lead_stage || null,
+      media_source: lead.media_source || null,
+      closer_name: lead.closer_original || lead.closer_name || lead.attendant_name || null,
+    },
+    created_at: lead.first_contact_at || lead.sale_date || lead.created_at || null,
+  });
+
+  const guardians = Array.isArray(payload.guardians) ? payload.guardians : [];
+  if (guardians.length) {
+    await replaceStudentGuardians(savedStudent.id, guardians, actorId);
+  }
+  const savedGuardians = await all(
+    "SELECT id, name, relation_type, cpf, phone, whatsapp, email, financial_responsible, pedagogical_responsible FROM student_guardians WHERE student_id=? ORDER BY financial_responsible DESC, pedagogical_responsible DESC, id ASC",
+    [savedStudent.id]
+  );
+  const financialGuardian = savedGuardians.find((item) => coerceDbBoolean(item.financial_responsible)) || savedGuardians[0] || null;
+
+  const enrollmentPayload = payload.enrollment || {};
+  const schoolTerm = await ensureSchoolTermRecord({
+    code: enrollmentPayload.school_term_code || lead.semester_label,
+    name: enrollmentPayload.school_term_name || lead.semester_label,
+    status: "active",
+  });
+  const program = await ensureAcademicProgramRecord({
+    language: enrollmentPayload.language || lead.language,
+    program_name: enrollmentPayload.program_name || lead.course_name || lead.level_name || lead.language,
+    level_name: enrollmentPayload.level_name || lead.level_name,
+    semester_label: enrollmentPayload.semester_label || lead.semester_label,
+    modality: enrollmentPayload.modality || lead.modality,
+    status: "active",
+  });
+  const enrollment = await saveAcademicEnrollmentRecord({
+    id: Number(lead.enrollment_id || 0) || null,
+    student_id: savedStudent.id,
+    academic_program_id: program?.id || null,
+    school_term_id: schoolTerm?.id || null,
+    class_id: Number(enrollmentPayload.class_id || 0) || null,
+    enrollment_number: enrollmentPayload.enrollment_number || generateEnrollmentNumber(savedStudent.id, schoolTerm?.code || lead.semester_label || ""),
+    enrollment_date: enrollmentPayload.enrollment_date || lead.sale_date || brazilDateKey(),
+    start_date: enrollmentPayload.start_date || lead.sale_date || brazilDateKey(),
+    end_date: enrollmentPayload.end_date || null,
+    enrollment_status: enrollmentPayload.enrollment_status || ((Number(enrollmentPayload.class_id || 0) || 0) ? "matriculado" : "aguardando turma"),
+    contract_status: enrollmentPayload.contract_status || lead.contract_status || "em formalizacao",
+    payment_status: enrollmentPayload.payment_status || "pendente",
+    pedagogical_status: enrollmentPayload.pedagogical_status || "matricula_em_abertura",
+    source_channel: enrollmentPayload.source_channel || lead.media_source || "comercial",
+    source_notes: enrollmentPayload.source_notes || lead.feedback || lead.observations || null,
+    notes: enrollmentPayload.notes || lead.observations || null,
+    source_workbook: "student_hub_conversion",
+    source_sheet: "commercial-conversion",
+    source_row_identifier: `lead:${recordId}`,
+    source_payload: {
+      lead_id: recordId,
+      lead_stage: lead.lead_stage || null,
+    },
+    metadata: {
+      converted_from_sales_record_id: recordId,
+    },
+  }, actorUser);
+
+  const contractPayload = payload.contract || {};
+  const defaultInstallmentsCount = Math.max(0, Number(contractPayload.installments_count || 0) || 0);
+  const totalAmount = parseMoneyValue(contractPayload.total_amount);
+  const installments = Array.isArray(contractPayload.installments) && contractPayload.installments.length
+    ? contractPayload.installments
+    : buildDefaultFinancialInstallments(totalAmount, defaultInstallmentsCount, contractPayload.first_due_date);
+
+  const contractDetail = await saveFinancialContractRecord({
+    id: Number(lead.financial_contract_id || 0) || null,
+    student_id: savedStudent.id,
+    enrollment_id: enrollment.id,
+    sales_record_id: lead.id,
+    responsible_guardian_id: financialGuardian?.id || null,
+    responsible_name: contractPayload.responsible_name || financialGuardian?.name || null,
+    responsible_cpf: contractPayload.responsible_cpf || financialGuardian?.cpf || null,
+    contract_number: contractPayload.contract_number || generateContractNumber(savedStudent.id, enrollment.id),
+    contract_type: contractPayload.contract_type || "course_enrollment",
+    contract_status: contractPayload.contract_status || "draft",
+    total_amount: totalAmount,
+    currency: contractPayload.currency || "BRL",
+    installments_count: installments.length || defaultInstallmentsCount,
+    first_due_date: contractPayload.first_due_date || installments[0]?.due_date || null,
+    billing_cycle_day: contractPayload.billing_cycle_day || (contractPayload.first_due_date ? Number(String(contractPayload.first_due_date).slice(8, 10)) : null),
+    notes: contractPayload.notes || "Contrato criado a partir da conversão comercial.",
+    installments,
+    metadata: {
+      created_from_lead_id: lead.id,
+    },
+  }, actorUser);
+
+  await run(
+    `UPDATE sales_records
+        SET student_id=?, enrollment_id=?, financial_contract_id=?, contact_email=COALESCE(?, contact_email), lead_stage='convertido',
+            converted_at=COALESCE(converted_at, CURRENT_TIMESTAMP), closed_at=COALESCE(closed_at, ?, CURRENT_TIMESTAMP), contract_status=?, updated_at=datetime('now')
+      WHERE id=?`,
+    [
+      savedStudent.id,
+      enrollment.id,
+      contractDetail?.contract?.id || null,
+      incomingStudent.email || lead.contact_email || null,
+      lead.closed_at || new Date().toISOString(),
+      contractDetail?.contract?.contract_status || lead.contract_status || null,
+      recordId,
+    ]
+  );
+
+  await createStudentTimelineEntry({
+    student_id: savedStudent.id,
+    enrollment_id: enrollment.id,
+    sales_record_id: recordId,
+    contract_id: contractDetail?.contract?.id || null,
+    actor_user_id: actorId,
+    event_type: "lead_converted",
+    title: "Lead convertido em aluno",
+    description: `${lead.student_name || savedStudent.full_name} foi convertido do Comercial para cadastro, matrícula e financeiro.`,
+    metadata: {
+      lead_id: recordId,
+      enrollment_id: enrollment.id,
+      contract_id: contractDetail?.contract?.id || null,
+    },
+  });
+
+  return {
+    student: await getStudentHubStudentDetail(savedStudent.id, { canViewAll: true }).catch(() => null),
+    lead: await getStudentHubLeadDetail(recordId, { canViewAll: true }).catch(() => null),
+    contract: contractDetail,
+  };
+}
+
+async function buildStudentHubBootstrap(user, filters = {}) {
+  const viewKey = normalizeStudentHubViewKey(filters.view_key || "");
+  const scope = await resolveStudentHubScope(user, viewKey);
+  const area = getStudentHubAreaByViewKey(viewKey);
+  const options = await buildStudentHubOptions();
+  const payload = {
+    enabled: true,
+    view_key: viewKey,
+    area,
+    scope_kind: scope.kind,
+    scope,
+    options,
+    summary: {},
+    students: [],
+    leads: [],
+    contracts: [],
+  };
+
+  if (area === "commercial") {
+    const commercial = await listStudentHubLeads(scope, {
+      search: filters.search,
+      leadStage: filters.lead_stage,
+      language: filters.language,
+      modality: filters.modality,
+      limit: filters.limit || 60,
+    });
+    payload.summary = commercial.summary;
+    payload.leads = commercial.rows;
+  } else if (area === "financial") {
+    if (viewKey === "financial-student-profile") {
+      const students = await listStudentHubStudents(scope, {
+        search: filters.search,
+        status: filters.student_status,
+        limit: filters.limit || 60,
+      });
+      payload.summary = {
+        total: Number(students.summary?.total || 0),
+        active_total: Number(students.summary?.students_with_contract_total || 0),
+        pending_contracts: Number(students.summary?.without_contract_total || 0),
+        overdue_contracts: Number(students.summary?.overdue_students || 0),
+      };
+      payload.students = students.rows;
+    } else {
+      const financial = await listStudentHubContracts(scope, {
+        search: filters.search,
+        contractStatus: filters.contract_status,
+        onlyDelinquent: viewKey === "financial-delinquency",
+        limit: filters.limit || 60,
+      });
+      payload.summary = financial.summary;
+      payload.contracts = financial.rows;
+    }
+  } else {
+    const students = await listStudentHubStudents(scope, {
+      search: filters.search,
+      status: filters.student_status,
+      limit: filters.limit || 60,
+    });
+    payload.summary = students.summary;
+    payload.students = students.rows;
+  }
+
+  return payload;
+}
+
+function normalizeAcademicOption(value, allowedValues = [], fallback = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return fallback;
+  const normalized = normalizeAcademicText(safe);
+  const matched = (allowedValues || []).find((item) => normalizeAcademicText(item) === normalized);
+  return matched || fallback;
+}
+
+function normalizeStudentStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_STUDENT_STATUS_OPTIONS, "ativo");
+}
+
+function normalizeEnrollmentStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_ENROLLMENT_STATUS_OPTIONS, "aguardando turma");
+}
+
+function normalizeClassStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_CLASS_STATUS_OPTIONS, "planejada");
+}
+
+function normalizeAttendanceStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_ATTENDANCE_STATUS_OPTIONS, "presente");
+}
+
+function normalizeSessionStatus(value = "") {
+  return normalizeAcademicOption(value, ACADEMIC_SESSION_STATUS_OPTIONS, "planejada");
+}
+
+function normalizeAcademicDateInput(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(safe)) return safe;
+  const parsed = new Date(safe);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeAcademicDateTimeInput(value = "") {
+  const safe = String(value || "").trim();
+  if (!safe) return null;
+  const parsed = new Date(safe);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function sanitizeAcademicTextValue(value, options = {}) {
+  return sanitizePersistedText(value, { maxLength: options.maxLength || 4000 });
+}
+
+function sanitizeAcademicIdentifier(value = "", fallback = "academic") {
+  const safe = normalizeAcademicText(value).replace(/\s+/g, ".").replace(/[^a-z0-9.]+/g, ".");
+  return safe.replace(/^\.+|\.+$/g, "") || fallback;
+}
+
+function mergeUniqueStrings(...groups) {
+  const out = [];
+  const seen = new Set();
+  for (const group of groups) {
+    for (const item of Array.isArray(group) ? group : []) {
+      const safe = sanitizeAcademicTextValue(item, { maxLength: 180 });
+      if (!safe) continue;
+      const key = normalizeAcademicText(safe);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(safe);
+    }
+  }
+  return out;
+}
+
+function guessSchoolTermDates(code = "") {
+  const safe = String(code || "").trim();
+  const match = safe.match(/^(\d{4})\.(1|2)$/);
+  if (!match) return { startDate: null, endDate: null };
+  const year = Number(match[1]);
+  const half = Number(match[2]);
+  if (half === 1) {
+    return { startDate: `${year}-01-01`, endDate: `${year}-06-30` };
+  }
+  return { startDate: `${year}-07-01`, endDate: `${year}-12-31` };
+}
+
+function buildAcademicProgramLookupKey(payload = {}) {
+  return [
+    normalizeAcademicText(payload.language || ""),
+    normalizeAcademicText(payload.program_name || ""),
+    normalizeAcademicText(payload.level_name || ""),
+    normalizeAcademicText(payload.stage_name || ""),
+    normalizeAcademicText(payload.semester_label || ""),
+    normalizeAcademicText(payload.modality || ""),
+  ].join("|");
+}
+
+function buildAcademicClassCode(payload = {}) {
+  const raw = [
+    payload.school_term_code || payload.semester_label || "",
+    payload.language || "",
+    payload.modality || "",
+    payload.level_name || "",
+    payload.class_name || payload.name || "",
+    payload.teacher_normalized_name || "",
+    payload.source_block_ref || "",
+  ].join("|");
+  return `CLS-${hashText(raw).slice(0, 10).toUpperCase()}`;
+}
+
+function mergeAcademicMetadata(existingValue, nextValue) {
+  const existing = safeJsonParse(existingValue || "{}") || {};
+  const incoming = nextValue && typeof nextValue === "object"
+    ? nextValue
+    : (safeJsonParse(nextValue || "{}") || {});
+  return repairDeepText({ ...existing, ...incoming });
+}
+
+function mapTeacherProfileRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    aliases: Array.isArray(safeJsonParse(row.aliases_json || "[]")) ? safeJsonParse(row.aliases_json || "[]") : [],
+    specialties: Array.isArray(safeJsonParse(row.specialties_json || "[]")) ? safeJsonParse(row.specialties_json || "[]") : [],
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+    active: coerceDbBoolean(row.active),
+  };
+}
+
+function mapAcademicStudentRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    age: computeAcademicAge(row.birth_date, row.age),
+    source_payload: safeJsonParse(row.source_payload_json || "{}") || null,
+  };
+}
+
+function mapAcademicEnrollmentRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    source_payload: safeJsonParse(row.source_payload_json || "{}") || null,
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+    class_metadata: safeJsonParse(row.class_metadata_json || "{}") || {},
+  };
+}
+
+function mapAcademicClassRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    metadata: safeJsonParse(row.metadata_json || "{}") || {},
+  };
+}
+
+function buildTeacherInternalEmailBase(displayName = "") {
+  const identifier = sanitizeAcademicIdentifier(displayName, "teacher");
+  return `teacher.${identifier}`.replace(/\.{2,}/g, ".").replace(/\.$/, "");
+}
+
+async function generateAvailableInternalEmail(baseLocalPart = "teacher") {
+  const safeBase = sanitizeAcademicIdentifier(baseLocalPart, "teacher");
+  let attempt = 1;
+  while (attempt < 500) {
+    const localPart = attempt === 1 ? safeBase : `${safeBase}.${attempt}`;
+    const email = `${localPart}@internal.local`;
+    const existing = await get("SELECT id FROM users WHERE lower(email)=lower(?) LIMIT 1", [email]);
+    if (!existing?.id) return email;
+    attempt += 1;
+  }
+  return `${safeBase}.${Date.now()}@internal.local`;
+}
+
+async function getTeacherProfileByUserId(userId) {
+  const row = await get(
+    "SELECT id, user_id, display_name, normalized_name, aliases_json, specialties_json, metadata_json, active, created_at, updated_at FROM teacher_profiles WHERE user_id=? LIMIT 1",
+    [userId]
+  );
+  return mapTeacherProfileRow(row);
+}
+
+async function getTeacherProfileByNormalizedName(normalizedName = "") {
+  const safe = normalizeAcademicText(normalizedName);
+  if (!safe) return null;
+  const row = await get(
+    "SELECT id, user_id, display_name, normalized_name, aliases_json, specialties_json, metadata_json, active, created_at, updated_at FROM teacher_profiles WHERE normalized_name=? LIMIT 1",
+    [safe]
+  );
+  return mapTeacherProfileRow(row);
+}
+
+async function resolveAcademicScope(user) {
+  if (!user) throw new Error("academic_access_denied");
+  if (user.role === "admin") {
+    return {
+      enabled: true,
+      kind: "admin",
+      canViewAll: true,
+      canManageAll: true,
+      canImport: true,
+      teacherProfile: await getTeacherProfileByUserId(user.id || user.sub).catch(() => null),
+      teacherUserId: Number(user.id || user.sub || 0) || null,
+    };
+  }
+
+  if (userHasDepartmentAccess(user, "pedagogico")) {
+    return {
+      enabled: true,
+      kind: "pedagogico",
+      canViewAll: true,
+      canManageAll: true,
+      canImport: true,
+      teacherProfile: await getTeacherProfileByUserId(user.id || user.sub).catch(() => null),
+      teacherUserId: Number(user.id || user.sub || 0) || null,
+    };
+  }
+
+  if (hasAcademicTeacherScope(user)) {
+    return {
+      enabled: true,
+      kind: "teacher",
+      canViewAll: false,
+      canManageAll: false,
+      canImport: false,
+      teacherProfile: await getTeacherProfileByUserId(user.id || user.sub).catch(() => null),
+      teacherUserId: Number(user.id || user.sub || 0) || null,
+    };
+  }
+
+  throw new Error("academic_access_denied");
+}
+
+function buildAcademicScopeExistsSql(scope, enrollmentAlias = "e") {
+  if (scope.canViewAll) return { sql: "", params: [] };
+  return {
+    sql: `EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+       WHERE ct.class_id=${enrollmentAlias}.class_id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`,
+    params: [scope.teacherUserId],
+  };
+}
+
+async function listClassSchedulesByClassId(classId) {
+  const rows = await all(
+    "SELECT id, class_id, weekday, start_time, end_time, timezone, is_primary, notes, created_at, updated_at FROM class_schedules WHERE class_id=? ORDER BY is_primary DESC, weekday ASC, start_time ASC, id ASC",
+    [classId]
+  );
+  return rows.map((row) => ({ ...row, is_primary: coerceDbBoolean(row.is_primary) }));
+}
+
+async function listClassTeachersByClassId(classId) {
+  const rows = await all(
+    `SELECT ct.id, ct.class_id, ct.user_id, ct.role_in_class, ct.start_date, ct.end_date, ct.is_active, ct.created_at, ct.updated_at,
+            u.name AS user_name, u.email AS user_email, tp.display_name AS profile_name, tp.aliases_json, tp.specialties_json
+       FROM class_teachers ct
+       LEFT JOIN users u ON u.id = ct.user_id
+       LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+      WHERE ct.class_id=?
+      ORDER BY ${buildDbTruthySql("is_active", "ct")} DESC, lower(coalesce(tp.display_name, u.name, '')) ASC, ct.id ASC`,
+    [classId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    is_active: coerceDbBoolean(row.is_active),
+    display_name: row.profile_name || row.user_name || "",
+    aliases: Array.isArray(safeJsonParse(row.aliases_json || "[]")) ? safeJsonParse(row.aliases_json || "[]") : [],
+    specialties: Array.isArray(safeJsonParse(row.specialties_json || "[]")) ? safeJsonParse(row.specialties_json || "[]") : [],
+  }));
+}
+
+async function getClassBasicById(classId) {
+  const row = await get(
+    `SELECT c.id, c.code, c.name, c.school_term_id, c.academic_program_id, c.language, c.modality, c.level_name, c.semester_label,
+            c.age_group, c.capacity, c.min_students, c.status, c.room_name, c.unit_name, c.notes, c.class_kind, c.source_workbook, c.source_sheet, c.source_block_ref, c.metadata_json,
+            c.created_at, c.updated_at, st.name AS school_term_name, st.code AS school_term_code, ap.program_name, ap.material_name
+       FROM classes c
+       LEFT JOIN school_terms st ON st.id = c.school_term_id
+       LEFT JOIN academic_programs ap ON ap.id = c.academic_program_id
+      WHERE c.id=?`,
+    [classId]
+  );
+  return mapAcademicClassRow(row);
+}
+
+async function canAccessAcademicClass(scope, classId) {
+  if (scope.canViewAll) return true;
+  const row = await get(
+    `SELECT id
+       FROM class_teachers
+      WHERE class_id=? AND user_id=? AND ${buildDbTruthySql("is_active")}
+      LIMIT 1`,
+    [classId, scope.teacherUserId]
+  );
+  return Boolean(row?.id);
+}
+
+async function findAcademicStudentMatch({ fullName = "", normalizedName = "", phone = "" } = {}) {
+  const safeNormalized = normalizeAcademicText(normalizedName || fullName);
+  const safePhone = sanitizeAcademicTextValue(phone, { maxLength: 40 });
+  if (!safeNormalized) return null;
+  if (safePhone) {
+    const row = await get(
+      `SELECT *
+         FROM students
+        WHERE normalized_name=?
+          AND (phone=? OR whatsapp=?)
+        ORDER BY datetime(updated_at) DESC, id DESC
+        LIMIT 1`,
+      [safeNormalized, safePhone, safePhone]
+    );
+    if (row) return mapAcademicStudentRow(row);
+  }
+  const row = await get(
+    `SELECT *
+       FROM students
+      WHERE normalized_name=?
+      ORDER BY datetime(updated_at) DESC, id DESC
+      LIMIT 1`,
+    [safeNormalized]
+  );
+  return mapAcademicStudentRow(row);
+}
+
+async function saveAcademicStudentRecord(payload = {}, actorUserId = null) {
+  const studentId = Number(payload.id || 0) || null;
+  const fullName = sanitizeAcademicTextValue(payload.full_name, { maxLength: 180 });
+  if (!fullName) throw new Error("missing_student_name");
+  const normalizedName = normalizeAcademicText(fullName);
+  const preferredName = sanitizeAcademicTextValue(payload.preferred_name, { maxLength: 120 }) || null;
+  const birthDate = normalizeAcademicDateInput(payload.birth_date);
+  const age = computeAcademicAge(birthDate, payload.age);
+  const status = normalizeStudentStatus(payload.status || "ativo");
+  const persisted = {
+    full_name: fullName,
+    normalized_name: normalizedName,
+    preferred_name: preferredName,
+    birth_date: birthDate,
+    age,
+    gender: sanitizeAcademicTextValue(payload.gender, { maxLength: 40 }) || null,
+    cpf: sanitizeAcademicTextValue(payload.cpf, { maxLength: 32 }) || null,
+    rg: sanitizeAcademicTextValue(payload.rg, { maxLength: 32 }) || null,
+    email: sanitizeAcademicTextValue(payload.email, { maxLength: 180 }) || null,
+    phone: sanitizeAcademicTextValue(payload.phone, { maxLength: 40 }) || null,
+    whatsapp: sanitizeAcademicTextValue(payload.whatsapp, { maxLength: 40 }) || null,
+    emergency_contact_name: sanitizeAcademicTextValue(payload.emergency_contact_name, { maxLength: 180 }) || null,
+    emergency_contact_phone: sanitizeAcademicTextValue(payload.emergency_contact_phone, { maxLength: 40 }) || null,
+    address_zipcode: sanitizeAcademicTextValue(payload.address_zipcode, { maxLength: 32 }) || null,
+    address_street: sanitizeAcademicTextValue(payload.address_street, { maxLength: 180 }) || null,
+    address_number: sanitizeAcademicTextValue(payload.address_number, { maxLength: 32 }) || null,
+    address_complement: sanitizeAcademicTextValue(payload.address_complement, { maxLength: 120 }) || null,
+    address_neighborhood: sanitizeAcademicTextValue(payload.address_neighborhood, { maxLength: 120 }) || null,
+    address_city: sanitizeAcademicTextValue(payload.address_city, { maxLength: 120 }) || null,
+    address_state: sanitizeAcademicTextValue(payload.address_state, { maxLength: 80 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    allergies: sanitizeAcademicTextValue(payload.allergies, { maxLength: 2000 }) || null,
+    medical_notes: sanitizeAcademicTextValue(payload.medical_notes, { maxLength: 3000 }) || null,
+    school_name: sanitizeAcademicTextValue(payload.school_name, { maxLength: 180 }) || null,
+    school_grade: sanitizeAcademicTextValue(payload.school_grade, { maxLength: 80 }) || null,
+    status,
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
+    source_payload_json: safeJsonStringify(payload.source_payload || payload.source_payload_json || {}, "{}"),
+  };
+
+  if (studentId) {
+    const existing = await get("SELECT * FROM students WHERE id=? LIMIT 1", [studentId]);
+    if (!existing) throw new Error("student_not_found");
+    await run(
+      `UPDATE students
+          SET full_name=?, normalized_name=?, preferred_name=?, birth_date=?, age=?, gender=?, cpf=?, rg=?, email=?, phone=?, whatsapp=?,
+              emergency_contact_name=?, emergency_contact_phone=?, address_zipcode=?, address_street=?, address_number=?, address_complement=?,
+              address_neighborhood=?, address_city=?, address_state=?, notes=?, allergies=?, medical_notes=?, school_name=?, school_grade=?,
+              status=?, source_workbook=?, source_sheet=?, source_row_identifier=?, source_payload_json=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        persisted.full_name,
+        persisted.normalized_name,
+        persisted.preferred_name,
+        persisted.birth_date,
+        persisted.age,
+        persisted.gender,
+        persisted.cpf,
+        persisted.rg,
+        persisted.email,
+        persisted.phone,
+        persisted.whatsapp,
+        persisted.emergency_contact_name,
+        persisted.emergency_contact_phone,
+        persisted.address_zipcode,
+        persisted.address_street,
+        persisted.address_number,
+        persisted.address_complement,
+        persisted.address_neighborhood,
+        persisted.address_city,
+        persisted.address_state,
+        persisted.notes,
+        persisted.allergies,
+        persisted.medical_notes,
+        persisted.school_name,
+        persisted.school_grade,
+        persisted.status,
+        persisted.source_workbook,
+        persisted.source_sheet,
+        persisted.source_row_identifier,
+        persisted.source_payload_json,
+        studentId,
+      ]
+    );
+    if (actorUserId) {
+      await logEntityChange({
+        entityType: "academic_student",
+        entityId: studentId,
+        action: "updated",
+        actorUserId,
+        origin: "manual_edit",
+        detail: { source: "academic_student_form" },
+      });
+    }
+    const savedStudent = mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [studentId]));
+    if (actorUserId && savedStudent?.id) {
+      await ensureStudentTimelineEntry({
+        student_id: savedStudent.id,
+        actor_user_id: actorUserId,
+        event_type: "student_updated",
+        title: "Cadastro do aluno atualizado",
+        description: `${savedStudent.full_name} teve os dados cadastrais atualizados.`,
+        metadata: {
+          status: savedStudent.status,
+          email: savedStudent.email || null,
+          phone: savedStudent.phone || savedStudent.whatsapp || null,
+        },
+      });
+    }
+    return savedStudent;
+  }
+
+  const created = await run(
+    `INSERT INTO students
+       (full_name, normalized_name, preferred_name, birth_date, age, gender, cpf, rg, email, phone, whatsapp, emergency_contact_name,
+        emergency_contact_phone, address_zipcode, address_street, address_number, address_complement, address_neighborhood, address_city,
+        address_state, notes, allergies, medical_notes, school_name, school_grade, status, source_workbook, source_sheet, source_row_identifier, source_payload_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      persisted.full_name,
+      persisted.normalized_name,
+      persisted.preferred_name,
+      persisted.birth_date,
+      persisted.age,
+      persisted.gender,
+      persisted.cpf,
+      persisted.rg,
+      persisted.email,
+      persisted.phone,
+      persisted.whatsapp,
+      persisted.emergency_contact_name,
+      persisted.emergency_contact_phone,
+      persisted.address_zipcode,
+      persisted.address_street,
+      persisted.address_number,
+      persisted.address_complement,
+      persisted.address_neighborhood,
+      persisted.address_city,
+      persisted.address_state,
+      persisted.notes,
+      persisted.allergies,
+      persisted.medical_notes,
+      persisted.school_name,
+      persisted.school_grade,
+      persisted.status,
+      persisted.source_workbook,
+      persisted.source_sheet,
+      persisted.source_row_identifier,
+      persisted.source_payload_json,
+    ]
+  );
+  if (actorUserId) {
+    await logEntityChange({
+      entityType: "academic_student",
+      entityId: created.lastID,
+      action: "created",
+      actorUserId,
+      origin: "manual_create",
+      detail: { source: "academic_student_form" },
+    });
+  }
+  const savedStudent = mapAcademicStudentRow(await get("SELECT * FROM students WHERE id=?", [created.lastID]));
+  if (actorUserId && savedStudent?.id) {
+    await ensureStudentTimelineEntry({
+      student_id: savedStudent.id,
+      actor_user_id: actorUserId,
+      event_type: "student_created",
+      title: "Aluno criado",
+      description: `${savedStudent.full_name} foi cadastrado no sistema.`,
+      metadata: {
+        status: savedStudent.status,
+        source_workbook: savedStudent.source_workbook || null,
+      },
+    });
+  }
+  return savedStudent;
+}
+
+async function replaceStudentGuardians(studentId, guardians = [], actorUserId = null) {
+  await run("DELETE FROM student_guardians WHERE student_id=?", [studentId]);
+  const persisted = [];
+  const guardianNames = [];
+  for (const item of Array.isArray(guardians) ? guardians : []) {
+    const name = sanitizeAcademicTextValue(item.name, { maxLength: 180 });
+    if (!name) continue;
+    const created = await run(
+      `INSERT INTO student_guardians
+         (student_id, name, relation_type, cpf, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        studentId,
+        name,
+        sanitizeAcademicTextValue(item.relation_type, { maxLength: 60 }) || null,
+        sanitizeAcademicTextValue(item.cpf, { maxLength: 32 }) || null,
+        sanitizeAcademicTextValue(item.phone, { maxLength: 40 }) || null,
+        sanitizeAcademicTextValue(item.whatsapp, { maxLength: 40 }) || null,
+        sanitizeAcademicTextValue(item.email, { maxLength: 180 }) || null,
+        Boolean(item.financial_responsible),
+        Boolean(item.pedagogical_responsible),
+        item.receives_notifications !== false,
+        sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || null,
+      ]
+    );
+    persisted.push(created.lastID);
+    guardianNames.push(name);
+  }
+  if (actorUserId) {
+    await logEntityChange({
+      entityType: "academic_student",
+      entityId: studentId,
+      action: "guardians_updated",
+      actorUserId,
+      origin: "manual_edit",
+      detail: { total_guardians: persisted.length },
+    });
+    await ensureStudentTimelineEntry({
+      student_id: studentId,
+      actor_user_id: actorUserId,
+      event_type: "guardians_updated",
+      title: "Responsáveis atualizados",
+      description: guardianNames.length
+        ? `Responsáveis vinculados: ${guardianNames.join(", ")}.`
+        : "Os responsáveis do aluno foram removidos ou atualizados.",
+      metadata: {
+        total_guardians: persisted.length,
+        guardian_names: guardianNames,
+      },
+    });
+  }
+}
+
+async function ensureSchoolTermRecord(payload = {}) {
+  const code = sanitizeAcademicTextValue(payload.code || deriveSemesterCode(payload.name || ""), { maxLength: 32 });
+  const name = sanitizeAcademicTextValue(payload.name || deriveSchoolTermName(code), { maxLength: 120 });
+  if (!code && !name) return null;
+  const existing = code
+    ? await get("SELECT * FROM school_terms WHERE lower(code)=lower(?) LIMIT 1", [code])
+    : await get("SELECT * FROM school_terms WHERE lower(name)=lower(?) LIMIT 1", [name]);
+  if (existing) {
+    await run(
+      "UPDATE school_terms SET name=?, start_date=COALESCE(?, start_date), end_date=COALESCE(?, end_date), status=?, updated_at=datetime('now') WHERE id=?",
+      [
+        name || existing.name,
+        normalizeAcademicDateInput(payload.start_date),
+        normalizeAcademicDateInput(payload.end_date),
+        normalizeAcademicOption(payload.status, ["active", "inactive", "planned", "closed"], existing.status || "active"),
+        existing.id,
+      ]
+    );
+    return get("SELECT * FROM school_terms WHERE id=?", [existing.id]);
+  }
+  const guessedDates = guessSchoolTermDates(code);
+  const created = await run(
+    "INSERT INTO school_terms (name, code, start_date, end_date, status, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+    [
+      name || code,
+      code || sanitizeAcademicIdentifier(name, "term"),
+      normalizeAcademicDateInput(payload.start_date) || guessedDates.startDate,
+      normalizeAcademicDateInput(payload.end_date) || guessedDates.endDate,
+      normalizeAcademicOption(payload.status, ["active", "inactive", "planned", "closed"], "active"),
+    ]
+  );
+  return get("SELECT * FROM school_terms WHERE id=?", [created.lastID]);
+}
+
+async function ensureAcademicProgramRecord(payload = {}) {
+  const prepared = {
+    language: sanitizeAcademicTextValue(payload.language, { maxLength: 80 }) || null,
+    program_name: sanitizeAcademicTextValue(payload.program_name || payload.level_name || payload.language, { maxLength: 160 }),
+    level_name: sanitizeAcademicTextValue(payload.level_name, { maxLength: 120 }) || null,
+    stage_name: sanitizeAcademicTextValue(payload.stage_name, { maxLength: 120 }) || null,
+    semester_label: sanitizeAcademicTextValue(payload.semester_label || payload.school_term_code, { maxLength: 32 }) || null,
+    modality: sanitizeAcademicTextValue(payload.modality, { maxLength: 80 }) || null,
+    material_name: sanitizeAcademicTextValue(payload.material_name, { maxLength: 120 }) || null,
+    workload_hours: Number.isFinite(Number(payload.workload_hours)) ? Number(payload.workload_hours) : null,
+    status: normalizeAcademicOption(payload.status, ["active", "inactive"], "active"),
+  };
+  if (!prepared.program_name) return null;
+  const existing = await get(
+    `SELECT *
+       FROM academic_programs
+      WHERE lower(coalesce(language, ''))=lower(?)
+        AND lower(program_name)=lower(?)
+        AND lower(coalesce(level_name, ''))=lower(?)
+        AND lower(coalesce(stage_name, ''))=lower(?)
+        AND lower(coalesce(semester_label, ''))=lower(?)
+        AND lower(coalesce(modality, ''))=lower(?)
+      LIMIT 1`,
+    [
+      prepared.language || "",
+      prepared.program_name,
+      prepared.level_name || "",
+      prepared.stage_name || "",
+      prepared.semester_label || "",
+      prepared.modality || "",
+    ]
+  );
+  if (existing) return existing;
+  const created = await run(
+    `INSERT INTO academic_programs
+       (language, program_name, level_name, stage_name, semester_label, modality, material_name, workload_hours, status, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      prepared.language,
+      prepared.program_name,
+      prepared.level_name,
+      prepared.stage_name,
+      prepared.semester_label,
+      prepared.modality,
+      prepared.material_name,
+      prepared.workload_hours,
+      prepared.status,
+    ]
+  );
+  return get("SELECT * FROM academic_programs WHERE id=?", [created.lastID]);
+}
+
+async function ensureAcademicClassRecord(payload = {}) {
+  const prepared = {
+    code: sanitizeAcademicTextValue(payload.code || buildAcademicClassCode(payload), { maxLength: 40 }),
+    name: sanitizeAcademicTextValue(payload.name || payload.class_name, { maxLength: 180 }),
+    school_term_id: Number(payload.school_term_id || 0) || null,
+    academic_program_id: Number(payload.academic_program_id || 0) || null,
+    language: sanitizeAcademicTextValue(payload.language, { maxLength: 80 }) || null,
+    modality: sanitizeAcademicTextValue(payload.modality, { maxLength: 80 }) || null,
+    level_name: sanitizeAcademicTextValue(payload.level_name, { maxLength: 120 }) || null,
+    semester_label: sanitizeAcademicTextValue(payload.semester_label || payload.school_term_code, { maxLength: 32 }) || null,
+    age_group: sanitizeAcademicTextValue(payload.age_group, { maxLength: 80 }) || null,
+    capacity: Number.isFinite(Number(payload.capacity)) ? Math.max(0, Math.round(Number(payload.capacity))) : null,
+    min_students: Number.isFinite(Number(payload.min_students)) ? Math.max(0, Math.round(Number(payload.min_students))) : null,
+    status: normalizeClassStatus(payload.status || "ativa"),
+    room_name: sanitizeAcademicTextValue(payload.room_name, { maxLength: 120 }) || null,
+    unit_name: sanitizeAcademicTextValue(payload.unit_name, { maxLength: 120 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    class_kind: sanitizeAcademicTextValue(payload.class_kind, { maxLength: 40 }) || "regular",
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_block_ref: sanitizeAcademicTextValue(payload.source_block_ref, { maxLength: 180 }) || null,
+  };
+  if (!prepared.name) throw new Error("missing_class_name");
+  let existing = null;
+  if (prepared.source_block_ref) {
+    existing = await get("SELECT * FROM classes WHERE source_block_ref=? LIMIT 1", [prepared.source_block_ref]);
+  }
+  if (!existing && prepared.code) {
+    existing = await get("SELECT * FROM classes WHERE code=? LIMIT 1", [prepared.code]);
+  }
+  if (!existing) {
+    existing = await get(
+      `SELECT *
+         FROM classes
+        WHERE lower(name)=lower(?)
+          AND coalesce(school_term_id, 0)=coalesce(?, 0)
+          AND coalesce(academic_program_id, 0)=coalesce(?, 0)
+          AND lower(coalesce(language, ''))=lower(?)
+        LIMIT 1`,
+      [prepared.name, prepared.school_term_id, prepared.academic_program_id, prepared.language || ""]
+    );
+  }
+  prepared.metadata_json = safeJsonStringify(mergeAcademicMetadata(existing?.metadata_json, payload.metadata || payload.metadata_json || {}), "{}");
+  if (existing) {
+    await run(
+      `UPDATE classes
+          SET code=?, name=?, school_term_id=?, academic_program_id=?, language=?, modality=?, level_name=?, semester_label=?, age_group=?,
+              capacity=COALESCE(?, capacity), min_students=COALESCE(?, min_students), status=?, room_name=?, unit_name=?, notes=COALESCE(?, notes),
+              class_kind=?, source_workbook=COALESCE(?, source_workbook), source_sheet=COALESCE(?, source_sheet), source_block_ref=COALESCE(?, source_block_ref),
+              metadata_json=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        prepared.code || existing.code,
+        prepared.name,
+        prepared.school_term_id,
+        prepared.academic_program_id,
+        prepared.language,
+        prepared.modality,
+        prepared.level_name,
+        prepared.semester_label,
+        prepared.age_group,
+        prepared.capacity,
+        prepared.min_students,
+        prepared.status,
+        prepared.room_name,
+        prepared.unit_name,
+        prepared.notes,
+        prepared.class_kind,
+        prepared.source_workbook,
+        prepared.source_sheet,
+        prepared.source_block_ref,
+        prepared.metadata_json,
+        existing.id,
+      ]
+    );
+    return getClassBasicById(existing.id);
+  }
+  const created = await run(
+    `INSERT INTO classes
+       (code, name, school_term_id, academic_program_id, language, modality, level_name, semester_label, age_group, capacity, min_students, status, room_name, unit_name, notes, class_kind, source_workbook, source_sheet, source_block_ref, metadata_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      prepared.code,
+      prepared.name,
+      prepared.school_term_id,
+      prepared.academic_program_id,
+      prepared.language,
+      prepared.modality,
+      prepared.level_name,
+      prepared.semester_label,
+      prepared.age_group,
+      prepared.capacity,
+      prepared.min_students,
+      prepared.status,
+      prepared.room_name,
+      prepared.unit_name,
+      prepared.notes,
+      prepared.class_kind,
+      prepared.source_workbook,
+      prepared.source_sheet,
+      prepared.source_block_ref,
+      prepared.metadata_json,
+    ]
+  );
+  return getClassBasicById(created.lastID);
+}
+
+async function syncAcademicClassSchedules(classId, schedules = []) {
+  const existing = await listClassSchedulesByClassId(classId);
+  const existingKeys = new Set(existing.map((row) => [row.weekday, row.start_time, row.end_time, row.notes || ""].join("|")));
+  let inserted = 0;
+  for (let index = 0; index < schedules.length; index += 1) {
+    const item = schedules[index] || {};
+    const weekday = sanitizeAcademicTextValue(item.weekday, { maxLength: 40 }) || null;
+    const startTime = sanitizeAcademicTextValue(item.start_time, { maxLength: 16 }) || null;
+    const endTime = sanitizeAcademicTextValue(item.end_time, { maxLength: 16 }) || null;
+    const notes = sanitizeAcademicTextValue(item.notes, { maxLength: 500 }) || null;
+    const key = [weekday, startTime, endTime, notes || ""].join("|");
+    if (existingKeys.has(key)) continue;
+    await run(
+      `INSERT INTO class_schedules
+         (class_id, weekday, start_time, end_time, timezone, is_primary, notes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [classId, weekday, startTime, endTime, sanitizeAcademicTextValue(item.timezone, { maxLength: 80 }) || "America/Sao_Paulo", inserted === 0 && !existing.length && index === 0, notes]
+    );
+    existingKeys.add(key);
+    inserted += 1;
+  }
+  return listClassSchedulesByClassId(classId);
+}
+
+async function ensureClassTeacherLink(classId, userId, payload = {}) {
+  const roleInClass = sanitizeAcademicTextValue(payload.role_in_class || "teacher", { maxLength: 40 }) || "teacher";
+  const startDate = normalizeAcademicDateInput(payload.start_date) || null;
+  const existing = await get(
+    "SELECT id FROM class_teachers WHERE class_id=? AND user_id=? AND role_in_class=? AND coalesce(start_date, '')=coalesce(?, '') LIMIT 1",
+    [classId, userId, roleInClass, startDate]
+  );
+  if (existing?.id) {
+    await run(
+      "UPDATE class_teachers SET end_date=?, is_active=?, updated_at=datetime('now') WHERE id=?",
+      [normalizeAcademicDateInput(payload.end_date), payload.is_active !== false, existing.id]
+    );
+    return existing.id;
+  }
+  const created = await run(
+    "INSERT INTO class_teachers (class_id, user_id, role_in_class, start_date, end_date, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+    [classId, userId, roleInClass, startDate, normalizeAcademicDateInput(payload.end_date), payload.is_active !== false]
+  );
+  return created.lastID;
+}
+
+async function ensureAcademicTeacherUser(teacher = {}, actorUserId = null) {
+  const displayName = sanitizeAcademicTextValue(teacher.display_name || teacher.normalized_name, { maxLength: 180 });
+  const normalizedName = normalizeAcademicText(teacher.normalized_name || displayName);
+  if (!displayName || !normalizedName) return null;
+
+  let profile = await getTeacherProfileByNormalizedName(normalizedName);
+  let user = profile?.user_id ? await getUserById(profile.user_id).catch(() => null) : null;
+  let createdUser = false;
+  let createdProfile = false;
+
+  if (!user) {
+    const existingTeacherUser = await get(
+      `SELECT id
+         FROM users
+        WHERE lower(name)=lower(?)
+          AND (lower(coalesce(job_title, '')) LIKE lower(?) OR lower(coalesce(department, ''))=lower(?))
+        LIMIT 1`,
+      [displayName, "%prof%", "Professor"]
+    );
+    if (existingTeacherUser?.id) {
+      user = await getUserById(existingTeacherUser.id).catch(() => null);
+    }
+  }
+
+  if (!user) {
+    const email = await generateAvailableInternalEmail(buildTeacherInternalEmailBase(displayName));
+    const passwordHash = await bcrypt.hash(ACADEMIC_TEACHER_TEMP_PASSWORD, 10);
+    const created = await run(
+      "INSERT INTO users (email, name, password_hash, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json) VALUES (?, ?, ?, 'teacher', ?, ?, ?, ?, ?, ?)",
+      [
+        email,
+        displayName,
+        passwordHash,
+        "Professor",
+        true,
+        DEFAULT_LOCALE,
+        "Professor",
+        "Acadêmico",
+        safeJsonStringify({
+          academic_role: "teacher",
+          intranet_scope: "teacher_academic",
+          allowed_department_slugs: ["professor"],
+          allowed_submenu_view_keys: ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS,
+        }, "{}"),
+      ]
+    );
+    user = await getUserById(created.lastID);
+    createdUser = true;
+    if (actorUserId) {
+      await logEvent(actorUserId, "academic_teacher_user_created", {
+        teacher_name: displayName,
+        user_id: created.lastID,
+      });
+    }
+  }
+
+  await syncUserDepartments(user.id || user.sub, ["Professor"]);
+  const mergedPermissions = normalizeAdditionalPermissions(user.additional_permissions_json || user.additional_permissions || {});
+  mergedPermissions.academic_role = "teacher";
+  mergedPermissions.intranet_scope = "teacher_academic";
+  mergedPermissions.allowed_department_slugs = ["professor"];
+  mergedPermissions.allowed_submenu_view_keys = ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS.slice();
+  await run(
+    "UPDATE users SET role=?, department=?, can_access_intranet=?, job_title=?, unit_name=?, additional_permissions_json=? WHERE id=?",
+    [
+      String(user.role || "").trim() === "admin" ? "admin" : "teacher",
+      "Professor",
+      true,
+      normalizeSqlTextValue(user.job_title) || "Professor",
+      normalizeSqlTextValue(user.unit_name) || "Acadêmico",
+      safeJsonStringify(mergedPermissions, "{}"),
+      user.id || user.sub,
+    ]
+  );
+
+  const aliases = mergeUniqueStrings(teacher.aliases || [], [displayName]);
+  const specialties = mergeUniqueStrings(teacher.specialties || []);
+  const metadata = mergeAcademicMetadata(profile?.metadata, mergeAcademicMetadata(teacher.metadata || {}, {
+    imported_from: "academic_workbook",
+    alias_count: aliases.length,
+    specialties_count: specialties.length,
+  }));
+  if (profile?.id) {
+    await run(
+      `UPDATE teacher_profiles
+          SET user_id=?, display_name=?, aliases_json=?, specialties_json=?, metadata_json=?, active=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        user.id || user.sub,
+        displayName,
+        safeJsonStringify(aliases, "[]"),
+        safeJsonStringify(specialties, "[]"),
+        safeJsonStringify(metadata, "{}"),
+        true,
+        profile.id,
+      ]
+    );
+  } else {
+    const createdProfileRow = await run(
+      `INSERT INTO teacher_profiles
+         (user_id, display_name, normalized_name, aliases_json, specialties_json, metadata_json, active, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        user.id || user.sub,
+        displayName,
+        normalizedName,
+        safeJsonStringify(aliases, "[]"),
+        safeJsonStringify(specialties, "[]"),
+        safeJsonStringify(metadata, "{}"),
+        true,
+      ]
+    );
+    createdProfile = true;
+    profile = await getTeacherProfileByNormalizedName(normalizedName);
+    if (!profile?.id && createdProfileRow?.lastID) {
+      profile = await getTeacherProfileByUserId(user.id || user.sub);
+    }
+  }
+
+  return {
+    user: await getUserById(user.id || user.sub),
+    profile: await getTeacherProfileByNormalizedName(normalizedName),
+    created_user: createdUser,
+    created_profile: createdProfile,
+  };
+}
+
+async function upsertAcademicStudentFromImport(record = {}, actorUserId = null) {
+  const fullName = sanitizeAcademicTextValue(record.full_name || record.student_name, { maxLength: 180 });
+  const normalizedName = normalizePersonKey(fullName);
+  if (!fullName || !normalizedName) return null;
+  const existing = await findAcademicStudentMatch({
+    fullName,
+    normalizedName,
+    phone: record.phone,
+  });
+  const importedNotes = sanitizeAcademicTextValue(record.notes || record.source_notes || "", { maxLength: 4000 }) || null;
+  const payload = {
+    id: existing?.id || null,
+    full_name: fullName,
+    preferred_name: existing?.preferred_name || null,
+    phone: sanitizeAcademicTextValue(record.phone, { maxLength: 40 }) || existing?.phone || null,
+    whatsapp: sanitizeAcademicTextValue(record.whatsapp || record.phone, { maxLength: 40 }) || existing?.whatsapp || null,
+    notes: existing?.notes || importedNotes,
+    school_name: existing?.school_name || null,
+    school_grade: existing?.school_grade || null,
+    status: normalizeStudentStatus(record.status || existing?.status || "ativo"),
+    source_workbook: record.source_workbook || existing?.source_workbook || null,
+    source_sheet: record.source_sheet,
+    source_row_identifier: record.source_row_identifier,
+    source_payload: record.source_payload || {},
+  };
+  const saved = await saveAcademicStudentRecord(payload, actorUserId);
+  if (actorUserId && existing?.id) {
+    await logEntityChange({
+      entityType: "academic_student",
+      entityId: saved.id,
+      action: "import_sync",
+      actorUserId,
+      origin: "academic_import",
+      detail: {
+        source_sheet: record.source_sheet,
+        source_row_identifier: record.source_row_identifier,
+      },
+    });
+  }
+  return saved;
+}
+
+function shouldPreserveEnrollmentStatus(currentStatus = "") {
+  const safe = normalizeAcademicText(currentStatus);
+  return ["trancado", "cancelado", "concluido", "desistente"].includes(safe);
+}
+
+async function findAcademicEnrollmentMatch(studentId, payload = {}) {
+  if (!studentId) return null;
+  const sourceSheet = sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 });
+  const sourceRowIdentifier = sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 });
+  if (sourceSheet && sourceRowIdentifier) {
+    const bySource = await get(
+      "SELECT * FROM enrollments WHERE student_id=? AND source_sheet=? AND source_row_identifier=? LIMIT 1",
+      [studentId, sourceSheet, sourceRowIdentifier]
+    );
+    if (bySource) return mapAcademicEnrollmentRow(bySource);
+  }
+  const byContext = await get(
+    `SELECT *
+       FROM enrollments
+      WHERE student_id=?
+        AND coalesce(academic_program_id, 0)=coalesce(?, 0)
+        AND coalesce(school_term_id, 0)=coalesce(?, 0)
+      ORDER BY datetime(updated_at) DESC, id DESC
+      LIMIT 1`,
+    [studentId, Number(payload.academic_program_id || 0) || null, Number(payload.school_term_id || 0) || null]
+  );
+  return mapAcademicEnrollmentRow(byContext);
+}
+
+async function saveAcademicEnrollmentRecord(payload = {}, actorUser) {
+  const actorUserId = actorUser?.id || actorUser?.sub || null;
+  const enrollmentId = Number(payload.id || 0) || null;
+  const studentId = Number(payload.student_id || 0) || null;
+  if (!studentId) throw new Error("missing_student_id");
+  const prepared = {
+    student_id: studentId,
+    academic_program_id: Number(payload.academic_program_id || 0) || null,
+    school_term_id: Number(payload.school_term_id || 0) || null,
+    class_id: Number(payload.class_id || 0) || null,
+    enrollment_number: sanitizeAcademicTextValue(payload.enrollment_number, { maxLength: 80 }) || null,
+    enrollment_date: normalizeAcademicDateInput(payload.enrollment_date),
+    start_date: normalizeAcademicDateInput(payload.start_date),
+    end_date: normalizeAcademicDateInput(payload.end_date),
+    enrollment_status: normalizeEnrollmentStatus(payload.enrollment_status || "aguardando turma"),
+    contract_status: sanitizeAcademicTextValue(payload.contract_status, { maxLength: 80 }) || null,
+    payment_status: sanitizeAcademicTextValue(payload.payment_status, { maxLength: 80 }) || null,
+    pedagogical_status: sanitizeAcademicTextValue(payload.pedagogical_status, { maxLength: 120 }) || null,
+    source_channel: sanitizeAcademicTextValue(payload.source_channel, { maxLength: 120 }) || null,
+    source_notes: sanitizeAcademicTextValue(payload.source_notes, { maxLength: 2000 }) || null,
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 4000 }) || null,
+    source_workbook: sanitizeAcademicTextValue(payload.source_workbook, { maxLength: 180 }) || null,
+    source_sheet: sanitizeAcademicTextValue(payload.source_sheet, { maxLength: 120 }) || null,
+    source_row_identifier: sanitizeAcademicTextValue(payload.source_row_identifier, { maxLength: 160 }) || null,
+    source_payload_json: safeJsonStringify(payload.source_payload || payload.source_payload_json || {}, "{}"),
+    metadata_json: safeJsonStringify(mergeAcademicMetadata(payload.metadata_json, payload.metadata || {}), "{}"),
+  };
+
+  if (enrollmentId) {
+    const existing = await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [enrollmentId]);
+    if (!existing) throw new Error("enrollment_not_found");
+    await run(
+      `UPDATE enrollments
+          SET student_id=?, academic_program_id=?, school_term_id=?, class_id=?, enrollment_number=?, enrollment_date=?, start_date=?, end_date=?,
+              enrollment_status=?, contract_status=?, payment_status=?, pedagogical_status=?, source_channel=?, source_notes=?, notes=?,
+              source_workbook=?, source_sheet=?, source_row_identifier=?, source_payload_json=?, metadata_json=?, updated_at=datetime('now')
+        WHERE id=?`,
+      [
+        prepared.student_id,
+        prepared.academic_program_id,
+        prepared.school_term_id,
+        prepared.class_id,
+        prepared.enrollment_number,
+        prepared.enrollment_date,
+        prepared.start_date,
+        prepared.end_date,
+        prepared.enrollment_status,
+        prepared.contract_status,
+        prepared.payment_status,
+        prepared.pedagogical_status,
+        prepared.source_channel,
+        prepared.source_notes,
+        prepared.notes,
+        prepared.source_workbook,
+        prepared.source_sheet,
+        prepared.source_row_identifier,
+        prepared.source_payload_json,
+        prepared.metadata_json,
+        enrollmentId,
+      ]
+    );
+    if (actorUserId) {
+      await logEntityChange({
+        entityType: "academic_enrollment",
+        entityId: enrollmentId,
+        action: "updated",
+        actorUserId,
+        origin: "manual_edit",
+      });
+    }
+    const savedEnrollment = mapAcademicEnrollmentRow(await get(
+      `SELECT e.*, ap.program_name, ap.level_name, ap.language, ap.modality, st.code AS school_term_code, c.name AS class_name
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN school_terms st ON st.id = e.school_term_id
+         LEFT JOIN classes c ON c.id = e.class_id
+        WHERE e.id=?`,
+      [enrollmentId]
+    ));
+    if (actorUserId && savedEnrollment?.student_id) {
+      await ensureStudentTimelineEntry({
+        student_id: savedEnrollment.student_id,
+        enrollment_id: savedEnrollment.id,
+        actor_user_id: actorUserId,
+        event_type: "enrollment_updated",
+        title: "Matrícula atualizada",
+        description: `${savedEnrollment.enrollment_number || `Matrícula ${savedEnrollment.id}`} foi atualizada para ${savedEnrollment.enrollment_status || "em andamento"}.`,
+        metadata: {
+          language: savedEnrollment.language || null,
+          modality: savedEnrollment.modality || null,
+          program_name: savedEnrollment.program_name || null,
+          class_name: savedEnrollment.class_name || null,
+          enrollment_status: savedEnrollment.enrollment_status || null,
+        },
+      });
+    }
+    return savedEnrollment;
+  }
+
+  const created = await run(
+    `INSERT INTO enrollments
+       (student_id, academic_program_id, school_term_id, class_id, enrollment_number, enrollment_date, start_date, end_date, enrollment_status,
+        contract_status, payment_status, pedagogical_status, source_channel, source_notes, notes, source_workbook, source_sheet, source_row_identifier, source_payload_json, metadata_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      prepared.student_id,
+      prepared.academic_program_id,
+      prepared.school_term_id,
+      prepared.class_id,
+      prepared.enrollment_number,
+      prepared.enrollment_date,
+      prepared.start_date,
+      prepared.end_date,
+      prepared.enrollment_status,
+      prepared.contract_status,
+      prepared.payment_status,
+      prepared.pedagogical_status,
+      prepared.source_channel,
+      prepared.source_notes,
+      prepared.notes,
+      prepared.source_workbook,
+      prepared.source_sheet,
+      prepared.source_row_identifier,
+      prepared.source_payload_json,
+      prepared.metadata_json,
+    ]
+  );
+  if (actorUserId) {
+    await logEntityChange({
+      entityType: "academic_enrollment",
+      entityId: created.lastID,
+      action: "created",
+      actorUserId,
+      origin: "manual_create",
+    });
+  }
+  const savedEnrollment = mapAcademicEnrollmentRow(await get(
+    `SELECT e.*, ap.program_name, ap.level_name, ap.language, ap.modality, st.code AS school_term_code, c.name AS class_name
+       FROM enrollments e
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+       LEFT JOIN classes c ON c.id = e.class_id
+      WHERE e.id=?`,
+    [created.lastID]
+  ));
+  if (actorUserId && savedEnrollment?.student_id) {
+    await ensureStudentTimelineEntry({
+      student_id: savedEnrollment.student_id,
+      enrollment_id: savedEnrollment.id,
+      actor_user_id: actorUserId,
+      event_type: "enrollment_created",
+      title: "Matrícula criada",
+      description: `${savedEnrollment.enrollment_number || `Matrícula ${savedEnrollment.id}`} foi criada${savedEnrollment.class_name ? ` na turma ${savedEnrollment.class_name}` : ""}.`,
+      metadata: {
+        language: savedEnrollment.language || null,
+        modality: savedEnrollment.modality || null,
+        program_name: savedEnrollment.program_name || null,
+        class_name: savedEnrollment.class_name || null,
+        enrollment_status: savedEnrollment.enrollment_status || null,
+      },
+    });
+  }
+  return savedEnrollment;
+}
+
+async function upsertAcademicEnrollmentFromImport(student, payload = {}, actorUserId = null) {
+  if (!student?.id) return null;
+  const existing = await findAcademicEnrollmentMatch(student.id, payload);
+  const nextStatus = normalizeEnrollmentStatus(payload.enrollment_status || (payload.class_id ? "matriculado" : "aguardando turma"));
+  const finalStatus = existing?.enrollment_status && shouldPreserveEnrollmentStatus(existing.enrollment_status)
+    ? existing.enrollment_status
+    : nextStatus;
+  const mergedPayload = {
+    ...payload,
+    id: existing?.id || null,
+    student_id: student.id,
+    enrollment_status: finalStatus,
+    notes: existing?.notes || payload.notes || null,
+  };
+  const saved = await saveAcademicEnrollmentRecord(mergedPayload, actorUserId ? { id: actorUserId } : null);
+  if (existing?.id && Number(existing.class_id || 0) !== Number(saved.class_id || 0) && Number(saved.class_id || 0)) {
+    await run(
+      `INSERT INTO enrollment_class_history
+         (enrollment_id, old_class_id, new_class_id, reason, changed_by_user_id, changed_at, notes)
+       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
+      [
+        saved.id,
+        existing.class_id || null,
+        saved.class_id || null,
+        "Sincronização da planilha acadêmica",
+        actorUserId || null,
+        "Atualização automática a partir da grade importada",
+      ]
+    );
+  }
+  return saved;
+}
+
+function getAcademicWorkbookPriority(workbookName = "") {
+  const raw = String(workbookName || "").trim();
+  const normalized = normalizeAcademicText(raw);
+  if (!normalized) return 0;
+  let score = 0;
+  if (normalized.includes("2026 1")) score += 120;
+  if (normalized.includes("presencial")) score += 90;
+  if (normalized.includes("home school")) score += 60;
+  if (normalized.includes("time table")) score += 20;
+  if (/\(\d+\)/.test(raw)) score -= 10;
+  return score;
+}
+
+function countAcademicDefinedValues(value, seen = new WeakSet()) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "string") return String(value).trim() ? 1 : 0;
+  if (typeof value === "number") return Number.isFinite(value) ? 1 : 0;
+  if (typeof value === "boolean") return 1;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? 0 : 1;
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + countAcademicDefinedValues(item, seen), 0);
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) return 0;
+    seen.add(value);
+    return Object.values(value).reduce((total, item) => total + countAcademicDefinedValues(item, seen), 0);
+  }
+  return 0;
+}
+
+function choosePreferredAcademicImportRecord(existing, incoming) {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const existingScore = countAcademicDefinedValues(existing) + getAcademicWorkbookPriority(existing.source_workbook || "");
+  const incomingScore = countAcademicDefinedValues(incoming) + getAcademicWorkbookPriority(incoming.source_workbook || "");
+  return incomingScore >= existingScore ? incoming : existing;
+}
+
+function buildAcademicEnrollmentImportKey(record = {}) {
+  if (record.dedupe_hash) return String(record.dedupe_hash);
+  const parts = [
+    normalizePersonKey(record.full_name || record.student_name || ""),
+    sanitizeAcademicIdentifier(record.phone || record.whatsapp || "", "no-phone"),
+    normalizeAcademicText(record.language || ""),
+    normalizeAcademicText(record.semester_label || record.school_term_code || ""),
+    normalizeAcademicText(record.class_kind || record.class_type || ""),
+    normalizeAcademicText(record.requested_class_label || record.level_name || record.program_name || ""),
+  ];
+  return hashText(parts.join("|"));
+}
+
+function buildAcademicClassBlockKey(block = {}) {
+  const parts = [
+    normalizeAcademicText(block.class_name || ""),
+    normalizeAcademicText(block.teacher_normalized_name || block.teacher_display_name || ""),
+    normalizeAcademicText(block.semester_label || block.school_term_code || ""),
+    normalizeAcademicText(block.modality || ""),
+    normalizeAcademicText(block.class_kind || "regular"),
+    normalizeAcademicText(block.source_sheet || ""),
+  ];
+  return hashText(parts.join("|"));
+}
+
+function mergeAcademicSchedules(existing = [], incoming = []) {
+  const map = new Map();
+  for (const schedule of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const key = [
+      normalizeAcademicText(schedule?.weekday || ""),
+      normalizeAcademicText(schedule?.start_time || ""),
+      normalizeAcademicText(schedule?.end_time || ""),
+      normalizeAcademicText(schedule?.notes || ""),
+    ].join("|");
+    if (!key.replace(/\|/g, "").trim()) continue;
+    map.set(key, {
+      weekday: sanitizeAcademicTextValue(schedule?.weekday, { maxLength: 60 }) || "",
+      start_time: sanitizeAcademicTextValue(schedule?.start_time, { maxLength: 16 }) || "",
+      end_time: sanitizeAcademicTextValue(schedule?.end_time, { maxLength: 16 }) || "",
+      timezone: sanitizeAcademicTextValue(schedule?.timezone, { maxLength: 60 }) || "America/Sao_Paulo",
+      notes: sanitizeAcademicTextValue(schedule?.notes, { maxLength: 400 }) || null,
+      is_primary: schedule?.is_primary === true,
+    });
+  }
+  return Array.from(map.values());
+}
+
+function mergeAcademicStudentEntries(existing = [], incoming = []) {
+  const map = new Map();
+  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const key = [
+      normalizePersonKey(item?.full_name || ""),
+      normalizeAcademicText(item?.source_sheet || ""),
+      normalizeAcademicText(item?.source_row_identifier || ""),
+    ].join("|");
+    if (!key.replace(/\|/g, "").trim()) continue;
+    map.set(key, choosePreferredAcademicImportRecord(map.get(key), item));
+  }
+  return Array.from(map.values());
+}
+
+function mergeAcademicClassBlockRecords(existing = {}, incoming = {}) {
+  const preferred = choosePreferredAcademicImportRecord(existing, incoming) || {};
+  const fallback = preferred === existing ? incoming : existing;
+  return {
+    ...fallback,
+    ...preferred,
+    source_workbook: preferred.source_workbook || fallback?.source_workbook || null,
+    source_sheet: preferred.source_sheet || fallback?.source_sheet || null,
+    source_block_ref: preferred.source_block_ref || fallback?.source_block_ref || null,
+    class_name: preferred.class_name || fallback?.class_name || null,
+    class_kind: preferred.class_kind || fallback?.class_kind || "regular",
+    language: preferred.language || fallback?.language || "",
+    modality: preferred.modality || fallback?.modality || "",
+    level_name: preferred.level_name || fallback?.level_name || "",
+    semester_label: preferred.semester_label || fallback?.semester_label || "",
+    school_term_code: preferred.school_term_code || fallback?.school_term_code || "",
+    teacher_display_name: preferred.teacher_display_name || fallback?.teacher_display_name || "",
+    teacher_normalized_name: preferred.teacher_normalized_name || fallback?.teacher_normalized_name || "",
+    teacher_aliases: mergeUniqueStrings(existing.teacher_aliases || [], incoming.teacher_aliases || []),
+    teacher_specialties: mergeUniqueStrings(existing.teacher_specialties || [], incoming.teacher_specialties || []),
+    descriptor_lines: mergeUniqueStrings(existing.descriptor_lines || [], incoming.descriptor_lines || []),
+    notes_lines: mergeUniqueStrings(existing.notes_lines || [], incoming.notes_lines || []),
+    schedules: mergeAcademicSchedules(existing.schedules || [], incoming.schedules || []),
+    students: mergeAcademicStudentEntries(existing.students || [], incoming.students || []),
+  };
+}
+
+function consolidateAcademicParsedWorkbooks(parsedEntries = []) {
+  const workbookNames = [];
+  const relevantSheets = new Set();
+  const ignoredSheets = new Set();
+  const auxiliarySheets = [];
+  const sheetKinds = [];
+  const teacherMap = new Map();
+  const enrollmentMap = new Map();
+  const classBlockMap = new Map();
+  const trancadosMap = new Map();
+  const desistentesMap = new Map();
+  const cancelamentosMap = new Map();
+  const movementsMap = new Map();
+  const rawTotals = {
+    matriculas_rows: 0,
+    class_blocks: 0,
+    trancados_rows: 0,
+    desistentes_rows: 0,
+    cancelamentos_rows: 0,
+    movements_rows: 0,
+  };
+
+  for (const entry of Array.isArray(parsedEntries) ? parsedEntries : []) {
+    const parsed = entry?.parsed;
+    if (!parsed) continue;
+    workbookNames.push(parsed.workbook_name);
+    (parsed.relevant_sheets || []).forEach((item) => relevantSheets.add(item));
+    (parsed.ignored_sheets || []).forEach((item) => ignoredSheets.add(item));
+    (parsed.auxiliary_sheets || []).forEach((item) => auxiliarySheets.push({ workbook_name: parsed.workbook_name, ...item }));
+    (parsed.sheet_kinds || []).forEach((item) => sheetKinds.push({ workbook_name: parsed.workbook_name, ...item }));
+
+    rawTotals.matriculas_rows += Number(parsed.matriculas?.length || 0);
+    rawTotals.class_blocks += Number(parsed.class_blocks?.length || 0);
+    rawTotals.trancados_rows += Number(parsed.trancados?.length || 0);
+    rawTotals.desistentes_rows += Number(parsed.desistentes?.length || 0);
+    rawTotals.cancelamentos_rows += Number(parsed.cancelamentos?.length || 0);
+    rawTotals.movements_rows += Number(parsed.movements?.length || 0);
+
+    for (const teacher of parsed.teachers || []) {
+      const key = normalizeAcademicText(teacher.normalized_name || teacher.display_name || "");
+      if (!key) continue;
+      const current = teacherMap.get(key);
+      const preferred = choosePreferredAcademicImportRecord(current, teacher) || teacher;
+      teacherMap.set(key, {
+        ...current,
+        ...preferred,
+        display_name: preferred.display_name || current?.display_name || "",
+        normalized_name: key,
+        aliases: mergeUniqueStrings(current?.aliases || [], teacher.aliases || [], [teacher.display_name]),
+        specialties: mergeUniqueStrings(current?.specialties || [], teacher.specialties || []),
+        metadata: mergeAcademicMetadata(current?.metadata || {}, {
+          source_workbooks: mergeUniqueStrings(current?.metadata?.source_workbooks || [], [parsed.workbook_name]),
+        }),
+      });
+    }
+
+    for (const record of parsed.matriculas || []) {
+      const key = buildAcademicEnrollmentImportKey(record);
+      const current = enrollmentMap.get(key);
+      const preferred = choosePreferredAcademicImportRecord(current, record);
+      const fallback = preferred === current ? record : current;
+      enrollmentMap.set(key, {
+        ...fallback,
+        ...preferred,
+        source_workbook: preferred?.source_workbook || fallback?.source_workbook || null,
+        notes: preferred?.notes || fallback?.notes || null,
+        source_notes: preferred?.source_notes || fallback?.source_notes || null,
+      });
+    }
+
+    for (const block of parsed.class_blocks || []) {
+      const key = buildAcademicClassBlockKey(block);
+      classBlockMap.set(key, mergeAcademicClassBlockRecords(classBlockMap.get(key) || {}, block));
+    }
+
+    for (const item of parsed.trancados || []) {
+      const key = [normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.level_name || ""), normalizeAcademicText(item.status_date || ""), "trancado"].join("|");
+      trancadosMap.set(key, choosePreferredAcademicImportRecord(trancadosMap.get(key), item));
+    }
+    for (const item of parsed.desistentes || []) {
+      const key = [normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.level_name || ""), normalizeAcademicText(item.status_date || ""), "desistente"].join("|");
+      desistentesMap.set(key, choosePreferredAcademicImportRecord(desistentesMap.get(key), item));
+    }
+    for (const item of parsed.cancelamentos || []) {
+      const key = [normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.language || ""), normalizeAcademicText(item.notes || ""), "cancelado"].join("|");
+      cancelamentosMap.set(key, choosePreferredAcademicImportRecord(cancelamentosMap.get(key), item));
+    }
+    for (const item of parsed.movements || []) {
+      const key = [normalizeAcademicText(item.movement_type || ""), normalizePersonKey(item.full_name || ""), normalizeAcademicText(item.target_class_label || item.level_name || ""), normalizeAcademicText(item.status_date || ""), normalizeAcademicText(item.notes || "")].join("|");
+      movementsMap.set(key, choosePreferredAcademicImportRecord(movementsMap.get(key), item));
+    }
+  }
+
+  return {
+    source_key: ACADEMIC_IMPORT_SOURCE_KEY,
+    workbook_names: workbookNames,
+    relevant_sheets: Array.from(relevantSheets),
+    ignored_sheets: Array.from(ignoredSheets),
+    auxiliary_sheets: auxiliarySheets,
+    sheet_kinds: sheetKinds,
+    matriculas: Array.from(enrollmentMap.values()),
+    class_blocks: Array.from(classBlockMap.values()),
+    trancados: Array.from(trancadosMap.values()),
+    desistentes: Array.from(desistentesMap.values()),
+    cancelamentos: Array.from(cancelamentosMap.values()),
+    movements: Array.from(movementsMap.values()),
+    teachers: Array.from(teacherMap.values()),
+    raw_totals: rawTotals,
+  };
+}
+
+async function createAcademicImportRun({ workbookNames = [], actorUserId = null } = {}) {
+  const created = await run(
+    `INSERT INTO academic_import_runs
+       (source_key, status, workbook_names_json, actor_user_id, updated_at)
+     VALUES (?, 'running', ?, ?, datetime('now'))`,
+    [
+      ACADEMIC_IMPORT_SOURCE_KEY,
+      safeJsonStringify(workbookNames, "[]"),
+      actorUserId || null,
+    ]
+  );
+  return Number(created?.lastID || 0) || null;
+}
+
+async function appendAcademicImportLog(runId, payload = {}) {
+  if (!Number(runId || 0)) return null;
+  return run(
+    `INSERT INTO academic_import_logs
+       (run_id, workbook_name, sheet_name, log_level, stage, message, payload_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      Number(runId),
+      sanitizeAcademicTextValue(payload.workbook_name, { maxLength: 180 }) || null,
+      sanitizeAcademicTextValue(payload.sheet_name, { maxLength: 120 }) || null,
+      sanitizeAcademicTextValue(payload.log_level, { maxLength: 20 }) || "info",
+      sanitizeAcademicTextValue(payload.stage, { maxLength: 80 }) || null,
+      sanitizeAcademicTextValue(payload.message, { maxLength: 1000 }) || "academic_import_log",
+      safeJsonStringify(payload.payload || {}, "{}"),
+    ]
+  );
+}
+
+async function finalizeAcademicImportRun(runId, payload = {}) {
+  if (!Number(runId || 0)) return null;
+  return run(
+    `UPDATE academic_import_runs
+        SET status=?, imported_sheets_json=?, ignored_sheets_json=?, summary_json=?, updated_at=datetime('now')
+      WHERE id=?`,
+    [
+      sanitizeAcademicTextValue(payload.status, { maxLength: 40 }) || "completed",
+      safeJsonStringify(payload.imported_sheets || [], "[]"),
+      safeJsonStringify(payload.ignored_sheets || [], "[]"),
+      safeJsonStringify(payload.summary || {}, "{}"),
+      Number(runId),
+    ]
+  );
+}
+
+async function refreshAcademicStudentStatus(studentId) {
+  const safeStudentId = Number(studentId || 0) || null;
+  if (!safeStudentId) return null;
+  const rows = await all(
+    `SELECT enrollment_status
+       FROM enrollments
+      WHERE student_id=?
+      ORDER BY datetime(updated_at) DESC, id DESC`,
+    [safeStudentId]
+  );
+  const statuses = (rows || []).map((row) => normalizeAcademicText(row.enrollment_status || ""));
+  let nextStatus = "ativo";
+  if (statuses.some((item) => ["matriculado", "transferido"].includes(item))) nextStatus = "ativo";
+  else if (statuses.some((item) => ["aguardando turma", "pre matricula"].includes(item))) nextStatus = "aguardando";
+  else if (statuses.some((item) => item === "trancado")) nextStatus = "trancado";
+  else if (statuses.some((item) => item === "desistente")) nextStatus = "desistente";
+  else if (statuses.some((item) => item === "cancelado")) nextStatus = "cancelado";
+  else if (statuses.length) nextStatus = "inativo";
+  await run("UPDATE students SET status=?, updated_at=datetime('now') WHERE id=?", [nextStatus, safeStudentId]);
+  return get("SELECT * FROM students WHERE id=? LIMIT 1", [safeStudentId]);
+}
+
+async function findBestEnrollmentForAcademicStatus(studentId, item = {}) {
+  const safeStudentId = Number(studentId || 0) || null;
+  if (!safeStudentId) return null;
+  const rows = await all(
+    `SELECT e.*, st.code AS school_term_code, ap.language, ap.level_name, ap.modality, c.name AS class_name
+       FROM enrollments e
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN classes c ON c.id = e.class_id
+      WHERE e.student_id=?
+      ORDER BY datetime(e.updated_at) DESC, e.id DESC`,
+    [safeStudentId]
+  );
+  if (!rows.length) return null;
+  const termKey = normalizeAcademicText(item.semester_label || item.school_term_code || "");
+  const languageKey = normalizeAcademicText(item.language || "");
+  const levelKey = normalizeAcademicText(item.level_name || "");
+  const classKey = normalizeAcademicText(item.target_class_label || "");
+  let best = null;
+  let bestScore = -1;
+  rows.forEach((row, index) => {
+    let score = 0;
+    if (termKey && normalizeAcademicText(row.school_term_code || "") === termKey) score += 5;
+    if (languageKey && normalizeAcademicText(row.language || "") === languageKey) score += 3;
+    if (levelKey && normalizeAcademicText(row.level_name || "") === levelKey) score += 2;
+    if (classKey) {
+      const classNameKey = normalizeAcademicText(row.class_name || "");
+      if (classNameKey && (classNameKey.includes(classKey) || classKey.includes(classNameKey))) score += 2;
+    }
+    if (normalizeAcademicText(row.enrollment_status || "") === "matriculado") score += 1;
+    score += Math.max(0, 100 - index);
+    if (score > bestScore) {
+      bestScore = score;
+      best = row;
+    }
+  });
+  return best ? mapAcademicEnrollmentRow(best) : null;
+}
+
+async function recordAcademicTransferEvent(payload = {}) {
+  const enrollmentId = Number(payload.enrollment_id || 0) || null;
+  if (!enrollmentId) return null;
+  const transferType = sanitizeAcademicTextValue(payload.transfer_type, { maxLength: 80 }) || "movimentacao";
+  const oldValueJson = safeJsonStringify(payload.old_value || payload.old_value_json || {}, "{}");
+  const newValueJson = safeJsonStringify(payload.new_value || payload.new_value_json || {}, "{}");
+  const reason = sanitizeAcademicTextValue(payload.reason, { maxLength: 800 }) || null;
+  const notes = sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null;
+  const existing = await get(
+    `SELECT id
+       FROM student_transfers
+      WHERE enrollment_id=?
+        AND lower(coalesce(transfer_type, ''))=lower(?)
+        AND coalesce(old_value_json, '')=coalesce(?, '')
+        AND coalesce(new_value_json, '')=coalesce(?, '')
+        AND lower(coalesce(reason, ''))=lower(coalesce(?, ''))
+      LIMIT 1`,
+    [enrollmentId, transferType, oldValueJson, newValueJson, reason]
+  );
+  if (existing?.id) return existing.id;
+  const created = await run(
+    `INSERT INTO student_transfers
+       (enrollment_id, transfer_type, old_value_json, new_value_json, reason, changed_by_user_id, changed_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
+    [
+      enrollmentId,
+      transferType,
+      oldValueJson,
+      newValueJson,
+      reason,
+      Number(payload.changed_by_user_id || 0) || null,
+      notes,
+    ]
+  );
+  return created?.lastID || null;
+}
+
+async function applyAcademicStatusImport(item = {}, statusOverride = "", actorUserId = null, runId = null) {
+  const statusType = normalizeAcademicText(statusOverride || item.status_type || "");
+  if (!["trancado", "desistente", "cancelado"].includes(statusType)) return false;
+  const student = await findAcademicStudentMatch({
+    fullName: item.full_name,
+    normalizedName: item.normalized_name,
+    phone: item.phone,
+  });
+  if (!student?.id) {
+    await appendAcademicImportLog(runId, {
+      workbook_name: item.source_workbook,
+      sheet_name: item.source_sheet,
+      log_level: "warn",
+      stage: "status",
+      message: "Aluno de status nao encontrado para consolidacao.",
+      payload: { full_name: item.full_name, status_type: statusType },
+    });
+    return false;
+  }
+  const enrollment = await findBestEnrollmentForAcademicStatus(student.id, item);
+  if (enrollment?.id) {
+    await saveAcademicEnrollmentRecord({
+      ...enrollment,
+      id: enrollment.id,
+      student_id: enrollment.student_id,
+      academic_program_id: enrollment.academic_program_id,
+      school_term_id: enrollment.school_term_id,
+      class_id: enrollment.class_id,
+      enrollment_number: enrollment.enrollment_number,
+      enrollment_date: enrollment.enrollment_date,
+      start_date: enrollment.start_date,
+      end_date: enrollment.end_date,
+      enrollment_status: statusType,
+      contract_status: enrollment.contract_status,
+      payment_status: enrollment.payment_status,
+      pedagogical_status: enrollment.pedagogical_status || toAcademicTitleCase(statusType),
+      source_channel: enrollment.source_channel || "academic_import",
+      source_notes: mergeUniqueStrings([enrollment.source_notes || ""], [item.notes || ""]).join(" | ") || enrollment.source_notes || item.notes || null,
+      notes: enrollment.notes,
+      source_workbook: item.source_workbook || enrollment.source_workbook || null,
+      source_sheet: item.source_sheet || enrollment.source_sheet || null,
+      source_row_identifier: item.source_row_identifier || enrollment.source_row_identifier || null,
+      source_payload: item.source_payload || safeJsonParse(enrollment.source_payload_json || "{}") || {},
+      metadata: mergeAcademicMetadata(enrollment.metadata || enrollment.metadata_json || {}, {
+        latest_imported_status: statusType,
+        latest_imported_status_date: item.status_date || brazilDateKey(),
+      }),
+    }, actorUserId ? { id: actorUserId } : null);
+  }
+  await refreshAcademicStudentStatus(student.id);
+  return true;
+}
+
+function inferAcademicUnitName(value = "") {
+  const normalized = normalizeAcademicText(value);
+  if (!normalized) return "Academico";
+  if (normalized.includes("home school")) return "Home School";
+  if (normalized.includes("presencial")) return "Presencial";
+  if (normalized.includes("online")) return "Online";
+  return "Academico";
+}
+
+async function importAcademicWorkbookBatch({ workbookPath, workbookName = "", actorUserId = null }) {
+  return importAcademicWorkbooksBatch({
+    workbookFiles: [
+      {
+        path: workbookPath,
+        originalname: workbookName || path.basename(workbookPath || ""),
+      },
+    ],
+    actorUserId,
+  });
+}
+
+async function importAcademicWorkbooksBatch({ workbookFiles = [], actorUserId = null }) {
+  const safeFiles = (Array.isArray(workbookFiles) ? workbookFiles : [])
+    .filter((item) => item?.path && fs.existsSync(item.path));
+  if (!safeFiles.length) {
+    throw new Error("missing_academic_workbook");
+  }
+
+  const runId = await createAcademicImportRun({
+    workbookNames: safeFiles.map((item) => sanitizeAcademicWorkbookName(item.originalname || item.workbookName || path.basename(item.path))),
+    actorUserId,
+  });
+
+  try {
+    const parsedEntries = [];
+    for (const workbookFile of safeFiles) {
+      const workbookName = sanitizeAcademicWorkbookName(workbookFile.originalname || workbookFile.workbookName || path.basename(workbookFile.path));
+      const workbook = readAcademicWorkbookFromFile(workbookFile.path);
+      const parsed = parseAcademicWorkbook(workbook, { workbookName });
+      parsedEntries.push({ workbook_name: workbookName, parsed });
+      await appendAcademicImportLog(runId, {
+        workbook_name: workbookName,
+        stage: "parse",
+        message: "Planilha academica lida com sucesso.",
+        payload: {
+          workbook_type: parsed.workbook_type,
+          relevant_sheets: parsed.relevant_sheets,
+          ignored_sheets: parsed.ignored_sheets,
+          totals: {
+            matriculas_rows: parsed.matriculas.length,
+            class_blocks: parsed.class_blocks.length,
+            trancados_rows: parsed.trancados.length,
+            desistentes_rows: parsed.desistentes.length,
+            cancelamentos_rows: parsed.cancelamentos.length,
+            movements_rows: parsed.movements.length,
+          },
+        },
+      });
+    }
+
+    const consolidated = consolidateAcademicParsedWorkbooks(parsedEntries);
+    const teacherProvisioned = [];
+    let studentsInserted = 0;
+    let studentsUpdated = 0;
+    let enrollmentsInserted = 0;
+    let enrollmentsUpdated = 0;
+    let classesUpserted = 0;
+    let schedulesSynced = 0;
+    let statusesUpdated = 0;
+    let movementsRegistered = 0;
+    const touchedClassIds = new Set();
+
+    for (const teacher of consolidated.teachers || []) {
+      const provisioned = await ensureAcademicTeacherUser({
+        ...teacher,
+        metadata: mergeAcademicMetadata(teacher.metadata || {}, {
+          source_workbooks: consolidated.workbook_names,
+        }),
+      }, actorUserId);
+      if (provisioned?.user?.id) {
+        teacherProvisioned.push({
+          teacher_name: provisioned.profile?.display_name || provisioned.user.name,
+          user_id: provisioned.user.id,
+          email: provisioned.user.email,
+          created_user: Boolean(provisioned.created_user),
+          created_profile: Boolean(provisioned.created_profile),
+        });
+      }
+    }
+
+    for (const row of consolidated.matriculas || []) {
+      const student = await upsertAcademicStudentFromImport({
+        full_name: row.full_name,
+        phone: row.phone,
+        whatsapp: row.whatsapp,
+        notes: row.source_notes || row.notes,
+        school_name: row.school_name,
+        school_grade: row.school_grade,
+        source_workbook: row.source_workbook,
+        source_sheet: row.source_sheet,
+        source_row_identifier: row.source_row_identifier,
+        source_payload: row.source_payload,
+        status: row.status || "ativo",
+      }, actorUserId);
+      if (!student?.id) continue;
+      const existedEnrollment = await findAcademicEnrollmentMatch(student.id, row);
+      const schoolTermCode = row.school_term_code || row.semester_label || "";
+      const schoolTerm = schoolTermCode
+        ? await ensureSchoolTermRecord({
+            code: schoolTermCode,
+            name: deriveSchoolTermName(schoolTermCode),
+            status: "active",
+          })
+        : null;
+      const program = await ensureAcademicProgramRecord({
+        language: row.language || detectAcademicLanguageFromText(`${row.program_name || ""} ${row.level_name || ""}`),
+        program_name: row.program_name || buildProgramName(row.language, row.level_name, row.modality),
+        level_name: row.level_name,
+        semester_label: row.semester_label || schoolTermCode,
+        modality: row.modality || detectAcademicModalityFromText(row.requested_class_label || ""),
+        material_name: row.material_name,
+        status: "active",
+      });
+      await upsertAcademicEnrollmentFromImport(student, {
+        academic_program_id: program?.id || null,
+        school_term_id: schoolTerm?.id || null,
+        class_id: null,
+        enrollment_number: row.enrollment_number || null,
+        enrollment_date: row.enrollment_date,
+        start_date: row.start_date || row.enrollment_date,
+        enrollment_status: row.enrollment_status || (["vip", "semi_vip", "intensive"].includes(String(row.class_kind || "")) ? "matriculado" : "aguardando turma"),
+        contract_status: row.contract_status,
+        payment_status: row.payment_status,
+        pedagogical_status: row.pedagogical_status || null,
+        source_channel: row.source_channel || "academic_import",
+        source_notes: row.source_notes,
+        notes: row.notes,
+        source_workbook: row.source_workbook,
+        source_sheet: row.source_sheet,
+        source_row_identifier: row.source_row_identifier,
+        source_payload: row.source_payload,
+        metadata: {
+          class_kind: row.class_kind || "regular",
+          requested_class_label: row.requested_class_label || null,
+          class_type: row.class_type || null,
+          system_name: row.system_name || null,
+          attendant_name: row.attendant_name || null,
+          media_source: row.media_source || null,
+          source_workbooks: consolidated.workbook_names,
+        },
+      }, actorUserId);
+      if (existedEnrollment?.id) enrollmentsUpdated += 1;
+      else enrollmentsInserted += 1;
+      if (student.created_at === student.updated_at) studentsInserted += 1;
+      else studentsUpdated += 1;
+    }
+
+    for (const block of consolidated.class_blocks || []) {
+      const teacher = await ensureAcademicTeacherUser({
+        display_name: block.teacher_display_name,
+        normalized_name: block.teacher_normalized_name,
+        aliases: block.teacher_aliases,
+        specialties: block.teacher_specialties,
+        metadata: {
+          source_workbooks: mergeUniqueStrings([block.source_workbook], consolidated.workbook_names),
+        },
+      }, actorUserId);
+      const schoolTermCode = block.school_term_code || block.semester_label || "";
+      const schoolTerm = schoolTermCode
+        ? await ensureSchoolTermRecord({
+            code: schoolTermCode,
+            name: deriveSchoolTermName(schoolTermCode),
+            status: "active",
+          })
+        : null;
+      const program = await ensureAcademicProgramRecord({
+        language: block.language || detectAcademicLanguageFromText(`${block.class_name || ""} ${(block.teacher_specialties || []).join(" ")}`),
+        program_name: block.class_name,
+        level_name: block.level_name,
+        semester_label: block.semester_label || schoolTermCode,
+        modality: block.modality || detectAcademicModalityFromText(block.source_sheet || ""),
+        status: "active",
+      });
+      const classRow = await ensureAcademicClassRecord({
+        name: block.class_name,
+        class_name: block.class_name,
+        school_term_id: schoolTerm?.id || null,
+        academic_program_id: program?.id || null,
+        language: block.language,
+        modality: block.modality || "online",
+        level_name: block.level_name,
+        semester_label: block.semester_label || schoolTermCode,
+        status: "ativa",
+        class_kind: block.class_kind || "regular",
+        source_workbook: block.source_workbook,
+        source_sheet: block.source_sheet,
+        source_block_ref: block.source_block_ref,
+        notes: mergeUniqueStrings(block.descriptor_lines || [], block.notes_lines || []).join(" | "),
+        unit_name: inferAcademicUnitName(`${block.modality || ""} ${block.source_sheet || ""} ${block.source_workbook || ""}`),
+        metadata: {
+          descriptors: block.descriptor_lines || [],
+          notes_lines: block.notes_lines || [],
+          teacher_display_name: block.teacher_display_name || null,
+          teacher_aliases: block.teacher_aliases || [],
+          teacher_specialties: block.teacher_specialties || [],
+          source_workbooks: mergeUniqueStrings([block.source_workbook], consolidated.workbook_names),
+        },
+      });
+      classesUpserted += 1;
+      touchedClassIds.add(Number(classRow.id));
+      const schedules = await syncAcademicClassSchedules(classRow.id, block.schedules || []);
+      schedulesSynced += Number((schedules || []).length || 0);
+      if (teacher?.user?.id) {
+        await ensureClassTeacherLink(classRow.id, teacher.user.id, {
+          role_in_class: "teacher",
+          is_active: true,
+        });
+      }
+
+      for (const studentEntry of block.students || []) {
+        const student = await upsertAcademicStudentFromImport({
+          full_name: studentEntry.full_name,
+          phone: studentEntry.phone,
+          notes: studentEntry.raw_value,
+          source_workbook: block.source_workbook,
+          source_sheet: studentEntry.source_sheet || block.source_sheet,
+          source_row_identifier: studentEntry.source_row_identifier,
+          source_payload: studentEntry,
+          status: "ativo",
+        }, actorUserId);
+        if (!student?.id) continue;
+        const existingEnrollment = await findAcademicEnrollmentMatch(student.id, {
+          academic_program_id: program?.id || null,
+          school_term_id: schoolTerm?.id || null,
+          source_sheet: studentEntry.source_sheet || block.source_sheet,
+          source_row_identifier: studentEntry.source_row_identifier,
+        });
+        const enrollment = await upsertAcademicEnrollmentFromImport(student, {
+          id: existingEnrollment?.id || null,
+          academic_program_id: program?.id || null,
+          school_term_id: schoolTerm?.id || null,
+          class_id: classRow.id,
+          enrollment_status: "matriculado",
+          source_channel: "academic_workbook",
+          source_notes: mergeUniqueStrings(block.descriptor_lines || [], [studentEntry.raw_value || ""]).join(" | "),
+          notes: existingEnrollment?.notes || null,
+          source_workbook: block.source_workbook,
+          source_sheet: block.source_sheet,
+          source_row_identifier: studentEntry.source_row_identifier || `${block.source_sheet}:${student.id}`,
+          source_payload: {
+            block,
+            student: studentEntry,
+          },
+          metadata: {
+            class_kind: block.class_kind || "regular",
+            teacher_display_name: block.teacher_display_name || null,
+            source_workbooks: mergeUniqueStrings([block.source_workbook], consolidated.workbook_names),
+          },
+        }, actorUserId);
+        if (!existingEnrollment?.id) enrollmentsInserted += 1;
+        else if (Number(existingEnrollment.class_id || 0) !== Number(enrollment.class_id || 0)) enrollmentsUpdated += 1;
+      }
+    }
+
+    for (const item of consolidated.trancados || []) {
+      if (await applyAcademicStatusImport(item, "trancado", actorUserId, runId)) statusesUpdated += 1;
+    }
+    for (const item of consolidated.desistentes || []) {
+      if (await applyAcademicStatusImport(item, "desistente", actorUserId, runId)) statusesUpdated += 1;
+    }
+    for (const item of consolidated.cancelamentos || []) {
+      if (await applyAcademicStatusImport(item, "cancelado", actorUserId, runId)) statusesUpdated += 1;
+    }
+
+    for (const item of consolidated.movements || []) {
+      const student = await findAcademicStudentMatch({
+        fullName: item.full_name,
+        normalizedName: item.normalized_name,
+      });
+      if (!student?.id) continue;
+      const enrollment = await findBestEnrollmentForAcademicStatus(student.id, item);
+      if (!enrollment?.id) continue;
+      const oldClass = enrollment.class_id ? await getClassBasicById(enrollment.class_id).catch(() => null) : null;
+      const transferType = sanitizeAcademicTextValue(item.movement_type, { maxLength: 80 }) || "movimentacao";
+      await recordAcademicTransferEvent({
+        enrollment_id: enrollment.id,
+        transfer_type: transferType,
+        old_value: {
+          class_id: enrollment.class_id || null,
+          class_name: oldClass?.name || null,
+          schedule_snapshot: enrollment.class_id ? await listClassSchedulesByClassId(enrollment.class_id) : [],
+        },
+        new_value: {
+          target_class_label: item.target_class_label || null,
+          level_name: item.level_name || null,
+          teacher_name: item.teacher_name || null,
+          status_date: item.status_date || null,
+          source_sheet: item.source_sheet || null,
+        },
+        reason: item.notes || toAcademicTitleCase(item.movement_type || "movimentacao"),
+        changed_by_user_id: actorUserId,
+        notes: item.notes || null,
+      });
+      if (transferType === "remanejamento" || transferType === "reversao_pedagogica") {
+        await saveAcademicEnrollmentRecord({
+          ...enrollment,
+          id: enrollment.id,
+          student_id: enrollment.student_id,
+          metadata: mergeAcademicMetadata(enrollment.metadata || enrollment.metadata_json || {}, {
+            latest_movement_type: transferType,
+            latest_movement_sheet: item.source_sheet || null,
+          }),
+          pedagogical_status: enrollment.pedagogical_status || "remanejado",
+        }, actorUserId ? { id: actorUserId } : null);
+      }
+      movementsRegistered += 1;
+    }
+
+    const summary = {
+      workbook_names: consolidated.workbook_names,
+      imported_sheets: consolidated.relevant_sheets,
+      ignored_sheets: consolidated.ignored_sheets,
+      teachers_found: consolidated.teachers.map((item) => item.display_name),
+      provisioned_teachers: teacherProvisioned,
+      raw_totals: consolidated.raw_totals,
+      totals: {
+        matriculas_rows: consolidated.matriculas.length,
+        class_blocks: consolidated.class_blocks.length,
+        trancados_rows: consolidated.trancados.length,
+        desistentes_rows: consolidated.desistentes.length,
+        cancelamentos_rows: consolidated.cancelamentos.length,
+        movements_rows: consolidated.movements.length,
+        students_inserted: studentsInserted,
+        students_updated: studentsUpdated,
+        enrollments_inserted: enrollmentsInserted,
+        enrollments_updated: enrollmentsUpdated,
+        classes_upserted: classesUpserted,
+        schedules_synced: schedulesSynced,
+        statuses_updated: statusesUpdated,
+        movements_registered: movementsRegistered,
+      },
+      touched_class_ids: Array.from(touchedClassIds),
+    };
+
+    await finalizeAcademicImportRun(runId, {
+      status: "completed",
+      imported_sheets: consolidated.relevant_sheets,
+      ignored_sheets: consolidated.ignored_sheets,
+      summary,
+    });
+
+    if (actorUserId) {
+      await logEvent(actorUserId, "academic_import_completed", summary);
+    }
+
+    return summary;
+  } catch (err) {
+    await appendAcademicImportLog(runId, {
+      log_level: "error",
+      stage: "import",
+      message: err?.message || "academic_import_failed",
+      payload: { stack: err?.stack ? String(err.stack).slice(0, 2000) : "" },
+    });
+    await finalizeAcademicImportRun(runId, {
+      status: "failed",
+      imported_sheets: [],
+      ignored_sheets: [],
+      summary: { error: err?.message || "academic_import_failed" },
+    });
+    throw err;
+  }
+}
+
+function buildAcademicSearchLike(value = "") {
+  const safe = String(value || "").trim();
+  return safe ? `%${safe}%` : "";
+}
+
+async function listAcademicFilterOptions(scope) {
+  const teacherRestriction = buildAcademicScopeExistsSql(scope, "e");
+  const where = [];
+  const params = [];
+  if (teacherRestriction.sql) {
+    where.push(teacherRestriction.sql);
+    params.push(...teacherRestriction.params);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const [languages, modalities, terms, teachers] = await Promise.all([
+    all(
+      `SELECT DISTINCT coalesce(ap.language, c.language, '') AS value
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN classes c ON c.id = e.class_id
+         ${whereSql}
+        ORDER BY value ASC`,
+      params
+    ),
+    all(
+      `SELECT DISTINCT coalesce(ap.modality, c.modality, '') AS value
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN classes c ON c.id = e.class_id
+         ${whereSql}
+        ORDER BY value ASC`,
+      params
+    ),
+    all(
+      `SELECT DISTINCT coalesce(st.code, st.name, '') AS value
+         FROM enrollments e
+         LEFT JOIN school_terms st ON st.id = e.school_term_id
+         ${whereSql}
+        ORDER BY value ASC`,
+      params
+    ),
+    all(
+      `SELECT DISTINCT coalesce(tp.display_name, u.name, '') AS value
+         FROM class_teachers ct
+         LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+         LEFT JOIN users u ON u.id = ct.user_id
+        WHERE ${scope.canViewAll ? "1=1" : `ct.user_id=? AND ${buildDbTruthySql("is_active", "ct")}`}
+        ORDER BY value ASC`,
+      scope.canViewAll ? [] : [scope.teacherUserId]
+    ),
+  ]);
+  return {
+    languages: languages.map((row) => row.value).filter(Boolean),
+    modalities: modalities.map((row) => row.value).filter(Boolean),
+    terms: terms.map((row) => row.value).filter(Boolean),
+    teachers: teachers.map((row) => row.value).filter(Boolean),
+    student_statuses: ACADEMIC_STUDENT_STATUS_OPTIONS.slice(),
+    enrollment_statuses: ACADEMIC_ENROLLMENT_STATUS_OPTIONS.slice(),
+    class_statuses: ACADEMIC_CLASS_STATUS_OPTIONS.slice(),
+    attendance_statuses: ACADEMIC_ATTENDANCE_STATUS_OPTIONS.slice(),
+  };
+}
+
+async function listAcademicStudents(scope, filters = {}) {
+  const where = [];
+  const params = [];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        JOIN class_teachers ct ON ct.class_id = e.class_id
+       WHERE e.student_id = s.id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    where.push("(lower(coalesce(s.full_name, '')) LIKE lower(?) OR lower(coalesce(s.preferred_name, '')) LIKE lower(?) OR lower(coalesce(s.phone, '')) LIKE lower(?) OR lower(coalesce(s.whatsapp, '')) LIKE lower(?))");
+    params.push(like, like, like, like);
+  }
+  if (filters.status) {
+    where.push("lower(coalesce(s.status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  if (filters.language) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       WHERE e.student_id = s.id
+         AND lower(coalesce(ap.language, ''))=lower(?)
+    )`);
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       WHERE e.student_id = s.id
+         AND lower(coalesce(ap.modality, ''))=lower(?)
+    )`);
+    params.push(String(filters.modality).trim());
+  }
+  if (filters.termCode) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        LEFT JOIN school_terms st ON st.id = e.school_term_id
+       WHERE e.student_id = s.id
+         AND lower(coalesce(st.code, ''))=lower(?)
+    )`);
+    params.push(String(filters.termCode).trim());
+  }
+  const limit = Math.min(180, Math.max(1, Number(filters.limit || 80)));
+  params.push(limit);
+  const rows = await all(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.student_id=s.id) AS enrollments_total,
+            (SELECT enrollment_status FROM enrollments e WHERE e.student_id=s.id ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1) AS latest_enrollment_status,
+            (SELECT c.name
+               FROM enrollments e
+               LEFT JOIN classes c ON c.id = e.class_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_class_name,
+            (SELECT coalesce(ap.language, '')
+               FROM enrollments e
+               LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_language
+       FROM students s
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY datetime(s.updated_at) DESC, lower(s.full_name) ASC
+      LIMIT ?`,
+    params
+  );
+  return rows.map(mapAcademicStudentRow);
+}
+
+async function getAcademicStudentDetail(studentId, scope) {
+  const safeStudentId = Number(studentId || 0) || 0;
+  if (!safeStudentId) return null;
+  const params = [];
+  const where = ["s.id=?"];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM enrollments e
+        JOIN class_teachers ct ON ct.class_id = e.class_id
+       WHERE e.student_id = s.id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  params.push(safeStudentId);
+  const studentRow = await get(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.student_id=s.id) AS enrollments_total,
+            (SELECT enrollment_status FROM enrollments e WHERE e.student_id=s.id ORDER BY datetime(updated_at) DESC, id DESC LIMIT 1) AS latest_enrollment_status,
+            (SELECT c.name
+               FROM enrollments e
+               LEFT JOIN classes c ON c.id = e.class_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_class_name,
+            (SELECT coalesce(ap.language, '')
+               FROM enrollments e
+               LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+              WHERE e.student_id=s.id
+              ORDER BY datetime(e.updated_at) DESC, e.id DESC
+              LIMIT 1) AS latest_language
+       FROM students s
+      WHERE ${where.join(" AND ")}
+      LIMIT 1`,
+    params
+  );
+  const student = studentRow ? mapAcademicStudentRow(studentRow) : null;
+  if (!student) return null;
+  const [guardians, enrollments, attendanceSummary] = await Promise.all([
+    all(
+      "SELECT id, student_id, name, relation_type, cpf, phone, whatsapp, email, financial_responsible, pedagogical_responsible, receives_notifications, notes, created_at, updated_at FROM student_guardians WHERE student_id=? ORDER BY financial_responsible DESC, pedagogical_responsible DESC, lower(name) ASC",
+      [studentId]
+    ),
+    all(
+      `SELECT e.*, ap.program_name, ap.level_name, ap.language, ap.modality, st.name AS school_term_name, st.code AS school_term_code,
+              c.name AS class_name, c.status AS class_status, c.class_kind, c.metadata_json AS class_metadata_json
+         FROM enrollments e
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+         LEFT JOIN school_terms st ON st.id = e.school_term_id
+         LEFT JOIN classes c ON c.id = e.class_id
+        WHERE e.student_id=?
+        ORDER BY datetime(e.updated_at) DESC, e.id DESC`,
+      [studentId]
+    ),
+    get(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='presente' THEN 1 ELSE 0 END) AS present_total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='falta' THEN 1 ELSE 0 END) AS absent_total
+         FROM attendance_records ar
+         JOIN enrollments e ON e.id = ar.enrollment_id
+        WHERE e.student_id=?`,
+      [studentId]
+    ),
+  ]);
+  return {
+    student,
+    guardians: guardians.map((row) => ({
+      ...row,
+      financial_responsible: coerceDbBoolean(row.financial_responsible),
+      pedagogical_responsible: coerceDbBoolean(row.pedagogical_responsible),
+      receives_notifications: coerceDbBoolean(row.receives_notifications),
+    })),
+    enrollments: enrollments.map(mapAcademicEnrollmentRow),
+    attendance_summary: {
+      total: Number(attendanceSummary?.total || 0),
+      present_total: Number(attendanceSummary?.present_total || 0),
+      absent_total: Number(attendanceSummary?.absent_total || 0),
+    },
+  };
+}
+
+async function listAcademicEnrollments(scope, filters = {}) {
+  const where = [];
+  const params = [];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+       WHERE ct.class_id=e.class_id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    where.push("(lower(coalesce(s.full_name, '')) LIKE lower(?) OR lower(coalesce(c.name, '')) LIKE lower(?) OR lower(coalesce(ap.language, '')) LIKE lower(?))");
+    params.push(like, like, like);
+  }
+  if (filters.status) {
+    where.push("lower(coalesce(e.enrollment_status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  if (filters.classId) {
+    where.push("e.class_id=?");
+    params.push(Number(filters.classId));
+  }
+  if (filters.termCode) {
+    where.push("lower(coalesce(st.code, ''))=lower(?)");
+    params.push(String(filters.termCode).trim());
+  }
+  if (filters.language) {
+    where.push("lower(coalesce(ap.language, ''))=lower(?)");
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    where.push("lower(coalesce(ap.modality, ''))=lower(?)");
+    params.push(String(filters.modality).trim());
+  }
+  if (filters.teacherName) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+        LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+        LEFT JOIN users tu ON tu.id = ct.user_id
+       WHERE ct.class_id=e.class_id
+         AND lower(coalesce(tp.display_name, tu.name, ''))=lower(?)
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(String(filters.teacherName).trim());
+  }
+  const limit = Math.min(240, Math.max(1, Number(filters.limit || 120)));
+  params.push(limit);
+  const rows = await all(
+    `SELECT e.*, s.full_name AS student_name, s.phone AS student_phone, s.whatsapp AS student_whatsapp, s.status AS student_status,
+            ap.program_name, ap.level_name, ap.language, ap.modality, st.name AS school_term_name, st.code AS school_term_code,
+            c.name AS class_name, c.status AS class_status,
+            (SELECT COUNT(*) FROM attendance_records ar WHERE ar.enrollment_id=e.id) AS attendance_total
+       FROM enrollments e
+       JOIN students s ON s.id = e.student_id
+       LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+       LEFT JOIN school_terms st ON st.id = e.school_term_id
+       LEFT JOIN classes c ON c.id = e.class_id
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY datetime(e.updated_at) DESC, e.id DESC
+      LIMIT ?`,
+    params
+  );
+  return rows.map(mapAcademicEnrollmentRow);
+}
+
+async function getAcademicEnrollmentDetail(enrollmentId, scope) {
+  const rows = await listAcademicEnrollments(scope, { limit: 400 });
+  const enrollment = rows.find((item) => Number(item.id) === Number(enrollmentId));
+  if (!enrollment) return null;
+  const [classHistory, scheduleHistory, transferHistory] = await Promise.all([
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_class_history h
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE h.enrollment_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC`,
+      [enrollmentId]
+    ),
+    all(
+      `SELECT h.*, oc.name AS old_class_name, nc.name AS new_class_name, u.name AS changed_by_name
+         FROM enrollment_schedule_history h
+         LEFT JOIN classes oc ON oc.id = h.old_class_id
+         LEFT JOIN classes nc ON nc.id = h.new_class_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE h.enrollment_id=?
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC`,
+      [enrollmentId]
+    ),
+    all(
+      `SELECT st.*, u.name AS changed_by_name
+         FROM student_transfers st
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        WHERE st.enrollment_id=?
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC`,
+      [enrollmentId]
+    ),
+  ]);
+  return {
+    enrollment,
+    class_history: classHistory.map((row) => ({
+      ...row,
+      old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+      new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+    })),
+    schedule_history: scheduleHistory.map((row) => ({
+      ...row,
+      old_schedule_snapshot: safeJsonParse(row.old_schedule_snapshot_json || "null"),
+      new_schedule_snapshot: safeJsonParse(row.new_schedule_snapshot_json || "null"),
+    })),
+    transfer_history: transferHistory.map((row) => ({
+      ...row,
+      old_value: safeJsonParse(row.old_value_json || "null"),
+      new_value: safeJsonParse(row.new_value_json || "null"),
+    })),
+  };
+}
+
+async function listAcademicClasses(scope, filters = {}) {
+  const where = [];
+  const params = [];
+  if (!scope.canViewAll) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+       WHERE ct.class_id = c.id
+         AND ct.user_id=?
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(scope.teacherUserId);
+  }
+  if (filters.search) {
+    const like = buildAcademicSearchLike(filters.search);
+    where.push("(lower(coalesce(c.name, '')) LIKE lower(?) OR lower(coalesce(c.language, '')) LIKE lower(?) OR lower(coalesce(c.level_name, '')) LIKE lower(?) OR lower(coalesce(c.modality, '')) LIKE lower(?))");
+    params.push(like, like, like, like);
+  }
+  if (filters.status) {
+    where.push("lower(coalesce(c.status, ''))=lower(?)");
+    params.push(String(filters.status).trim());
+  }
+  if (filters.language) {
+    where.push("lower(coalesce(c.language, ''))=lower(?)");
+    params.push(String(filters.language).trim());
+  }
+  if (filters.modality) {
+    where.push("lower(coalesce(c.modality, ''))=lower(?)");
+    params.push(String(filters.modality).trim());
+  }
+  if (filters.termCode) {
+    where.push("lower(coalesce(st.code, ''))=lower(?)");
+    params.push(String(filters.termCode).trim());
+  }
+  if (filters.teacherName) {
+    where.push(`EXISTS (
+      SELECT 1
+        FROM class_teachers ct
+        LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+        LEFT JOIN users tu ON tu.id = ct.user_id
+       WHERE ct.class_id=c.id
+         AND lower(coalesce(tp.display_name, tu.name, ''))=lower(?)
+         AND ${buildDbTruthySql("is_active", "ct")}
+    )`);
+    params.push(String(filters.teacherName).trim());
+  }
+  const limit = Math.min(160, Math.max(1, Number(filters.limit || 80)));
+  params.push(limit);
+  const rows = await all(
+    `SELECT c.*, st.name AS school_term_name, st.code AS school_term_code, ap.program_name,
+            (SELECT COUNT(*) FROM enrollments e WHERE e.class_id=c.id AND lower(coalesce(e.enrollment_status, '')) NOT IN ('cancelado', 'desistente')) AS enrolled_total
+       FROM classes c
+       LEFT JOIN school_terms st ON st.id = c.school_term_id
+       LEFT JOIN academic_programs ap ON ap.id = c.academic_program_id
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY datetime(c.updated_at) DESC, lower(c.name) ASC
+      LIMIT ?`,
+    params
+  );
+  return Promise.all(rows.map(async (row) => ({
+    ...mapAcademicClassRow(row),
+    schedules: await listClassSchedulesByClassId(row.id),
+    teachers: await listClassTeachersByClassId(row.id),
+  })));
+}
+
+async function getAcademicClassDetail(classId, scope) {
+  if (!(await canAccessAcademicClass(scope, classId))) return null;
+  const classRow = await getClassBasicById(classId);
+  if (!classRow) return null;
+  const [schedules, teachers, students, sessions, attendanceSummary] = await Promise.all([
+    listClassSchedulesByClassId(classId),
+    listClassTeachersByClassId(classId),
+    all(
+      `SELECT e.id AS enrollment_id, e.enrollment_status, s.id AS student_id, s.full_name, s.preferred_name, s.phone, s.whatsapp, s.status AS student_status,
+              ap.language, ap.modality, ap.level_name
+         FROM enrollments e
+         JOIN students s ON s.id = e.student_id
+         LEFT JOIN academic_programs ap ON ap.id = e.academic_program_id
+        WHERE e.class_id=?
+        ORDER BY lower(s.full_name) ASC`,
+      [classId]
+    ),
+    all(
+      "SELECT id, class_id, class_schedule_id, class_date, start_time, end_time, session_status, notes, created_at, updated_at FROM class_sessions WHERE class_id=? ORDER BY class_date DESC, id DESC LIMIT 60",
+      [classId]
+    ),
+    get(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='presente' THEN 1 ELSE 0 END) AS present_total,
+              SUM(CASE WHEN lower(coalesce(attendance_status, ''))='falta' THEN 1 ELSE 0 END) AS absent_total
+         FROM attendance_records
+        WHERE class_id=?`,
+      [classId]
+    ),
+  ]);
+  return {
+    class: classRow,
+    schedules,
+    teachers,
+    students,
+    sessions,
+    attendance_summary: {
+      total: Number(attendanceSummary?.total || 0),
+      present_total: Number(attendanceSummary?.present_total || 0),
+      absent_total: Number(attendanceSummary?.absent_total || 0),
+    },
+  };
+}
+
+async function buildAcademicDashboard(scope) {
+  const teacherRestriction = buildAcademicScopeExistsSql(scope, "e");
+  const baseWhere = [];
+  const baseParams = [];
+  if (teacherRestriction.sql) {
+    baseWhere.push(teacherRestriction.sql);
+    baseParams.push(...teacherRestriction.params);
+  }
+  const whereSql = baseWhere.length ? `WHERE ${baseWhere.join(" AND ")}` : "";
+  const classMovementsSql = scope.canViewAll
+    ? "SELECT COUNT(*) AS total FROM enrollment_class_history h"
+    : `SELECT COUNT(*) AS total
+         FROM enrollment_class_history h
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=h.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )`;
+  const scheduleMovementsSql = scope.canViewAll
+    ? "SELECT COUNT(*) AS total FROM enrollment_schedule_history h"
+    : `SELECT COUNT(*) AS total
+         FROM enrollment_schedule_history h
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=h.enrollment_id
+             AND ct.user_id=?
+           AND ${buildDbTruthySql("is_active", "ct")}
+        )`;
+  const transferMovementsSql = scope.canViewAll
+    ? "SELECT COUNT(*) AS total FROM student_transfers st"
+    : `SELECT COUNT(*) AS total
+         FROM student_transfers st
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e
+            JOIN class_teachers ct ON ct.class_id=e.class_id
+           WHERE e.id=st.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )`;
+  const todaySessionsWhereSql = scope.canViewAll
+    ? "WHERE cs.class_date=?"
+    : `WHERE EXISTS (
+         SELECT 1 FROM class_teachers ct
+          WHERE ct.class_id=cs.class_id
+            AND ct.user_id=?
+            AND ${buildDbTruthySql("is_active", "ct")}
+       ) AND cs.class_date=?`;
+  const [studentsRow, enrollmentsRow, classesRow, classMovementsRow, scheduleMovementsRow, transferMovementsRow, todaySessionsRow, importRunsRow] = await Promise.all([
+    get(
+      `SELECT COUNT(DISTINCT s.id) AS total
+         FROM students s
+         ${scope.canViewAll ? "" : `WHERE EXISTS (
+            SELECT 1
+              FROM enrollments e
+              JOIN class_teachers ct ON ct.class_id=e.class_id
+             WHERE e.student_id=s.id
+               AND ct.user_id=?
+               AND ${buildDbTruthySql("is_active", "ct")}
+          )`}`,
+      scope.canViewAll ? [] : [scope.teacherUserId]
+    ),
+    get(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, ''))='matriculado' THEN 1 ELSE 0 END) AS active_total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, ''))='aguardando turma' THEN 1 ELSE 0 END) AS waiting_total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, ''))='trancado' THEN 1 ELSE 0 END) AS trancado_total,
+              SUM(CASE WHEN lower(coalesce(enrollment_status, '')) IN ('desistente', 'cancelado') THEN 1 ELSE 0 END) AS inactive_total
+         FROM enrollments e
+         ${whereSql}`,
+      baseParams
+    ),
+    get(
+      `SELECT COUNT(DISTINCT c.id) AS total,
+              SUM(CASE WHEN lower(coalesce(c.status, ''))='ativa' THEN 1 ELSE 0 END) AS active_total,
+              SUM(CASE WHEN lower(coalesce(c.class_kind, ''))='vip' THEN 1 ELSE 0 END) AS vip_total,
+              SUM(CASE WHEN lower(coalesce(c.class_kind, ''))='semi_vip' THEN 1 ELSE 0 END) AS semi_vip_total,
+              SUM(CASE WHEN lower(coalesce(c.class_kind, ''))='intensive' THEN 1 ELSE 0 END) AS intensive_total
+         FROM classes c
+         ${scope.canViewAll ? "" : `WHERE EXISTS (
+            SELECT 1 FROM class_teachers ct
+             WHERE ct.class_id=c.id
+               AND ct.user_id=?
+               AND ${buildDbTruthySql("is_active", "ct")}
+          )`}`,
+      scope.canViewAll ? [] : [scope.teacherUserId]
+    ),
+    get(classMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    get(scheduleMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    get(transferMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    get(
+      `SELECT COUNT(*) AS total
+         FROM class_sessions cs
+         ${todaySessionsWhereSql}`,
+      scope.canViewAll ? [brazilDateKey()] : [scope.teacherUserId, brazilDateKey()]
+    ),
+    scope.canImport
+      ? get("SELECT COUNT(*) AS total FROM academic_import_runs WHERE datetime(created_at) >= datetime('now', '-30 day')")
+      : Promise.resolve({ total: 0 }),
+  ]);
+
+  let byTeacher = [];
+  if (scope.canViewAll) {
+    byTeacher = await all(
+      `SELECT coalesce(tp.display_name, u.name, 'Sem professor') AS teacher_name,
+              COUNT(DISTINCT ct.class_id) AS classes_total,
+              COUNT(DISTINCT e.student_id) AS students_total
+         FROM class_teachers ct
+         LEFT JOIN users u ON u.id = ct.user_id
+         LEFT JOIN teacher_profiles tp ON tp.user_id = ct.user_id
+         LEFT JOIN enrollments e ON e.class_id = ct.class_id
+        WHERE ${buildDbTruthySql("is_active", "ct")}
+        GROUP BY coalesce(tp.display_name, u.name, 'Sem professor')
+        ORDER BY classes_total DESC, teacher_name ASC`
+    );
+  }
+
+  return {
+    scope_kind: scope.kind,
+    total_students: Number(studentsRow?.total || 0),
+    total_enrollments: Number(enrollmentsRow?.total || 0),
+    active_enrollments: Number(enrollmentsRow?.active_total || 0),
+    waiting_for_class: Number(enrollmentsRow?.waiting_total || 0),
+    trancados: Number(enrollmentsRow?.trancado_total || 0),
+    inactive_total: Number(enrollmentsRow?.inactive_total || 0),
+    total_classes: Number(classesRow?.total || 0),
+    active_classes: Number(classesRow?.active_total || 0),
+    vip_classes: Number(classesRow?.vip_total || 0) + Number(classesRow?.semi_vip_total || 0),
+    intensive_classes: Number(classesRow?.intensive_total || 0),
+    recent_movements: Number(classMovementsRow?.total || 0) + Number(scheduleMovementsRow?.total || 0) + Number(transferMovementsRow?.total || 0),
+    classes_today: Number(todaySessionsRow?.total || 0),
+    recent_imports: Number(importRunsRow?.total || 0),
+    by_teacher: byTeacher.map((row) => ({
+      teacher_name: row.teacher_name,
+      classes_total: Number(row.classes_total || 0),
+      students_total: Number(row.students_total || 0),
+    })),
+  };
+}
+
+async function listAcademicTeacherProfiles(scope) {
+  if (!scope.canViewAll) {
+    const ownProfile = await getTeacherProfileByUserId(scope.teacherUserId).catch(() => null);
+    return ownProfile ? [ownProfile] : [];
+  }
+  const rows = await all(
+    `SELECT tp.id, tp.user_id, tp.display_name, tp.normalized_name, tp.aliases_json, tp.specialties_json, tp.metadata_json, tp.active, tp.created_at, tp.updated_at,
+            u.name AS user_name, u.email AS user_email
+       FROM teacher_profiles tp
+       LEFT JOIN users u ON u.id = tp.user_id
+      WHERE ${buildDbTruthySql("active", "tp")}
+      ORDER BY lower(coalesce(tp.display_name, u.name, '')) ASC, tp.id ASC`,
+    []
+  );
+  return rows.map((row) => ({
+    ...mapTeacherProfileRow(row),
+    user_name: row.user_name || row.display_name || "",
+    user_email: row.user_email || "",
+  }));
+}
+
+async function listAcademicProgramCatalog() {
+  return all(
+    `SELECT id, language, program_name, level_name, stage_name, semester_label, modality, material_name, workload_hours, status, created_at, updated_at
+       FROM academic_programs
+      WHERE lower(coalesce(status, 'active')) <> 'inactive'
+      ORDER BY lower(coalesce(language, '')) ASC, lower(coalesce(program_name, '')) ASC, id ASC`
+  );
+}
+
+async function listSchoolTermCatalog() {
+  return all(
+    `SELECT id, name, code, start_date, end_date, status, created_at, updated_at
+       FROM school_terms
+      WHERE lower(coalesce(status, 'active')) <> 'inactive'
+      ORDER BY lower(coalesce(code, name, '')) DESC, id DESC`
+  );
+}
+
+async function buildAcademicBootstrap(user, query = {}) {
+  const scope = await resolveAcademicScope(user);
+  const classMovementsSql = scope.canViewAll
+    ? `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM enrollment_class_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`
+    : `SELECT 'class' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM enrollment_class_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e_scope
+            JOIN class_teachers ct ON ct.class_id=e_scope.class_id
+           WHERE e_scope.id=h.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`;
+  const scheduleMovementsSql = scope.canViewAll
+    ? `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM enrollment_schedule_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`
+    : `SELECT 'schedule' AS movement_type, h.id, h.enrollment_id, h.old_class_id, h.new_class_id, h.reason, h.changed_at, h.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM enrollment_schedule_history h
+         LEFT JOIN enrollments e ON e.id = h.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = h.changed_by_user_id
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e_scope
+            JOIN class_teachers ct ON ct.class_id=e_scope.class_id
+           WHERE e_scope.id=h.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )
+        ORDER BY datetime(h.changed_at) DESC, h.id DESC
+        LIMIT 20`;
+  const transferMovementsSql = scope.canViewAll
+    ? `SELECT st.transfer_type AS movement_type, st.id, st.enrollment_id, NULL AS old_class_id, NULL AS new_class_id, st.reason, st.changed_at, st.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM student_transfers st
+         LEFT JOIN enrollments e ON e.id = st.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC
+        LIMIT 20`
+    : `SELECT st.transfer_type AS movement_type, st.id, st.enrollment_id, NULL AS old_class_id, NULL AS new_class_id, st.reason, st.changed_at, st.notes, u.name AS changed_by_name, s.full_name AS student_name
+         FROM student_transfers st
+         LEFT JOIN enrollments e ON e.id = st.enrollment_id
+         LEFT JOIN students s ON s.id = e.student_id
+         LEFT JOIN users u ON u.id = st.changed_by_user_id
+        WHERE EXISTS (
+          SELECT 1
+            FROM enrollments e_scope
+            JOIN class_teachers ct ON ct.class_id=e_scope.class_id
+           WHERE e_scope.id=st.enrollment_id
+             AND ct.user_id=?
+             AND ${buildDbTruthySql("is_active", "ct")}
+        )
+        ORDER BY datetime(st.changed_at) DESC, st.id DESC
+        LIMIT 20`;
+  const [dashboard, students, enrollments, classes, filters, classMovements, scheduleMovements, transferMovements, teacherProfiles, programs, schoolTerms, importRuns] = await Promise.all([
+    buildAcademicDashboard(scope),
+    listAcademicStudents(scope, { search: query.search, status: query.student_status, language: query.language, modality: query.modality, termCode: query.term_code, limit: 30 }),
+    listAcademicEnrollments(scope, { search: query.search, status: query.enrollment_status, language: query.language, modality: query.modality, teacherName: query.teacher, termCode: query.term_code, limit: 30 }),
+    listAcademicClasses(scope, { search: query.search, status: query.class_status, language: query.language, modality: query.modality, teacherName: query.teacher, termCode: query.term_code, limit: 24 }),
+    listAcademicFilterOptions(scope),
+    all(classMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    all(scheduleMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    all(transferMovementsSql, scope.canViewAll ? [] : [scope.teacherUserId]),
+    listAcademicTeacherProfiles(scope),
+    listAcademicProgramCatalog(),
+    listSchoolTermCatalog(),
+    scope.canImport
+      ? all(
+          `SELECT id, source_key, status, workbook_names_json, imported_sheets_json, ignored_sheets_json, summary_json, actor_user_id, created_at, updated_at
+             FROM academic_import_runs
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT 8`
+        )
+      : Promise.resolve([]),
+  ]);
+  const movements = [...(classMovements || []), ...(scheduleMovements || []), ...(transferMovements || [])]
+    .sort((left, right) => String(right?.changed_at || "").localeCompare(String(left?.changed_at || "")))
+    .slice(0, 30);
+  return {
+    enabled: true,
+    scope_kind: scope.kind,
+    can_manage: scope.canManageAll,
+    can_import: scope.canImport,
+    teacher_profile: scope.teacherProfile,
+    teacher_profiles: teacherProfiles,
+    dashboard,
+    filters,
+    programs,
+    school_terms: schoolTerms,
+    students,
+    enrollments,
+    classes,
+    movements,
+    recent_import_runs: (importRuns || []).map((row) => ({
+      ...row,
+      workbook_names: Array.isArray(safeJsonParse(row.workbook_names_json || "[]")) ? safeJsonParse(row.workbook_names_json || "[]") : [],
+      imported_sheets: Array.isArray(safeJsonParse(row.imported_sheets_json || "[]")) ? safeJsonParse(row.imported_sheets_json || "[]") : [],
+      ignored_sheets: Array.isArray(safeJsonParse(row.ignored_sheets_json || "[]")) ? safeJsonParse(row.ignored_sheets_json || "[]") : [],
+      summary: safeJsonParse(row.summary_json || "{}") || {},
+    })),
+    submenu_view_keys: {
+      pedagogical: ACADEMIC_PEDAGOGICAL_SUBMENU_VIEW_KEYS.slice(),
+      teacher: ACADEMIC_TEACHER_SUBMENU_VIEW_KEYS.slice(),
+    },
+  };
+}
+
+async function transferAcademicEnrollmentClass(enrollmentId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll) throw new Error("forbidden");
+  const enrollment = await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [enrollmentId]);
+  if (!enrollment) throw new Error("enrollment_not_found");
+  const newClassId = Number(payload.new_class_id || 0) || null;
+  if (!newClassId) throw new Error("missing_new_class_id");
+  const reason = sanitizeAcademicTextValue(payload.reason, { maxLength: 800 }) || "Troca de turma";
+  const notes = sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null;
+  const [oldClass, newClass] = await Promise.all([
+    enrollment.class_id ? getClassBasicById(enrollment.class_id).catch(() => null) : null,
+    newClassId ? getClassBasicById(newClassId).catch(() => null) : null,
+  ]);
+  await run(
+    "UPDATE enrollments SET class_id=?, enrollment_status=?, updated_at=datetime('now') WHERE id=?",
+    [newClassId, normalizeEnrollmentStatus(payload.enrollment_status || "transferido"), enrollmentId]
+  );
+  await run(
+    `INSERT INTO enrollment_class_history
+       (enrollment_id, old_class_id, new_class_id, reason, changed_by_user_id, changed_at, notes)
+     VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
+    [enrollmentId, enrollment.class_id || null, newClassId, reason, actorUser.id || actorUser.sub, notes]
+  );
+  await recordAcademicTransferEvent({
+    enrollment_id: enrollmentId,
+    transfer_type: "class_transfer",
+    old_value: {
+      class_id: enrollment.class_id || null,
+      class_name: oldClass?.name || null,
+    },
+    new_value: {
+      class_id: newClassId,
+      class_name: newClass?.name || null,
+    },
+    reason,
+    changed_by_user_id: actorUser.id || actorUser.sub,
+    notes,
+  });
+  await logEntityChange({
+    entityType: "academic_enrollment",
+    entityId: enrollmentId,
+    action: "class_transfer",
+    actorUserId: actorUser.id || actorUser.sub,
+    origin: "manual_edit",
+    detail: { old_class_id: enrollment.class_id || null, new_class_id: newClassId, reason },
+  });
+  await ensureStudentTimelineEntry({
+    student_id: enrollment.student_id,
+    enrollment_id: enrollmentId,
+    actor_user_id: actorUser.id || actorUser.sub,
+    event_type: "academic_class_transfer",
+    title: "Troca de turma registrada",
+    description: `${oldClass?.name || "Sem turma"} -> ${newClass?.name || "Sem turma"}.`,
+    metadata: {
+      old_class_id: enrollment.class_id || null,
+      new_class_id: newClassId,
+      old_class_name: oldClass?.name || null,
+      new_class_name: newClass?.name || null,
+      reason,
+    },
+  });
+  return getAcademicEnrollmentDetail(enrollmentId, scope);
+}
+
+async function changeAcademicEnrollmentSchedule(enrollmentId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll) throw new Error("forbidden");
+  const enrollment = await get("SELECT * FROM enrollments WHERE id=? LIMIT 1", [enrollmentId]);
+  if (!enrollment) throw new Error("enrollment_not_found");
+  const newClassId = Number(payload.new_class_id || enrollment.class_id || 0) || null;
+  const [oldClass, newClass] = await Promise.all([
+    enrollment.class_id ? getClassBasicById(enrollment.class_id).catch(() => null) : null,
+    newClassId ? getClassBasicById(newClassId).catch(() => null) : null,
+  ]);
+  const oldSchedules = enrollment.class_id ? await listClassSchedulesByClassId(enrollment.class_id) : [];
+  const newSchedules = newClassId ? await listClassSchedulesByClassId(newClassId) : [];
+  if (newClassId && Number(newClassId) !== Number(enrollment.class_id || 0)) {
+    await run(
+      "UPDATE enrollments SET class_id=?, updated_at=datetime('now') WHERE id=?",
+      [newClassId, enrollmentId]
+    );
+  }
+  const reason = sanitizeAcademicTextValue(payload.reason, { maxLength: 800 }) || "Ajuste de horário";
+  const notes = sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null;
+  await run(
+    `INSERT INTO enrollment_schedule_history
+       (enrollment_id, old_class_id, new_class_id, old_schedule_snapshot_json, new_schedule_snapshot_json, reason, changed_by_user_id, changed_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
+    [
+      enrollmentId,
+      enrollment.class_id || null,
+      newClassId,
+      safeJsonStringify(oldSchedules, "[]"),
+      safeJsonStringify(newSchedules, "[]"),
+      reason,
+      actorUser.id || actorUser.sub,
+      notes,
+    ]
+  );
+  await recordAcademicTransferEvent({
+    enrollment_id: enrollmentId,
+    transfer_type: "schedule_change",
+    old_value: {
+      class_id: enrollment.class_id || null,
+      schedules: oldSchedules,
+    },
+    new_value: {
+      class_id: newClassId,
+      schedules: newSchedules,
+    },
+    reason,
+    changed_by_user_id: actorUser.id || actorUser.sub,
+    notes,
+  });
+  await logEntityChange({
+    entityType: "academic_enrollment",
+    entityId: enrollmentId,
+    action: "schedule_change",
+    actorUserId: actorUser.id || actorUser.sub,
+    origin: "manual_edit",
+    detail: { old_class_id: enrollment.class_id || null, new_class_id: newClassId, reason },
+  });
+  await ensureStudentTimelineEntry({
+    student_id: enrollment.student_id,
+    enrollment_id: enrollmentId,
+    actor_user_id: actorUser.id || actorUser.sub,
+    event_type: "academic_schedule_change",
+    title: "Mudança de horário registrada",
+    description: `${oldClass?.name || "Sem turma"} -> ${newClass?.name || oldClass?.name || "Sem turma"} (${oldSchedules.length} horário(s) -> ${newSchedules.length} horário(s)).`,
+    metadata: {
+      old_class_id: enrollment.class_id || null,
+      new_class_id: newClassId,
+      old_class_name: oldClass?.name || null,
+      new_class_name: newClass?.name || null,
+      old_schedules: oldSchedules,
+      new_schedules: newSchedules,
+      reason,
+    },
+  });
+  return getAcademicEnrollmentDetail(enrollmentId, scope);
+}
+
+async function saveAcademicClassSession(classId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll && !(await canAccessAcademicClass(scope, classId))) throw new Error("forbidden");
+  const classDate = normalizeAcademicDateInput(payload.class_date);
+  if (!classDate) throw new Error("missing_class_date");
+  const classScheduleId = Number(payload.class_schedule_id || 0) || null;
+  const existing = await get(
+    "SELECT * FROM class_sessions WHERE class_id=? AND coalesce(class_schedule_id, 0)=coalesce(?, 0) AND class_date=? LIMIT 1",
+    [classId, classScheduleId, classDate]
+  );
+  const persisted = {
+    class_id: classId,
+    class_schedule_id: classScheduleId,
+    class_date: classDate,
+    start_time: sanitizeAcademicTextValue(payload.start_time, { maxLength: 16 }) || null,
+    end_time: sanitizeAcademicTextValue(payload.end_time, { maxLength: 16 }) || null,
+    session_status: normalizeSessionStatus(payload.session_status || "planejada"),
+    notes: sanitizeAcademicTextValue(payload.notes, { maxLength: 2000 }) || null,
+  };
+  if (existing?.id) {
+    await run(
+      "UPDATE class_sessions SET start_time=?, end_time=?, session_status=?, notes=?, updated_at=datetime('now') WHERE id=?",
+      [persisted.start_time, persisted.end_time, persisted.session_status, persisted.notes, existing.id]
+    );
+    return get("SELECT * FROM class_sessions WHERE id=?", [existing.id]);
+  }
+  const created = await run(
+    "INSERT INTO class_sessions (class_id, class_schedule_id, class_date, start_time, end_time, session_status, notes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+    [persisted.class_id, persisted.class_schedule_id, persisted.class_date, persisted.start_time, persisted.end_time, persisted.session_status, persisted.notes]
+  );
+  return get("SELECT * FROM class_sessions WHERE id=?", [created.lastID]);
+}
+
+async function saveAcademicAttendance(classId, payload = {}, actorUser) {
+  const scope = await resolveAcademicScope(actorUser);
+  if (!scope.canManageAll && !(await canAccessAcademicClass(scope, classId))) throw new Error("forbidden");
+  const classDate = normalizeAcademicDateInput(payload.class_date);
+  if (!classDate) throw new Error("missing_class_date");
+  const classScheduleId = Number(payload.class_schedule_id || 0) || null;
+  const classRow = await get("SELECT id, name FROM classes WHERE id=? LIMIT 1", [classId]);
+  await saveAcademicClassSession(classId, {
+    class_schedule_id: classScheduleId,
+    class_date: classDate,
+    session_status: payload.session_status || "realizada",
+    start_time: payload.start_time,
+    end_time: payload.end_time,
+    notes: payload.session_notes,
+  }, actorUser);
+
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const allowedEnrollmentIds = new Set(
+    (await all("SELECT id FROM enrollments WHERE class_id=?", [classId])).map((row) => Number(row.id || 0))
+  );
+  const savedItems = [];
+  for (const item of items) {
+    const enrollmentId = Number(item.enrollment_id || 0) || null;
+    if (!enrollmentId || !allowedEnrollmentIds.has(enrollmentId)) continue;
+    const attendanceStatus = normalizeAttendanceStatus(item.attendance_status || "presente");
+    const notes = sanitizeAcademicTextValue(item.notes, { maxLength: 1200 }) || null;
+    const existing = await get(
+      "SELECT id FROM attendance_records WHERE enrollment_id=? AND class_id=? AND coalesce(class_schedule_id, 0)=coalesce(?, 0) AND class_date=? LIMIT 1",
+      [enrollmentId, classId, classScheduleId, classDate]
+    );
+    if (existing?.id) {
+      await run(
+        "UPDATE attendance_records SET attendance_status=?, notes=?, recorded_by_user_id=?, updated_at=datetime('now') WHERE id=?",
+        [attendanceStatus, notes, actorUser.id || actorUser.sub, existing.id]
+      );
+      savedItems.push(existing.id);
+    } else {
+      const created = await run(
+        "INSERT INTO attendance_records (enrollment_id, class_id, class_schedule_id, class_date, attendance_status, notes, recorded_by_user_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        [enrollmentId, classId, classScheduleId, classDate, attendanceStatus, notes, actorUser.id || actorUser.sub]
+      );
+      savedItems.push(created.lastID);
+    }
+
+    const studentRow = await get(
+      `SELECT s.id, s.full_name
+         FROM enrollments e
+         JOIN students s ON s.id = e.student_id
+        WHERE e.id=? LIMIT 1`,
+      [enrollmentId]
+    );
+    if (studentRow?.id) {
+      await ensureStudentTimelineEntry({
+        student_id: studentRow.id,
+        enrollment_id: enrollmentId,
+        actor_user_id: actorUser.id || actorUser.sub,
+        event_type: "attendance_recorded",
+        title: "Frequencia registrada",
+        description: `${attendanceStatus} em ${classDate}${classRow?.name ? ` na turma ${classRow.name}` : ""}.`,
+        metadata: {
+          class_id: classId,
+          class_name: classRow?.name || null,
+          class_date: classDate,
+          class_schedule_id: classScheduleId,
+          attendance_status: attendanceStatus,
+        },
+      });
+    }
+  }
+  await logEvent(actorUser.id || actorUser.sub, "academic_attendance_saved", {
+    class_id: classId,
+    class_date: classDate,
+    total_items: savedItems.length,
+  });
+  return all(
+    `SELECT ar.*, s.full_name AS student_name
+       FROM attendance_records ar
+       JOIN enrollments e ON e.id = ar.enrollment_id
+       JOIN students s ON s.id = e.student_id
+      WHERE ar.class_id=? AND ar.class_date=?
+      ORDER BY lower(s.full_name) ASC`,
+    [classId, classDate]
+  );
 }
 
 function normalizeCalendarUrl(value = "") {
@@ -4905,7 +10503,7 @@ function queryLooksInternalWorkspace(query = "") {
   const value = normalizeQuery(query);
   if (!value) return false;
 
-  return /(intranet|departamento|departamentos|documento|documentos|arquivo|arquivos|processo|processos|agenda|dashboard|marketing|pedagog|pedag[oó]gic|financeir|comercial|matricula|matr[ií]cula|aluno|alunos|campanha|campanhas|whatsapp|usuario|usu[aá]rio|colaborador|time|crm|closer|rh|jur[ií]dic|professor|professores)/i.test(value);
+  return /(intranet|departamento|departamentos|documento interno|documentos internos|arquivo interno|arquivos internos|processo interno|processos internos|agenda da equipe|dashboard interno|pedagogico da talkers|financeiro da talkers|comercial da talkers|marketing da talkers|matricula interna|matricula da talkers|aluno da talkers|alunos da talkers|campanha interna|campanhas internas|whatsapp pedagogico|usuario interno|colaborador|time interno|crm interno|closer|rh|juridico|professor da talkers|professores da talkers|base interna|procedimento interno|politica interna)/i.test(value);
 }
 
 function buildChatContextStrategy(query = "", responseProfile = null) {
@@ -4918,8 +10516,8 @@ function buildChatContextStrategy(query = "", responseProfile = null) {
   const fastExternalOnly = looksExternal
     && !looksTalkers
     && !looksInternal;
-  const fastTalkersOnly = looksTalkers && !looksInternal && !talkersNeedsLiveSearch;
-  const fastPath = (fastExternalOnly || fastTalkersOnly || fastGeneralOnly) && !attachmentAware;
+  const fastTalkersOnly = false;
+  const fastPath = (fastExternalOnly || fastGeneralOnly) && !attachmentAware;
 
   return {
     fastExternalOnly,
@@ -4951,21 +10549,7 @@ function talkersQueryNeedsFreshWebContext(query = "") {
 }
 
 function triggerTalkersKnowledgeSync() {
-  const syncFn = talkersPublicKnowledge?.scheduleTalkersKnowledgeSync;
-  if (typeof syncFn !== "function") {
-    console.warn("Sincronização da base pública da Talkers indisponível neste carregamento.");
-    return Promise.resolve(null);
-  }
-
-  try {
-    return Promise.resolve(syncFn()).catch((err) => {
-      console.error("Erro ao sincronizar base pública da Talkers em segundo plano:", err?.message || err);
-      return null;
-    });
-  } catch (err) {
-    console.error("Erro ao iniciar sincronização da base pública da Talkers:", err?.message || err);
-    return Promise.resolve(null);
-  }
+  return Promise.resolve(null);
 }
 
 function responseLooksSelfLimiting(text = "") {
@@ -5199,15 +10783,17 @@ Data atual no Brasil:
 ${nowBrazil()}
 
 Roteamento desta pergunta:
-- Perguntas sobre a Talkers devem priorizar a base pública oficial da Talkers e a base interna da empresa.
+- Perguntas gerais devem ser tratadas como uma IA generalista, sem presumir contexto institucional.
+- Use a base da Talkers somente quando a pergunta mencionar a empresa, pedir conteúdo institucional ou quando houver alta relevância documental.
 - Perguntas gerais, atuais, públicas ou de mercado devem usar os dados externos atualizados e a busca web quando houver contexto disponível.
-- Nunca diga que voce nao consegue acessar dados atuais se ja houver contexto externo, API ou resultado de busca no contexto.
+- Se houver anexo e uma ação executável for possível, prefira executar ou analisar de forma objetiva.
+- Nunca diga que você não consegue acessar dados atuais se já houver contexto externo, API ou resultado de busca no contexto.
 
 Idioma detectado do usuário:
 ${getLanguageLabel(userLanguage)}
 
 Base pública oficial da Talkers:
-${trimContextText(talkersPublicBundle.text || "Sem bloco público específico da Talkers para esta pergunta.")}
+${trimContextText(talkersPublicBundle.text || "Não relevante para esta pergunta.")}
 
 Memória interna da empresa:
 ${trimContextText(knowledgeBundle.text || "Sem resultados relevantes da base interna.")}
@@ -5663,7 +11249,7 @@ function looksLikeArtifactRetry(text = "") {
 function applyExecutionPlanToSupportAssets(supportAssets = null, executionPlan = null) {
   if (!supportAssets) return supportAssets;
   if (!executionPlan?.fileContext) return supportAssets;
-  if (!["analyze_attachment", "image_edit"].includes(String(executionPlan?.route?.intent_mode || ""))) {
+  if (!["analyze_attachment", "image_edit", "image_generate", "transform_attachment", "spreadsheet_transform", "document_generate"].includes(String(executionPlan?.route?.intent_mode || ""))) {
     return supportAssets;
   }
 
@@ -5685,15 +11271,32 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
     uploadsDir,
   });
 
-  if (["generate_artifact", "image_edit"].includes(executionPlan?.route?.intent_mode)) {
+  if (executionPlan?.route?.retry_from_session && latestArtifactSession?.artifact_type) {
+    const restoredImageRefs = restoreArtifactSessionImageRefs(latestArtifactSession);
+    return {
+      prompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt || userText,
+      resolvedPrompt: latestArtifactSession.resolved_prompt || latestArtifactSession.prompt || userText,
+      kind: latestArtifactSession.artifact_type,
+      source: "artifact_session",
+      intentMode: executionPlan.route.intent_mode,
+      inputFiles: Array.isArray(latestArtifactSession.input_files) ? latestArtifactSession.input_files : [],
+      imageReferences: restoredImageRefs.length ? restoredImageRefs : (Array.isArray(referenceImages) ? referenceImages : []),
+      latestArtifactSession,
+      executionPlan,
+    };
+  }
+
+  if (["image_edit", "image_generate", "transform_attachment", "spreadsheet_transform", "document_generate"].includes(executionPlan?.route?.intent_mode)) {
     return {
       prompt: userText,
-      resolvedPrompt: userText,
+      resolvedPrompt: executionPlan.artifactSourceContext
+        ? `${userText}\n\n${executionPlan.artifactSourceContext}`
+        : userText,
       kind: executionPlan.route.artifact_kind,
       source: "current",
       intentMode: executionPlan.route.intent_mode,
       inputFiles: executionPlan.selectedFile ? [executionPlan.selectedFile] : [],
-      imageReferences: Array.isArray(referenceImages) ? referenceImages : [],
+      imageReferences: Array.isArray(executionPlan.referenceImagesForTurn) ? executionPlan.referenceImagesForTurn : (Array.isArray(referenceImages) ? referenceImages : []),
       latestArtifactSession,
       executionPlan,
     };
@@ -5720,7 +11323,7 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
       resolvedPrompt: userText,
       kind: null,
       source: "none",
-      intentMode: executionPlan?.route?.intent_mode || "normal_question",
+      intentMode: executionPlan?.route?.intent_mode || "general_chat",
       inputFiles: [],
       imageReferences: [],
       latestArtifactSession,
@@ -5759,15 +11362,15 @@ async function resolveArtifactRequestForTurn(conversationId, userText, reference
   }
 
   return {
-    prompt: userText,
-    resolvedPrompt: userText,
-    kind: null,
-    source: "none",
-    intentMode: executionPlan?.route?.intent_mode || "normal_question",
-    inputFiles: [],
-    imageReferences: [],
-    latestArtifactSession,
-    executionPlan,
+      prompt: userText,
+      resolvedPrompt: userText,
+      kind: null,
+      source: "none",
+      intentMode: executionPlan?.route?.intent_mode || "general_chat",
+      inputFiles: [],
+      imageReferences: [],
+      latestArtifactSession,
+      executionPlan,
   };
 }
 
@@ -5863,7 +11466,7 @@ async function buildOpenAIInput({
     : trimContextText(memoryBundle.text || 'Sem memorias semanticas relevantes para esta pergunta.', CHAT_MEMORY_BLOCK_MAX_CHARS);
 
   const systemText = `
-Voce e a TALKERS IA, assistente moderna, natural, util e confiavel da empresa Talkers.
+Voce e a TALKERS IA, assistente multimodal moderna, natural, util, executora e confiavel.
 Idioma principal da resposta atual: ${getLanguageLabel(userLanguage)}.
 Tom desejado para esta resposta: ${getToneInstruction(intent)}.
 
@@ -5871,12 +11474,13 @@ Comportamento:
 - Detecte automaticamente o idioma do usuario e responda nesse idioma.
 - Quando o usuario pedir traducao, traduza para o idioma solicitado mantendo contexto e intencao.
 - Quando documentos estiverem em outro idioma, interprete o conteudo no idioma original, traduza silenciosamente quando necessario e responda no idioma do usuario.
-- Voce e um assistente amplo e inteligente, capaz de responder sobre assuntos gerais, tecnicos, atuais, institucionais e informativos, nao ficando restrito apenas ao contexto da escola.
-- Para perguntas sobre a Talkers, seus cursos, metodologia, contatos, site, presenca publica e comunicacao institucional, priorize a base oficial da Talkers e a base interna quando estiverem disponiveis, mas complemente com contexto externo atualizado sempre que a pergunta pedir informacoes publicas, institucionais, verificaveis ou potencialmente desatualizadas.
-- Para perguntas sobre processos, materiais, regras, vendas de cursos, atendimento, operacao pedagogica, marketing, financeiro e informacoes da Talkers, priorize sempre a base interna da empresa, a intranet e os arquivos da conversa.
+- Seja uma IA generalista por padrao. Nunca presuma contexto institucional, escolar ou da Talkers sem evidencia explicita na pergunta, nos anexos ou na recuperacao documental.
+- Use a base da Talkers somente quando a pergunta mencionar a empresa, envolver contexto interno ou quando a recuperacao trouxer alta relevancia institucional.
 - Para perguntas gerais, atuais, publicas, de mercado, cotacoes, clima, noticias ou dados recentes, use naturalmente o contexto externo, a busca web e os dados atualizados quando eles aparecerem no contexto.
 - Se houver conflito entre base interna e web em assuntos da empresa, avise e priorize a base interna. Para temas gerais e atuais, priorize os dados externos atualizados.
-- Analise a intencao antes de responder, identifique a area do negocio e adapte o tom naturalmente.
+- Analise a intencao antes de responder e escolha o modo certo: responder, analisar anexo, transformar anexo ou gerar artefato.
+- Se houver anexo e uma acao executavel for possivel, execute em vez de apenas orientar.
+- Se houver imagem enviada e o pedido for de modificacao, transformacao ou edicao visual, trate como edicao de imagem com base na imagem enviada.
 - Sempre que fizer sentido, entregue contexto, explicacao, passo a passo, exemplos, melhores praticas, alertas e proximo passo recomendado.
 - Se o pedido envolver explicacao, orientacao, passo a passo, melhoria de texto, organizacao de informacao, sugestoes, traducao, resumo, reescrita, roteiro, mensagem comercial, comunicado ou texto pronto para uso, entregue em markdown bem estruturado, com hierarquia visual clara, blocos curtos e reutilizaveis.
 - Para respostas institucionais, comerciais, explicativas ou comparativas, prefira uma abertura curta, 2 a 5 blocos claros com titulos e bullets objetivos, em vez de um texto corrido confuso.
@@ -6300,7 +11904,7 @@ async function openaiReplyStream({
 
 async function getUserById(userId) {
   const user = await get(
-    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, created_at FROM users WHERE id=?",
+    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json, created_at FROM users WHERE id=?",
     [userId]
   );
   return hydrateUserRecord(user);
@@ -6308,7 +11912,7 @@ async function getUserById(userId) {
 
 async function getUserByEmail(email) {
   const user = await get(
-    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, created_at FROM users WHERE email=?",
+    "SELECT id, name, email, role, department, can_access_intranet, preferred_locale, job_title, unit_name, additional_permissions_json, created_at FROM users WHERE email=?",
     [email]
   );
   return hydrateUserRecord(user);
@@ -6353,12 +11957,18 @@ async function buildIntranetPayload(userId) {
 
   const isAdmin = user.role === 'admin';
   const departmentCatalog = await listDepartmentCatalog();
-  const visibleDepartmentDetails = isAdmin
+  const allowedDepartmentSlugs = getAllowedDepartmentSlugSet(user);
+  const allowedSubmenuViewKeys = getAllowedSubmenuViewKeySet(user);
+  const visibleDepartmentDetails = (isAdmin
     ? departmentCatalog.map((department) => ({
         ...department,
         access_level: 'administrador',
       }))
-    : (user.department_details || []).filter((department) => department.is_active !== false);
+    : (user.department_details || []).filter((department) => department.is_active !== false))
+    .filter((department) => {
+      if (isAdmin || !allowedDepartmentSlugs.size) return true;
+      return allowedDepartmentSlugs.has(normalizeDepartmentValue(department.slug || department.name || ""));
+    });
   const visibleDepartments = visibleDepartmentDetails.map((item) => item.name).filter(Boolean);
   const visibleDepartmentIds = visibleDepartmentDetails.map((item) => Number(item.id || 0)).filter(Boolean);
   const documentWhere = [];
@@ -6372,21 +11982,51 @@ async function buildIntranetPayload(userId) {
 
   const documentWhereSql = documentWhere.length ? `WHERE ${documentWhere.join(' AND ')}` : '';
 
+  const loadBootstrapSection = async (label, task, fallback) => {
+    try {
+      return await task();
+    } catch (error) {
+      console.error("[intranet.bootstrap] section_failed", {
+        label,
+        message: error?.message || String(error || "unknown_error"),
+      });
+      return fallback;
+    }
+  };
+
   const [departmentSubmenus, recentDocuments, totalDocumentsRow, salesPayload, documentCountRows, announcementsRaw, upcomingEvents, marketingIndicatorDashboard] = await Promise.all([
-    (!isAdmin && !visibleDepartmentIds.length)
-      ? Promise.resolve([])
-      : listDepartmentSubmenus({ includeInactive: isAdmin, departmentIds: visibleDepartmentIds }),
-    all(
-      `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, vector_store_file_id, created_at
-         FROM knowledge_sources
-         ${documentWhereSql}
-        ORDER BY datetime(created_at) DESC, id DESC
-        LIMIT 12`,
+    loadBootstrapSection(
+      "department_submenus",
+      () => ((!isAdmin && !visibleDepartmentIds.length)
+        ? Promise.resolve([])
+        : listDepartmentSubmenus({ includeInactive: isAdmin, departmentIds: visibleDepartmentIds })),
+      []
+    ),
+    loadBootstrapSection(
+      "recent_documents",
+      () => all(
+        `SELECT id, original_name, stored_name, mime_type, language, department_name, source_kind, vector_store_file_id, created_at
+           FROM knowledge_sources
+           ${documentWhereSql}
+          ORDER BY datetime(created_at) DESC, id DESC
+          LIMIT 12`,
         documentParams
       ),
-      get(`SELECT COUNT(*) AS total FROM knowledge_sources ${documentWhereSql}`, documentParams),
-      buildSalesIntranetPayload(user),
-      all(
+      []
+    ),
+    loadBootstrapSection(
+      "documents_total",
+      () => get(`SELECT COUNT(*) AS total FROM knowledge_sources ${documentWhereSql}`, documentParams),
+      { total: 0 }
+    ),
+    loadBootstrapSection(
+      "sales_workspace",
+      () => buildSalesIntranetPayload(user),
+      { enabled: false, can_view_all: false, can_edit_all: false, summary: null, records: [], closers: [] }
+    ),
+    loadBootstrapSection(
+      "document_department_totals",
+      () => all(
         `SELECT COALESCE(NULLIF(department_name, ''), 'Geral') AS department_name, COUNT(*) AS total
            FROM knowledge_sources
            ${documentWhereSql}
@@ -6395,20 +12035,38 @@ async function buildIntranetPayload(userId) {
           LIMIT 16`,
         documentParams
       ),
-      listIntranetAnnouncements({ includeInactive: isAdmin, limit: 24 }),
-      listCalendarEventsForUser(user, {
+      []
+    ),
+    loadBootstrapSection(
+      "announcements",
+      () => listIntranetAnnouncements({ includeInactive: isAdmin, limit: 24 }),
+      []
+    ),
+    loadBootstrapSection(
+      "upcoming_events",
+      () => listCalendarEventsForUser(user, {
         from: brazilDateKey(),
         to: brazilDateKey(new Date(Date.now() + 1000 * 60 * 60 * 24 * 21)),
         status: 'scheduled',
         limit: 8,
       }),
-      (isAdmin || userHasDepartmentAccess(user, "marketing"))
-        ? buildMarketingIndicatorDashboardSnapshot(user).catch(() => null)
-        : Promise.resolve(null),
+      []
+    ),
+    loadBootstrapSection(
+      "marketing_indicator_dashboard",
+      () => ((isAdmin || userHasDepartmentAccess(user, "marketing"))
+        ? buildMarketingIndicatorDashboardSnapshot(user)
+        : Promise.resolve(null)),
+      null
+    ),
   ]);
 
   const submenusByDepartmentId = new Map();
   for (const submenu of departmentSubmenus || []) {
+    if (!isAdmin && allowedSubmenuViewKeys.size) {
+      const submenuKey = String(submenu.view_key || submenu.slug || "").trim();
+      if (!allowedSubmenuViewKeys.has(submenuKey)) continue;
+    }
     const key = Number(submenu.department_id || 0);
     if (!submenusByDepartmentId.has(key)) submenusByDepartmentId.set(key, []);
     submenusByDepartmentId.get(key).push(submenu);
@@ -6448,6 +12106,12 @@ async function buildIntranetPayload(userId) {
     announcements: visibleAnnouncements,
     upcomingEvents,
     notifications: buildIntranetNotifications(visibleAnnouncements, upcomingEvents),
+    permissionHints: {
+      allowed_global_views: Array.from(getAllowedGlobalViewSet(user)),
+      allowed_department_slugs: Array.from(allowedDepartmentSlugs),
+      allowed_submenu_view_keys: Array.from(allowedSubmenuViewKeys),
+      restricted_post_sale_scope: hasRestrictedPostSaleScope(user),
+    },
   });
 
   workspace.sales = salesPayload;
@@ -8304,6 +13968,14 @@ async function requireIntranetAccess(req, res, next) {
   const user = await resolveRequestUser(req.user, req.user?.sub);
   if (!user) return res.status(401).json({ error: 'not_authenticated' });
   if (!hasIntranetAccess(user)) return res.status(403).json({ error: 'intranet_access_denied' });
+  if (
+    hasRestrictedPostSaleScope(user)
+    && String(req.path || '').startsWith('/api/intranet')
+    && req.path !== '/api/intranet/bootstrap'
+    && !String(req.path || '').startsWith('/api/intranet/sales')
+  ) {
+    return res.status(403).json({ error: 'restricted_post_sale_scope' });
+  }
   req.currentUser = user;
   next();
 }
@@ -8333,6 +14005,20 @@ const salesImportUpload = upload.fields([
   { name: "sales_workbook", maxCount: 1 },
   { name: "post_sale_workbook", maxCount: 1 },
 ]);
+const academicImportUpload = upload.fields([
+  { name: "academic_workbook", maxCount: 6 },
+  { name: "academic_workbooks", maxCount: 6 },
+  { name: "workbook", maxCount: 6 },
+  { name: "file", maxCount: 6 },
+  { name: "files", maxCount: 6 },
+]);
+const sqliteImportUpload = multer({
+  dest: uploadsDir,
+  limits: { fileSize: SQLITE_IMPORT_MAX_UPLOAD_SIZE_BYTES },
+}).fields([
+  { name: "sqlite_db", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+]);
 
 function ragUploadMiddleware(req, res, next) {
   ragUpload(req, res, (err) => {
@@ -8347,6 +14033,19 @@ function ragUploadMiddleware(req, res, next) {
   });
 }
 
+function academicImportUploadMiddleware(req, res, next) {
+  academicImportUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "file_too_large" });
+    }
+    if (err instanceof multer.MulterError && (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_PART_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE")) {
+      return res.status(400).json({ error: "academic_batch_too_large" });
+    }
+    return res.status(400).json({ error: err?.message || "academic_upload_failed" });
+  });
+}
+
 function salesImportUploadMiddleware(req, res, next) {
   salesImportUpload(req, res, (err) => {
     if (!err) return next();
@@ -8355,6 +14054,72 @@ function salesImportUploadMiddleware(req, res, next) {
     }
     return res.status(400).json({ error: err?.message || "sales_import_upload_failed" });
   });
+}
+
+function sqliteImportUploadMiddleware(req, res, next) {
+  sqliteImportUpload(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        error: "sqlite_file_too_large",
+        max_upload_size_mb: SQLITE_IMPORT_MAX_UPLOAD_SIZE_MB,
+      });
+    }
+    return res.status(400).json({ error: err?.message || "sqlite_import_upload_failed" });
+  });
+}
+
+const DATABASE_STATUS_TABLES = [
+  "students",
+  "academic_programs",
+  "school_terms",
+  "classes",
+  "class_schedules",
+  "teacher_profiles",
+  "class_teachers",
+  "enrollments",
+  "enrollment_class_history",
+  "student_transfers",
+  "sales_records",
+  "financial_contracts",
+  "financial_installments",
+  "student_guardians",
+  "student_timeline",
+  "attendance_records",
+  "class_sessions",
+  "enrollment_schedule_history",
+];
+
+async function collectDatabaseStatusCounts() {
+  const counts = {};
+  for (const table of DATABASE_STATUS_TABLES) {
+    const row = await get(`SELECT COUNT(*) AS total FROM ${table}`);
+    counts[table] = Number(row?.total || 0);
+  }
+  return counts;
+}
+
+async function ensureOperationalDemoComplements() {
+  const countsBefore = await collectDatabaseStatusCounts();
+  const shouldSeedDemo =
+    Number(countsBefore.students || 0) > 0 &&
+    (
+      Number(countsBefore.student_guardians || 0) === 0 ||
+      Number(countsBefore.financial_installments || 0) === 0 ||
+      Number(countsBefore.attendance_records || 0) === 0 ||
+      Number(countsBefore.enrollment_schedule_history || 0) === 0
+    );
+
+  if (shouldSeedDemo) {
+    await seedDemoSchoolData();
+  }
+
+  const countsAfter = await collectDatabaseStatusCounts();
+  return {
+    seeded_demo_data: shouldSeedDemo,
+    counts_before: countsBefore,
+    counts_after: countsAfter,
+  };
 }
 
 function maskConnectionTarget(value = "") {
@@ -8724,6 +14489,13 @@ app.get("/api/health", (req, res) => {
     vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
     openai_prompt_configured: Boolean(OPENAI_PROMPT_ID),
     db_client: DB_CLIENT,
+    db_runtime: {
+      requested_client: REQUESTED_DB_CLIENT || null,
+      selected_client: DB_CLIENT,
+      database_url_present: DATABASE_URL_PRESENT,
+      sqlite_path: DB_CLIENT === "sqlite" ? DB_RUNTIME_CONFIG.sqlite_path : null,
+      postgres_host: DB_CLIENT === "postgres" ? POSTGRES_HOST || null : null,
+    },
     uptime_seconds: Math.round(process.uptime()),
   });
 });
@@ -8807,1192 +14579,6 @@ app.patch("/api/me/preferences", requireAuth(JWT_SECRET), async (req, res) => {
   });
   const user = await getUserById(req.user.sub);
   res.json({ ok: true, user });
-});
-
-app.get("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
-  const rows = await all(
-    "SELECT id, title, mode, created_at, updated_at FROM conversations WHERE user_id=? ORDER BY datetime(updated_at) DESC",
-    [req.user.sub]
-  );
-  res.json({ conversations: rows });
-});
-
-app.post("/api/conversations", requireAuth(JWT_SECRET), async (req, res) => {
-  const title = String(req.body?.title || "Nova conversa").trim() || "Nova conversa";
-  const requested = req.body?.mode === "empresa" ? "empresa" : "geral";
-  const mode = req.user.role === "admin" ? requested : "geral";
-  const requestLocale = getRequestLocale(req);
-
-  const created = await run(
-    "INSERT INTO conversations (user_id, title, mode) VALUES (?, ?, ?)",
-    [req.user.sub, title, mode]
-  );
-
-  const freshUser = await get(
-    "SELECT id, name, email, role, department, preferred_locale FROM users WHERE id=?",
-    [req.user.sub]
-  );
-  await maybeInsertDailyGreeting(created.lastID, freshUser || req.user, requestLocale);
-
-  res.json({ conversation_id: created.lastID });
-});
-
-app.patch("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) => {
-  const id = Number(req.params.id);
-  const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
-  if (!conv) return res.status(404).json({ error: "not_found" });
-
-  const requested = req.body?.mode === "empresa" ? "empresa" : "geral";
-  const mode = req.user.role === "admin" ? requested : "geral";
-  const title = req.body?.title ? String(req.body.title).trim() : conv.title;
-
-  await run(
-    "UPDATE conversations SET title=?, mode=?, updated_at=datetime('now') WHERE id=?",
-    [title || conv.title, mode, id]
-  );
-
-  res.json({ ok: true });
-});
-
-app.delete("/api/conversations/:id", requireAuth(JWT_SECRET), async (req, res) => {
-  const id = Number(req.params.id);
-  const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
-  if (!conv) return res.status(404).json({ error: "not_found" });
-
-  const files = await all("SELECT stored_name FROM files WHERE conversation_id=?", [id]);
-  await deleteStoredFiles(files.map((file) => file.stored_name));
-
-  await run("DELETE FROM messages WHERE conversation_id=?", [id]);
-  await run("DELETE FROM files WHERE conversation_id=?", [id]);
-  await run("DELETE FROM conversation_memories WHERE conversation_id=?", [id]);
-  await run("DELETE FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
-
-  await logEvent(req.user.sub, "delete_conversation", { conversation_id: id });
-  res.json({ ok: true });
-});
-app.get("/api/conversations/:id/messages", requireAuth(JWT_SECRET), async (req, res) => {
-  const id = Number(req.params.id);
-  const conv = await get("SELECT * FROM conversations WHERE id=? AND user_id=?", [id, req.user.sub]);
-  if (!conv) return res.status(404).json({ error: "not_found" });
-
-  const rows = await all(
-    "SELECT id, role, content, meta_json, created_at FROM messages WHERE conversation_id=? ORDER BY datetime(created_at) ASC, id ASC",
-    [id]
-  );
-
-  res.json({
-    conversation: conv,
-    messages: rows.map((row) => ({
-      id: row.id,
-      role: row.role,
-      content: row.content,
-      created_at: row.created_at,
-      meta: row.meta_json ? safeJsonParse(row.meta_json) : null,
-    })),
-  });
-});
-
-app.post("/api/conversations/:id/files", requireAuth(JWT_SECRET), upload.single("file"), handleConversationUpload);
-app.post("/api/conversations/:id/upload", requireAuth(JWT_SECRET), upload.single("file"), handleConversationUpload);
-
-app.get("/api/files/:id/download", requireAuth(JWT_SECRET), async (req, res) => {
-  const id = Number(req.params.id);
-  const file = await get(
-    `SELECT f.*, c.user_id AS owner_user_id
-       FROM files f
-       LEFT JOIN conversations c ON c.id = f.conversation_id
-      WHERE f.id=?`,
-    [id]
-  );
-
-  if (!file) return res.status(404).send("not_found");
-  if (file.owner_user_id && file.owner_user_id !== req.user.sub && req.user.role !== "admin") {
-    return res.status(403).send("forbidden");
-  }
-
-  const full = path.join(uploadsDir, file.stored_name);
-  if (!fs.existsSync(full)) return res.status(404).send("missing_on_disk");
-
-  const inline = String(req.query.inline || "").trim() === "1";
-  if (inline) {
-    if (file.mime_type) res.type(file.mime_type);
-    return res.sendFile(full);
-  }
-
-  return res.download(full, file.original_name);
-});
-
-app.post("/api/conversations/:id/send", requireAuth(JWT_SECRET), async (req, res) => {
-  const id = Number(req.params.id);
-  const text = String(req.body?.message || "").trim();
-  if (!text) return res.status(400).json({ error: "empty_message" });
-  const perfSample = beginChatPerformanceSample(text.length);
-  try {
-    if (queryAsksAboutAssistantCapabilities(text)) {
-      const capabilityResult = await buildAssistantCapabilitiesResult({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        preferredLocale: req.user?.preferred_locale || DEFAULT_LOCALE,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: 0,
-        persistence_ms: capabilityResult.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: capabilityResult.reply.length,
-        response_bytes: Buffer.byteLength(String(capabilityResult.reply || ""), "utf8"),
-        status: "capability_shortcut",
-      });
-      return res.json({ reply: capabilityResult.reply, meta: capabilityResult.meta });
-    }
-
-    const prepared = await prepareConversationMessageState({
-      conversationId: id,
-      userId: req.user.sub,
-      text,
-      requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
-      sessionUser: req.user,
-    });
-    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation, sourceMessageId } = prepared;
-
-    if (moderation.blocked) {
-      const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        response_locale: requestLocale,
-        moderated: true,
-        moderation_category: moderation.category,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: moderation.message,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: moderationMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: 0,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: moderation.message.length,
-        response_bytes: Buffer.byteLength(String(moderation.message || ""), "utf8"),
-        status: "moderated",
-      });
-      return res.json({ reply: moderation.message, meta: moderationMetaObject });
-    }
-
-    if (queryAsksAboutAssistantCapabilities(text)) {
-      const capabilityReply = buildAssistantCapabilitiesAnswer(userLanguage);
-      const capabilityMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        capability_shortcut: true,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: capabilityReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: capabilityMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-        persistDerivedMemory: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: 0,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: capabilityReply.length,
-        response_bytes: Buffer.byteLength(String(capabilityReply || ""), "utf8"),
-        status: "capability_shortcut",
-      });
-      return res.json({ reply: capabilityReply, meta: capabilityMetaObject });
-    }
-
-    const contextStartedAt = Date.now();
-    const contextStrategy = buildChatContextStrategy(text, responseProfile);
-    const [knowledgeSignature, rawSupportAssets, queryEmbedding] = await Promise.all([
-      contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
-      contextStrategy.skipSupportAssets
-        ? Promise.resolve({
-            cache_key: "fast_external",
-            fileContext: "",
-            visionInputs: [],
-            documentInputs: [],
-            imageReferences: [],
-            recentFiles: [],
-          })
-        : getConversationSupportAssets(id),
-      contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
-    ]);
-    const latestArtifactSession = await getLatestArtifactSession(id);
-    const executionPlan = await buildTurnExecutionPlan({
-      userText: text,
-      recentFiles: Array.isArray(rawSupportAssets?.recentFiles) ? rawSupportAssets.recentFiles : [],
-      latestArtifactSession,
-      referenceImages: Array.isArray(rawSupportAssets?.imageReferences) ? rawSupportAssets.imageReferences : [],
-      uploadsDir,
-    });
-    const supportAssets = applyExecutionPlanToSupportAssets(
-      sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot),
-      executionPlan
-    );
-    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
-      ? []
-      : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
-
-    if (executionPlan?.route?.intent_mode === "analyze_attachment" && executionPlan.localAnalysisReply) {
-      const localAnalysisMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        response_locale: requestLocale,
-        structured_file_analysis: true,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: executionPlan.localAnalysisReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: localAnalysisMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: Date.now() - contextStartedAt,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: executionPlan.localAnalysisReply.length,
-        response_bytes: Buffer.byteLength(String(executionPlan.localAnalysisReply || ""), "utf8"),
-        status: "attachment_analysis_local",
-      });
-      return res.json({ reply: executionPlan.localAnalysisReply, meta: localAnalysisMetaObject });
-    }
-
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || [], {
-      latestArtifactSession,
-      recentFiles: supportAssets.recentFiles || [],
-      executionPlan,
-    });
-    let activeArtifactSession = null;
-    if (artifactRequest.kind) {
-      activeArtifactSession = await saveArtifactSession({
-        conversationId: id,
-        artifactType: artifactRequest.kind,
-        intentMode: artifactRequest.intentMode,
-        prompt: text,
-        resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-        sourceMessageId,
-        inputFiles: buildArtifactSessionFileRefs(artifactRequest.inputFiles || []),
-        imageRefs: buildArtifactSessionImageRefs(artifactRequest.imageReferences || []),
-        status: "pending",
-      });
-    }
-    let artifactError = null;
-    const artifact = artifactRequest.kind
-      ? await generateArtifact({
-          apiKey: process.env.OPENAI_API_KEY || "",
-          prompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-          outDir: uploadsDir,
-          referenceImages: artifactRequest.imageReferences || supportAssets.imageReferences || [],
-        }).catch((err) => {
-          artifactError = err;
-          console.log("Erro na geracao de artefato:", err?.message || err);
-          return null;
-        })
-      : null;
-
-    const quickExternalContext = (contextStrategy.fastExternalOnly || contextStrategy.talkersNeedsLiveSearch)
-      ? await resolveExternalToolContext(text, {
-          userLanguage,
-          forceWebSearch: true,
-        }).catch((err) => {
-          console.log("Erro no contexto externo rapido:", err?.message || err);
-          return null;
-        })
-      : null;
-
-    if (artifactRequest.kind && !artifact && artifactError) {
-      if (activeArtifactSession?.id) {
-        await updateArtifactSessionStatus(activeArtifactSession.id, { status: "failed" });
-      }
-      return res.json({
-        reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
-        sources: [],
-        meta: makeStructuredResponseMeta(responseProfile, { response_language: userLanguage, artifact_error: true, artifact_kind: artifactRequest.kind }),
-      });
-    }
-
-    if (artifact) {
-      if (!artifact.fullPath) {
-        if (activeArtifactSession?.id) {
-          await updateArtifactSessionStatus(activeArtifactSession.id, {
-            status: "completed",
-            resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-          });
-        }
-        const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
-          response_language: userLanguage,
-        });
-        const persistMetrics = await persistAssistantTextReply({
-          conversationId: id,
-          userId: req.user.sub,
-          userText: text,
-          assistantText: artifact.reply,
-          responseProfile,
-          responseLanguage: userLanguage,
-          metaObject: artifactMetaObject,
-          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-          allowWeakResponseLog: false,
-        });
-        const contextAssemblyMs = Date.now() - contextStartedAt;
-        finalizeChatPerformanceSample(perfSample, {
-          total_response_ms: Date.now() - perfSample.started_at,
-          api_latency_ms: 0,
-          internal_processing_ms: Date.now() - perfSample.started_at,
-          context_assembly_ms: contextAssemblyMs,
-          persistence_ms: persistMetrics.persistence_ms,
-          prompt_chars: text.length,
-          response_chars: artifact.reply.length,
-          response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
-          status: "artifact_inline",
-        });
-        return res.json({ reply: artifact.reply, meta: artifactMetaObject });
-      }
-
-      const persistStartedAt = Date.now();
-      const stat = fs.statSync(artifact.fullPath);
-      const saved = await createFileMessage({
-        conversationId: id,
-        uploadedBy: req.user.sub,
-        originalName: artifact.filename,
-        storedName: path.basename(artifact.fullPath),
-        mimeType: artifact.mimeType,
-        sizeBytes: stat.size,
-        role: "assistant",
-        content: artifact.reply,
-      });
-      if (activeArtifactSession?.id) {
-        await updateArtifactSessionStatus(activeArtifactSession.id, {
-          status: "completed",
-          resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-        });
-      }
-      await persistReplyMemories({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: artifact.reply,
-        language: userLanguage,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-      });
-      const contextAssemblyMs = Date.now() - contextStartedAt;
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: contextAssemblyMs,
-        persistence_ms: Date.now() - persistStartedAt,
-        prompt_chars: text.length,
-        response_chars: artifact.reply.length,
-        response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
-        status: "artifact_file",
-      });
-      return res.json({ reply: artifact.reply, meta: { ...saved.meta, response_language: userLanguage } });
-    }
-
-    if (contextStrategy.fastExternalOnly && String(quickExternalContext?.direct_answer || "").trim()) {
-      const directReply = repairMojibakeText(String(quickExternalContext.direct_answer || "").trim());
-      const directSources = Array.isArray(quickExternalContext?.sources) ? quickExternalContext.sources.slice(0, 8) : [];
-      const directMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        sources: directSources,
-        show_sources: shouldShowSourcesForReply(text),
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: directReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: directMetaObject,
-        sources: directSources,
-        relevantMemoryEntries,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        recordUsage: true,
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: Date.now() - contextStartedAt,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: directReply.length,
-        response_bytes: Buffer.byteLength(String(directReply || ""), "utf8"),
-        ...mergeToolUsageMetrics(quickExternalContext?.metrics || null),
-        status: "tool_direct_answer",
-      });
-      return res.json({ reply: directReply, meta: directMetaObject });
-    }
-
-    const cachedReply = !queryLooksExternalOrCurrent(text)
-      ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
-      : null;
-
-    if (cachedReply?.text) {
-      const safeCachedText = repairMojibakeText(String(cachedReply.text || ""));
-      if (responseLooksSelfLimiting(safeCachedText) || responseLooksWeak(safeCachedText)) {
-        // Ignore low-quality cache hits so they do not contaminate future responses.
-      } else {
-      const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: cachedReply.responseLanguage || userLanguage,
-        sources: cachedReply.sources || [],
-        show_sources: shouldShowSourcesForReply(text),
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: safeCachedText,
-        responseProfile,
-        responseLanguage: cachedReply.responseLanguage || userLanguage,
-        metaObject: cachedMetaObject,
-        sources: cachedReply.sources || [],
-        relevantMemoryEntries,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        recordUsage: Boolean((cachedReply.sources || []).length),
-        allowWeakResponseLog: false,
-      });
-      const contextAssemblyMs = Date.now() - contextStartedAt;
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: contextAssemblyMs,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: safeCachedText.length,
-        response_bytes: Buffer.byteLength(String(safeCachedText || ""), "utf8"),
-        status: "cache_hit",
-      });
-      return res.json({ reply: safeCachedText, meta: cachedMetaObject });
-      }
-    }
-
-    const contextLayers = await buildConversationKnowledgeContext({
-      text,
-      userLanguage,
-      currentUser,
-      queryEmbedding,
-      supportAssets,
-      strategy: contextStrategy,
-      preloadedExternalToolContext: quickExternalContext,
-    });
-    if (contextStrategy.fastTalkersOnly) {
-      const talkersDirectReply = buildTalkersContextFallbackAnswer(contextLayers.talkersPublicBundle);
-      if (talkersDirectReply) {
-        const talkersSources = Array.isArray(contextLayers.talkersPublicBundle?.sources)
-          ? contextLayers.talkersPublicBundle.sources.slice(0, 8)
-          : [];
-        const talkersMetaObject = makeStructuredResponseMeta(responseProfile, {
-          response_language: userLanguage,
-          sources: talkersSources,
-          show_sources: shouldShowSourcesForReply(text),
-        });
-        const persistMetrics = await persistAssistantTextReply({
-          conversationId: id,
-          userId: req.user.sub,
-          userText: text,
-          assistantText: talkersDirectReply,
-          responseProfile,
-          responseLanguage: userLanguage,
-          metaObject: talkersMetaObject,
-          sources: talkersSources,
-          relevantMemoryEntries,
-          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-          recordUsage: true,
-          allowWeakResponseLog: false,
-        });
-        finalizeChatPerformanceSample(perfSample, {
-          total_response_ms: Date.now() - perfSample.started_at,
-          api_latency_ms: 0,
-          internal_processing_ms: Date.now() - perfSample.started_at,
-          context_assembly_ms: Date.now() - contextStartedAt,
-          persistence_ms: persistMetrics.persistence_ms,
-          prompt_chars: text.length,
-          response_chars: talkersDirectReply.length,
-          response_bytes: Buffer.byteLength(String(talkersDirectReply || ""), "utf8"),
-          ...mergeToolUsageMetrics(contextLayers.toolMetrics || null),
-          status: "talkers_direct_answer",
-        });
-        return res.json({ reply: talkersDirectReply, meta: talkersMetaObject });
-      }
-    }
-    const contextText = contextLayers.contextText;
-    const contextAssemblyMs = Date.now() - contextStartedAt;
-
-    const assistant = await openaiReply({
-      conversationId: id,
-      userId: req.user.sub,
-      userText: text,
-      contextText,
-      baseSources: contextLayers.mergedKnowledgeSources,
-      topicSnapshot,
-      responseProfile,
-      contextStrategy,
-      currentUser,
-      relevantMemoryEntries,
-      visionInputs: supportAssets.visionInputs || [],
-      documentInputs: supportAssets.documentInputs || [],
-    });
-
-    let finalAssistantText = repairMojibakeText(String(assistant.text || "").trim());
-    let finalAssistantSources = Array.isArray(assistant.sources) ? assistant.sources : [];
-    const combinedToolMetrics = mergeToolUsageMetrics(
-      contextLayers.toolMetrics || null,
-      assistant.metrics || null
-    );
-
-    if (responseLooksSelfLimiting(finalAssistantText) || responseLooksWeak(finalAssistantText)) {
-      const directFallback = buildExternalContextFallbackAnswer(contextLayers.externalToolContext, userLanguage);
-      if (directFallback) {
-        finalAssistantText = directFallback;
-        finalAssistantSources = (contextLayers.externalToolContext?.sources || []).slice(0, 8);
-      } else if (queryAsksAboutAssistantCapabilities(text)) {
-        finalAssistantText = buildAssistantCapabilitiesAnswer(userLanguage);
-        finalAssistantSources = [];
-      }
-    }
-
-    const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
-      response_language: userLanguage,
-      sources: finalAssistantSources || [],
-      show_sources: shouldShowSourcesForReply(text),
-    });
-    const persistMetrics = await persistAssistantTextReply({
-      conversationId: id,
-      userId: req.user.sub,
-      userText: text,
-      assistantText: finalAssistantText,
-      responseProfile,
-      responseLanguage: userLanguage,
-      metaObject: assistantMetaObject,
-      sources: finalAssistantSources || [],
-      queryEmbedding,
-      knowledgeSignature,
-      relevantMemoryEntries,
-      knowledgeMemoryEntries: contextLayers.knowledgeMemoryEntries,
-      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-      cacheSemantic: true,
-      recordUsage: true,
-      allowWeakResponseLog: true,
-    });
-
-    finalizeChatPerformanceSample(perfSample, {
-      total_response_ms: Date.now() - perfSample.started_at,
-      api_latency_ms: Number(assistant?.metrics?.api_latency_ms || 0),
-      internal_processing_ms: Math.max(0, (Date.now() - perfSample.started_at) - Number(assistant?.metrics?.api_latency_ms || 0)),
-      context_assembly_ms: contextAssemblyMs,
-      persistence_ms: persistMetrics.persistence_ms,
-      prompt_chars: text.length,
-      response_chars: String(finalAssistantText || "").length,
-      payload_bytes: Number(assistant?.metrics?.payload_bytes || 0),
-      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(finalAssistantText || ""), "utf8")),
-      ...combinedToolMetrics,
-      status: assistant?.metrics?.status || "success",
-    });
-
-    res.json({ reply: finalAssistantText, meta: assistantMetaObject });
-  } catch (err) {
-    finalizeChatPerformanceSample(perfSample, {
-      total_response_ms: Date.now() - perfSample.started_at,
-      api_latency_ms: 0,
-      internal_processing_ms: Date.now() - perfSample.started_at,
-      prompt_chars: text.length,
-      response_chars: 0,
-      status: err?.message || "send_failed",
-    });
-    res.status(err?.statusCode || 500).json({ error: err?.message || "conversation_send_failed" });
-  }
-});
-
-app.post("/api/conversations/:id/send-stream", requireAuth(JWT_SECRET), async (req, res) => {
-  const id = Number(req.params.id);
-  const text = String(req.body?.message || "").trim();
-  if (!text) return res.status(400).json({ error: "empty_message" });
-  const perfSample = beginChatPerformanceSample(text.length);
-
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
-
-  try {
-    if (queryAsksAboutAssistantCapabilities(text)) {
-      const capabilityResult = await buildAssistantCapabilitiesResult({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        preferredLocale: req.user?.preferred_locale || DEFAULT_LOCALE,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: 0,
-        persistence_ms: capabilityResult.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: capabilityResult.reply.length,
-        response_bytes: Buffer.byteLength(String(capabilityResult.reply || ""), "utf8"),
-        status: "capability_shortcut",
-      });
-      writeEventStreamPacket(res, "done", { reply: capabilityResult.reply, meta: capabilityResult.meta });
-      return res.end();
-    }
-
-    const prepared = await prepareConversationMessageState({
-      conversationId: id,
-      userId: req.user.sub,
-      text,
-      requestLocale: getRequestLocale(req, req.user?.preferred_locale || DEFAULT_LOCALE),
-      sessionUser: req.user,
-    });
-    const { currentUser, requestLocale, topicSnapshot, userLanguage, responseProfile, moderation, sourceMessageId } = prepared;
-
-    if (moderation.blocked) {
-      const moderationMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        response_locale: requestLocale,
-        moderated: true,
-        moderation_category: moderation.category,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: moderation.message,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: moderationMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: 0,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: moderation.message.length,
-        response_bytes: Buffer.byteLength(String(moderation.message || ""), "utf8"),
-        status: "moderated",
-      });
-      writeEventStreamPacket(res, "done", { reply: moderation.message, meta: moderationMetaObject });
-      return res.end();
-    }
-
-    if (queryAsksAboutAssistantCapabilities(text)) {
-      const capabilityReply = buildAssistantCapabilitiesAnswer(userLanguage);
-      const capabilityMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        capability_shortcut: true,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: capabilityReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: capabilityMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-        persistDerivedMemory: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: 0,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: capabilityReply.length,
-        response_bytes: Buffer.byteLength(String(capabilityReply || ""), "utf8"),
-        status: "capability_shortcut",
-      });
-      writeEventStreamPacket(res, "done", { reply: capabilityReply, meta: capabilityMetaObject });
-      return res.end();
-    }
-
-    writeEventStreamPacket(res, "stage", {
-      stage: "context",
-      label: "Montando contexto inteligente",
-    });
-
-    const contextStartedAt = Date.now();
-    const contextStrategy = buildChatContextStrategy(text, responseProfile);
-    const [knowledgeSignature, rawSupportAssets, queryEmbedding] = await Promise.all([
-      contextStrategy.skipSemanticCache ? Promise.resolve("external_live") : getKnowledgeSignatureValue(),
-      contextStrategy.skipSupportAssets
-        ? Promise.resolve({
-            cache_key: "fast_external",
-            fileContext: "",
-            visionInputs: [],
-            documentInputs: [],
-            imageReferences: [],
-            recentFiles: [],
-          })
-        : getConversationSupportAssets(id),
-      contextStrategy.skipEmbeddings ? Promise.resolve(null) : getEmbeddingForText(text),
-    ]);
-    const latestArtifactSession = await getLatestArtifactSession(id);
-    const executionPlan = await buildTurnExecutionPlan({
-      userText: text,
-      recentFiles: Array.isArray(rawSupportAssets?.recentFiles) ? rawSupportAssets.recentFiles : [],
-      latestArtifactSession,
-      referenceImages: Array.isArray(rawSupportAssets?.imageReferences) ? rawSupportAssets.imageReferences : [],
-      uploadsDir,
-    });
-    const supportAssets = applyExecutionPlanToSupportAssets(
-      sanitizeSupportAssetsForTurn(rawSupportAssets, text, topicSnapshot),
-      executionPlan
-    );
-    const relevantMemoryEntries = topicSnapshot?.topicShift?.isShift || contextStrategy.skipConversationMemories
-      ? []
-      : await getRelevantMemoryEntries(req.user.sub, id, text, 4, { queryEmbedding });
-
-    if (executionPlan?.route?.intent_mode === "analyze_attachment" && executionPlan.localAnalysisReply) {
-      const localAnalysisMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        response_locale: requestLocale,
-        structured_file_analysis: true,
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: executionPlan.localAnalysisReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: localAnalysisMetaObject,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: Date.now() - contextStartedAt,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: executionPlan.localAnalysisReply.length,
-        response_bytes: Buffer.byteLength(String(executionPlan.localAnalysisReply || ""), "utf8"),
-        status: "attachment_analysis_local",
-      });
-      writeEventStreamPacket(res, "done", { reply: executionPlan.localAnalysisReply, meta: localAnalysisMetaObject });
-      return res.end();
-    }
-
-    const artifactRequest = await resolveArtifactRequestForTurn(id, text, supportAssets.imageReferences || [], {
-      latestArtifactSession,
-      recentFiles: supportAssets.recentFiles || [],
-      executionPlan,
-    });
-    let activeArtifactSession = null;
-    if (artifactRequest.kind) {
-      activeArtifactSession = await saveArtifactSession({
-        conversationId: id,
-        artifactType: artifactRequest.kind,
-        intentMode: artifactRequest.intentMode,
-        prompt: text,
-        resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-        sourceMessageId,
-        inputFiles: buildArtifactSessionFileRefs(artifactRequest.inputFiles || []),
-        imageRefs: buildArtifactSessionImageRefs(artifactRequest.imageReferences || []),
-        status: "pending",
-      });
-    }
-    let artifactError = null;
-    const artifact = artifactRequest.kind
-      ? await generateArtifact({
-          apiKey: process.env.OPENAI_API_KEY || "",
-          prompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-          outDir: uploadsDir,
-          referenceImages: artifactRequest.imageReferences || supportAssets.imageReferences || [],
-        }).catch((err) => {
-          artifactError = err;
-          console.log("Erro na geracao de artefato:", err?.message || err);
-          return null;
-        })
-      : null;
-
-    const quickExternalContext = (contextStrategy.fastExternalOnly || contextStrategy.talkersNeedsLiveSearch)
-      ? await resolveExternalToolContext(text, {
-          userLanguage,
-          forceWebSearch: true,
-        }).catch((err) => {
-          console.log("Erro no contexto externo rapido:", err?.message || err);
-          return null;
-        })
-      : null;
-
-    if (artifactRequest.kind && !artifact && artifactError) {
-      if (activeArtifactSession?.id) {
-        await updateArtifactSessionStatus(activeArtifactSession.id, { status: "failed" });
-      }
-      writeEventStreamPacket(res, "done", {
-        reply: "Tentei executar o pedido de artefato, mas a geracao nao foi concluida nesta tentativa. Tente novamente em alguns instantes com o mesmo pedido.",
-        meta: makeStructuredResponseMeta(responseProfile, {
-          response_language: userLanguage,
-          artifact_error: true,
-          artifact_kind: artifactRequest.kind,
-        }),
-      });
-      return res.end();
-    }
-
-    if (artifact) {
-      if (!artifact.fullPath) {
-        if (activeArtifactSession?.id) {
-          await updateArtifactSessionStatus(activeArtifactSession.id, {
-            status: "completed",
-            resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-          });
-        }
-        const artifactMetaObject = makeStructuredResponseMeta(responseProfile, {
-          response_language: userLanguage,
-        });
-        const persistMetrics = await persistAssistantTextReply({
-          conversationId: id,
-          userId: req.user.sub,
-          userText: text,
-          assistantText: artifact.reply,
-          responseProfile,
-          responseLanguage: userLanguage,
-          metaObject: artifactMetaObject,
-          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-          allowWeakResponseLog: false,
-        });
-        finalizeChatPerformanceSample(perfSample, {
-          total_response_ms: Date.now() - perfSample.started_at,
-          api_latency_ms: 0,
-          internal_processing_ms: Date.now() - perfSample.started_at,
-          context_assembly_ms: Date.now() - contextStartedAt,
-          persistence_ms: persistMetrics.persistence_ms,
-          prompt_chars: text.length,
-          response_chars: artifact.reply.length,
-          response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
-          status: "artifact_inline",
-        });
-        writeEventStreamPacket(res, "done", { reply: artifact.reply, meta: artifactMetaObject });
-        return res.end();
-      }
-
-      const persistStartedAt = Date.now();
-      const stat = fs.statSync(artifact.fullPath);
-      const saved = await createFileMessage({
-        conversationId: id,
-        uploadedBy: req.user.sub,
-        originalName: artifact.filename,
-        storedName: path.basename(artifact.fullPath),
-        mimeType: artifact.mimeType,
-        sizeBytes: stat.size,
-        role: "assistant",
-        content: artifact.reply,
-      });
-      if (activeArtifactSession?.id) {
-        await updateArtifactSessionStatus(activeArtifactSession.id, {
-          status: "completed",
-          resolvedPrompt: artifactRequest.resolvedPrompt || artifactRequest.prompt,
-        });
-      }
-      await persistReplyMemories({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: artifact.reply,
-        language: userLanguage,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: Date.now() - contextStartedAt,
-        persistence_ms: Date.now() - persistStartedAt,
-        prompt_chars: text.length,
-        response_chars: artifact.reply.length,
-        response_bytes: Buffer.byteLength(String(artifact.reply || ""), "utf8"),
-        status: "artifact_file",
-      });
-      writeEventStreamPacket(res, "done", {
-        reply: artifact.reply,
-        meta: { ...saved.meta, response_language: userLanguage },
-      });
-      return res.end();
-    }
-
-    if (contextStrategy.fastExternalOnly && String(quickExternalContext?.direct_answer || "").trim()) {
-      const directReply = repairMojibakeText(String(quickExternalContext.direct_answer || "").trim());
-      const directSources = Array.isArray(quickExternalContext?.sources) ? quickExternalContext.sources.slice(0, 8) : [];
-      const directMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: userLanguage,
-        sources: directSources,
-        show_sources: shouldShowSourcesForReply(text),
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: directReply,
-        responseProfile,
-        responseLanguage: userLanguage,
-        metaObject: directMetaObject,
-        sources: directSources,
-        relevantMemoryEntries,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        recordUsage: true,
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: Date.now() - contextStartedAt,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: directReply.length,
-        response_bytes: Buffer.byteLength(String(directReply || ""), "utf8"),
-        ...mergeToolUsageMetrics(quickExternalContext?.metrics || null),
-        status: "tool_direct_answer",
-      });
-      writeEventStreamPacket(res, "done", { reply: directReply, meta: directMetaObject });
-      return res.end();
-    }
-
-    const cachedReply = !queryLooksExternalOrCurrent(text)
-      ? await findSemanticCache(req.user.sub, text, userLanguage, queryEmbedding, knowledgeSignature)
-      : null;
-
-    if (cachedReply?.text) {
-      const safeCachedText = repairMojibakeText(String(cachedReply.text || ""));
-      if (responseLooksSelfLimiting(safeCachedText) || responseLooksWeak(safeCachedText)) {
-        // Ignore low-quality cache hits so they do not contaminate future streaming responses.
-      } else {
-      const cachedMetaObject = makeStructuredResponseMeta(responseProfile, {
-        response_language: cachedReply.responseLanguage || userLanguage,
-        sources: cachedReply.sources || [],
-        show_sources: shouldShowSourcesForReply(text),
-      });
-      const persistMetrics = await persistAssistantTextReply({
-        conversationId: id,
-        userId: req.user.sub,
-        userText: text,
-        assistantText: safeCachedText,
-        responseProfile,
-        responseLanguage: cachedReply.responseLanguage || userLanguage,
-        metaObject: cachedMetaObject,
-        sources: cachedReply.sources || [],
-        relevantMemoryEntries,
-        resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-        recordUsage: Boolean((cachedReply.sources || []).length),
-        allowWeakResponseLog: false,
-      });
-      finalizeChatPerformanceSample(perfSample, {
-        total_response_ms: Date.now() - perfSample.started_at,
-        api_latency_ms: 0,
-        internal_processing_ms: Date.now() - perfSample.started_at,
-        context_assembly_ms: Date.now() - contextStartedAt,
-        persistence_ms: persistMetrics.persistence_ms,
-        prompt_chars: text.length,
-        response_chars: safeCachedText.length,
-        response_bytes: Buffer.byteLength(String(safeCachedText || ""), "utf8"),
-        status: "cache_hit",
-      });
-      writeEventStreamPacket(res, "done", { reply: safeCachedText, meta: cachedMetaObject });
-      return res.end();
-      }
-    }
-
-    const contextLayers = await buildConversationKnowledgeContext({
-      text,
-      userLanguage,
-      currentUser,
-      queryEmbedding,
-      supportAssets,
-      strategy: contextStrategy,
-      preloadedExternalToolContext: quickExternalContext,
-    });
-    if (contextStrategy.fastTalkersOnly) {
-      const talkersDirectReply = buildTalkersContextFallbackAnswer(contextLayers.talkersPublicBundle);
-      if (talkersDirectReply) {
-        const talkersSources = Array.isArray(contextLayers.talkersPublicBundle?.sources)
-          ? contextLayers.talkersPublicBundle.sources.slice(0, 8)
-          : [];
-        const talkersMetaObject = makeStructuredResponseMeta(responseProfile, {
-          response_language: userLanguage,
-          sources: talkersSources,
-          show_sources: shouldShowSourcesForReply(text),
-        });
-        const persistMetrics = await persistAssistantTextReply({
-          conversationId: id,
-          userId: req.user.sub,
-          userText: text,
-          assistantText: talkersDirectReply,
-          responseProfile,
-          responseLanguage: userLanguage,
-          metaObject: talkersMetaObject,
-          sources: talkersSources,
-          relevantMemoryEntries,
-          resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-          recordUsage: true,
-          allowWeakResponseLog: false,
-        });
-        finalizeChatPerformanceSample(perfSample, {
-          total_response_ms: Date.now() - perfSample.started_at,
-          api_latency_ms: 0,
-          internal_processing_ms: Date.now() - perfSample.started_at,
-          context_assembly_ms: Date.now() - contextStartedAt,
-          persistence_ms: persistMetrics.persistence_ms,
-          prompt_chars: text.length,
-          response_chars: talkersDirectReply.length,
-          response_bytes: Buffer.byteLength(String(talkersDirectReply || ""), "utf8"),
-          ...mergeToolUsageMetrics(contextLayers.toolMetrics || null),
-          status: "talkers_direct_answer",
-        });
-        writeEventStreamPacket(res, "done", { reply: talkersDirectReply, meta: talkersMetaObject });
-        return res.end();
-      }
-    }
-    const contextText = contextLayers.contextText;
-    const contextAssemblyMs = Date.now() - contextStartedAt;
-
-    writeEventStreamPacket(res, "stage", {
-      stage: "ai",
-      label: "Recebendo resposta da IA",
-    });
-
-    const assistant = await openaiReplyStream({
-      conversationId: id,
-      userId: req.user.sub,
-      userText: text,
-      contextText,
-      baseSources: contextLayers.mergedKnowledgeSources,
-      topicSnapshot,
-      responseProfile,
-      contextStrategy,
-      currentUser,
-      relevantMemoryEntries,
-      visionInputs: supportAssets.visionInputs || [],
-      documentInputs: supportAssets.documentInputs || [],
-      onDelta: async (delta) => {
-        writeEventStreamPacket(res, "delta", { delta, text: delta });
-      },
-    });
-
-    let finalAssistantText = repairMojibakeText(String(assistant.text || "").trim());
-    let finalAssistantSources = Array.isArray(assistant.sources) ? assistant.sources : [];
-    const combinedToolMetrics = mergeToolUsageMetrics(
-      contextLayers.toolMetrics || null,
-      assistant.metrics || null
-    );
-
-    if (responseLooksSelfLimiting(finalAssistantText) || responseLooksWeak(finalAssistantText)) {
-      const directFallback = buildExternalContextFallbackAnswer(contextLayers.externalToolContext, userLanguage);
-      if (directFallback) {
-        finalAssistantText = directFallback;
-        finalAssistantSources = (contextLayers.externalToolContext?.sources || []).slice(0, 8);
-      } else if (queryAsksAboutAssistantCapabilities(text)) {
-        finalAssistantText = buildAssistantCapabilitiesAnswer(userLanguage);
-        finalAssistantSources = [];
-      }
-    }
-
-    const assistantMetaObject = makeStructuredResponseMeta(responseProfile, {
-      response_language: userLanguage,
-      sources: finalAssistantSources || [],
-      show_sources: shouldShowSourcesForReply(text),
-    });
-    writeEventStreamPacket(res, "stage", {
-      stage: "persist",
-      label: "Salvando conversa e telemetria",
-    });
-    const persistMetrics = await persistAssistantTextReply({
-      conversationId: id,
-      userId: req.user.sub,
-      userText: text,
-      assistantText: finalAssistantText,
-      responseProfile,
-      responseLanguage: userLanguage,
-      metaObject: assistantMetaObject,
-      sources: finalAssistantSources || [],
-      queryEmbedding,
-      knowledgeSignature,
-      relevantMemoryEntries,
-      knowledgeMemoryEntries: contextLayers.knowledgeMemoryEntries,
-      resetMemory: Boolean(topicSnapshot?.topicShift?.isShift),
-      cacheSemantic: true,
-      recordUsage: true,
-      allowWeakResponseLog: true,
-    });
-
-    finalizeChatPerformanceSample(perfSample, {
-      total_response_ms: Date.now() - perfSample.started_at,
-      api_latency_ms: Number(assistant?.metrics?.api_latency_ms || 0),
-      internal_processing_ms: Math.max(0, (Date.now() - perfSample.started_at) - Number(assistant?.metrics?.api_latency_ms || 0)),
-      context_assembly_ms: contextAssemblyMs,
-      persistence_ms: persistMetrics.persistence_ms,
-      prompt_chars: text.length,
-      response_chars: String(finalAssistantText || "").length,
-      payload_bytes: Number(assistant?.metrics?.payload_bytes || 0),
-      response_bytes: Number(assistant?.metrics?.response_bytes || Buffer.byteLength(String(finalAssistantText || ""), "utf8")),
-      ...combinedToolMetrics,
-      status: assistant?.metrics?.status || "success",
-    });
-
-    writeEventStreamPacket(res, "done", {
-      reply: finalAssistantText,
-      meta: assistantMetaObject,
-      metrics: {
-        ...(assistant.metrics || {}),
-        ...combinedToolMetrics,
-      },
-    });
-    res.end();
-  } catch (err) {
-    finalizeChatPerformanceSample(perfSample, {
-      total_response_ms: Date.now() - perfSample.started_at,
-      api_latency_ms: 0,
-      internal_processing_ms: Date.now() - perfSample.started_at,
-      prompt_chars: text.length,
-      response_chars: 0,
-      status: err?.message || "send_stream_failed",
-    });
-    writeEventStreamPacket(res, "error", {
-      error: err?.message || "conversation_send_stream_failed",
-    });
-    res.end();
-  }
 });
 
 app.get("/api/admin/departments", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
@@ -10104,11 +14690,15 @@ app.get("/api/admin/department-submenus", requireAuth(JWT_SECRET), requireRole("
   res.json({ submenus });
 });
 
+app.get("/api/admin/icon-options", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
+  res.json({ icons: listAvailableSubmenuIcons() });
+});
+
 app.post("/api/admin/department-submenus", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const departmentId = Number(req.body?.department_id || 0);
   const title = String(req.body?.title || '').trim();
   const description = String(req.body?.description || '').trim();
-  const icon = String(req.body?.icon || 'layers').trim() || 'layers';
+  const icon = normalizeSubmenuIconName(req.body?.icon, { fallback: 'folder' });
   const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active')
     ? parseBooleanInput(req.body?.is_active)
     : true;
@@ -10152,7 +14742,12 @@ app.patch("/api/admin/department-submenus/:id", requireAuth(JWT_SECRET), require
     : Number(existing.department_id || 0);
   const title = Object.prototype.hasOwnProperty.call(req.body || {}, 'title') ? String(req.body?.title || '').trim() : String(existing.title || '').trim();
   const description = Object.prototype.hasOwnProperty.call(req.body || {}, 'description') ? String(req.body?.description || '').trim() : String(existing.description || '').trim();
-  const icon = Object.prototype.hasOwnProperty.call(req.body || {}, 'icon') ? String(req.body?.icon || '').trim() : String(existing.icon || 'layers').trim();
+  const icon = Object.prototype.hasOwnProperty.call(req.body || {}, 'icon')
+    ? normalizeSubmenuIconName(req.body?.icon, {
+        fallback: String(existing.icon || 'folder').trim().toLowerCase() || 'folder',
+        allowLegacy: existing.icon,
+      })
+    : String(existing.icon || 'folder').trim();
   const isActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active') ? parseBooleanInput(req.body?.is_active) : coerceDbBoolean(existing.is_active);
   const slug = slugifyDepartmentName(req.body?.slug || title || existing.slug);
   const viewKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'view_key')
@@ -10171,7 +14766,7 @@ app.patch("/api/admin/department-submenus/:id", requireAuth(JWT_SECRET), require
 
   await run(
     "UPDATE department_submenus SET department_id=?, title=?, slug=?, description=?, icon=?, view_key=?, is_active=?, updated_at=datetime('now') WHERE id=?",
-    [departmentId, title, slug, description || null, icon || 'layers', viewKey || slug, isActive, submenuId]
+    [departmentId, title, slug, description || null, icon || 'folder', viewKey || slug, isActive, submenuId]
   );
 
   await logEvent(req.user.sub, 'admin_update_department_submenu', { submenu_id: submenuId, department_id: departmentId, title, slug });
@@ -10357,18 +14952,9 @@ app.get("/api/admin/system-logs", requireAuth(JWT_SECRET), requireRole("admin"),
   });
 });
 
-app.get("/api/admin/cockpit", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  try {
-    const cockpit = await buildAdminCockpitPayload();
-    res.json({ cockpit });
-  } catch (err) {
-    res.status(500).json({ error: err?.message || "admin_cockpit_failed" });
-  }
-});
-
 app.get("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const users = await all(
-    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, created_at FROM users ORDER BY id DESC",
+    "SELECT id, name, email, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json, created_at FROM users ORDER BY id DESC",
     []
   );
 
@@ -10418,7 +15004,7 @@ app.post("/api/admin/users", requireAuth(JWT_SECRET), requireRole("admin"), asyn
 app.patch("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   const userId = Number(req.params.id);
   const existingUser = await get(
-    "SELECT id, name, email, password_hash, role, department, can_access_intranet, job_title, unit_name FROM users WHERE id=?",
+    "SELECT id, name, email, password_hash, role, department, can_access_intranet, job_title, unit_name, additional_permissions_json FROM users WHERE id=?",
     [userId]
   );
   if (!existingUser) return res.status(404).json({ error: "not_found" });
@@ -10541,6 +15127,9 @@ app.get('/api/admin/sales/records', requireAuth(JWT_SECRET), requireRole('admin'
   const payload = await getSalesSummaryForScope(scope, {
     closerId: req.query?.closer_id,
     status: req.query?.status,
+    language: req.query?.language,
+    modality: req.query?.modality,
+    rating: req.query?.rating,
     search: req.query?.search,
     limit: Math.min(200, Math.max(1, Number(req.query?.limit || 100))),
   });
@@ -10596,15 +15185,15 @@ app.post('/api/admin/sales/import', requireAuth(JWT_SECRET), requireRole('admin'
   const salesWorkbook = (req.files?.sales_workbook || [])[0] || null;
   const postSaleWorkbook = (req.files?.post_sale_workbook || [])[0] || null;
 
-  if (!salesWorkbook) {
+  if (!salesWorkbook && !postSaleWorkbook) {
     cleanupUploadedFiles(uploads);
-    return res.status(400).json({ error: 'missing_sales_workbook' });
+    return res.status(400).json({ error: 'missing_sales_or_post_sale_workbook' });
   }
 
   try {
     const summary = await importSalesWorkbookBatch({
-      salesWorkbookPath: salesWorkbook.path,
-      salesWorkbookName: salesWorkbook.originalname,
+      salesWorkbookPath: salesWorkbook?.path || '',
+      salesWorkbookName: salesWorkbook?.originalname || '',
       postSaleWorkbookPath: postSaleWorkbook?.path || '',
       postSaleWorkbookName: postSaleWorkbook?.originalname || '',
       actorUserId: req.user.sub,
@@ -10617,6 +15206,12 @@ app.post('/api/admin/sales/import', requireAuth(JWT_SECRET), requireRole('admin'
   } finally {
     cleanupUploadedFiles(uploads);
   }
+});
+
+app.post('/api/admin/sales/closers/provision-users', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  const requestedClosers = Array.isArray(req.body?.closers) ? req.body.closers : [];
+  const provisioned = await ensureCloserOperationalUsers(requestedClosers, req.user.sub);
+  res.json({ ok: true, provisioned });
 });
 
 app.get('/api/admin/sales/overview', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
@@ -10633,1218 +15228,80 @@ app.get('/api/admin/sales/overview', requireAuth(JWT_SECRET), requireRole('admin
     recent_runs: recentRuns,
   });
 });
+
+app.get('/api/admin/database/status', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  try {
+    const counts = await collectDatabaseStatusCounts();
+    res.json({
+      ok: true,
+      db_client: DB_CLIENT,
+      db_runtime: {
+        requested_client: REQUESTED_DB_CLIENT || null,
+        selected_client: DB_CLIENT,
+        database_url_present: DATABASE_URL_PRESENT,
+        sqlite_path: DB_CLIENT === "sqlite" ? DB_RUNTIME_CONFIG.sqlite_path : null,
+        postgres_host: DB_CLIENT === "postgres" ? POSTGRES_HOST || null : null,
+      },
+      counts,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'database_status_failed' });
+  }
+});
+
+app.post('/api/admin/database/seed-demo', requireAuth(JWT_SECRET), requireRole('admin'), async (req, res) => {
+  try {
+    const result = await ensureOperationalDemoComplements();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'database_demo_seed_failed' });
+  }
+});
+
+app.post('/api/admin/database/import-sqlite', requireAuth(JWT_SECRET), requireRole('admin'), sqliteImportUploadMiddleware, async (req, res) => {
+  if (DB_CLIENT !== 'postgres') {
+    return res.status(400).json({ error: 'postgres_required' });
+  }
+
+  const sqliteFile = ((req.files?.sqlite_db || [])[0] || (req.files?.file || [])[0] || null);
+  if (!sqliteFile?.path) {
+    return res.status(400).json({ error: 'sqlite_file_required' });
+  }
+
+  const sourcePath = path.resolve(sqliteFile.path);
+  try {
+    const importResult = await importLegacySqliteIntoPostgres({
+      sourcePath,
+      skipIfTargetHasData: false,
+      withSummary: true,
+    });
+    const demoResult = await ensureOperationalDemoComplements();
+    const counts = await collectDatabaseStatusCounts();
+    res.json({
+      ok: true,
+      import_result: importResult,
+      demo_result: demoResult,
+      counts,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'sqlite_import_failed' });
+  } finally {
+    try {
+      if (fs.existsSync(sourcePath)) fs.unlinkSync(sourcePath);
+    } catch (cleanupErr) {
+      startupLogger.warn('Falha ao limpar SQLite temporario importado.', {
+        path: sourcePath,
+        message: cleanupErr?.message || String(cleanupErr || 'sqlite_temp_cleanup_failed'),
+      });
+    }
+  }
+});
+
 app.delete("/api/admin/users/:id", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
   await logEvent(req.user.sub, "admin_delete_user_blocked", { target_user_id: Number(req.params.id) || null });
   res.status(403).json({ error: "user_deletion_disabled" });
 });
 
-app.get("/api/admin/rag/status", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const rows = await all(
-    `SELECT ks.id, ks.original_name, ks.stored_name, ks.mime_type, ks.language, ks.department_name, ks.source_kind, ks.sync_status,
-            ks.openai_file_id, ks.vector_store_file_id, ks.uploaded_by, ks.processing_state_json, ks.created_at, ks.updated_at,
-            COUNT(me.id) AS knowledge_memory_total
-       FROM knowledge_sources ks
-  LEFT JOIN memory_entries me
-         ON me.knowledge_source_id = ks.id
-        AND me.memory_scope = ?
-      GROUP BY ks.id, ks.original_name, ks.stored_name, ks.mime_type, ks.language, ks.department_name, ks.source_kind,
-               ks.sync_status, ks.openai_file_id, ks.vector_store_file_id, ks.uploaded_by, ks.processing_state_json, ks.created_at, ks.updated_at`,
-    [KNOWLEDGE_MEMORY_SCOPE]
-  );
-  const counts = summarizeKnowledgeAdminRows(rows.map((row) => buildKnowledgeAdminRow(row)));
-  res.json({
-    ok: true,
-    vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
-    openai_api_configured: Boolean(process.env.OPENAI_API_KEY),
-    vector_store_id: OPENAI_VECTOR_STORE_ID || null,
-    local_dir: knowledgeDir,
-    counts,
-    needs_reprocess: counts.needs_reprocess,
-    recent_failures: counts.failed,
-    available_to_ai: counts.available,
-    background: {
-      running: knowledgeBackgroundState.running,
-      queued: knowledgeBackgroundState.queue.length,
-      processed: Number(knowledgeBackgroundState.queue_processed || 0),
-      failed: Number(knowledgeBackgroundState.queue_failed || 0),
-      current_source_id: knowledgeBackgroundState.current_source_id || null,
-      last_error: knowledgeBackgroundState.last_error || "",
-    },
-    checked_at: new Date().toISOString(),
-  });
-});
-
-app.post("/api/admin/rag/cleanup-incompatible", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  try {
-    const summary = await purgeIncompatibleKnowledgeAssets(req.user.sub);
-    res.json({ ok: true, summary });
-  } catch (err) {
-    console.log("Erro ao limpar arquivos incompatíveis da base:", err?.message || err);
-    res.status(500).json({ error: err?.message || "knowledge_cleanup_failed" });
-  }
-});
-
-app.get("/api/admin/rag/files", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const [files, totalRow] = await Promise.all([
-    all(
-      `SELECT ks.id, ks.original_name, ks.stored_name, ks.mime_type, ks.language, ks.content_hash, ks.department_name, ks.source_kind, ks.sync_status,
-              ks.openai_file_id, ks.vector_store_file_id, ks.uploaded_by, ks.processing_state_json, ks.created_at, ks.updated_at,
-              COUNT(me.id) AS knowledge_memory_total
-         FROM knowledge_sources ks
-    LEFT JOIN memory_entries me
-           ON me.knowledge_source_id = ks.id
-          AND me.memory_scope = ?
-        GROUP BY ks.id, ks.original_name, ks.stored_name, ks.mime_type, ks.language, ks.content_hash, ks.department_name, ks.source_kind,
-                 ks.sync_status, ks.openai_file_id, ks.vector_store_file_id, ks.uploaded_by, ks.processing_state_json, ks.created_at, ks.updated_at
-        ORDER BY datetime(ks.updated_at) DESC, ks.id DESC
-        LIMIT 50`,
-      [KNOWLEDGE_MEMORY_SCOPE]
-    ),
-    get("SELECT COUNT(*) AS total FROM knowledge_sources"),
-  ]);
-
-  const enriched = [];
-  for (const file of files) {
-    const refreshed = ["processing", "failed", "pending"].includes(String(file.sync_status || "").toLowerCase())
-      ? await refreshKnowledgeSourceVectorStatus(file, { force: false })
-      : file;
-    enriched.push(buildKnowledgeAdminRow(refreshed || file));
-  }
-
-  res.json({ files: enriched, total: Number(totalRow?.total || 0) });
-});
-
-app.get("/api/admin/rag/files/:id/logs", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const knowledgeSourceId = Number(req.params.id);
-  const source = await getKnowledgeSourceById(knowledgeSourceId);
-  if (!source) return res.status(404).json({ error: "not_found" });
-
-  const [logs, history] = await Promise.all([
-    all(
-      `SELECT id, knowledge_source_id, stage_key, stage_status, message, detail_json, actor_user_id, created_at
-         FROM knowledge_processing_logs
-        WHERE knowledge_source_id=?
-        ORDER BY datetime(created_at) DESC, id DESC
-        LIMIT 120`,
-      [knowledgeSourceId]
-    ),
-    all(
-      `SELECT id, event_type, event_status, title, detail_text, meta_json, created_at
-         FROM ai_training_events
-        WHERE knowledge_source_id=?
-        ORDER BY datetime(created_at) DESC, id DESC
-        LIMIT 80`,
-      [knowledgeSourceId]
-    ),
-  ]);
-
-  res.json({
-    source: buildKnowledgeAdminRow(source),
-    logs,
-    training_events: history,
-  });
-});
-
-app.post("/api/admin/rag/files/:id/reprocess", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  try {
-    const knowledgeSourceId = Number(req.params.id);
-    const result = await reprocessKnowledgeSourceById(knowledgeSourceId, req.user.sub);
-    res.json({ ok: true, file: result });
-  } catch (err) {
-    console.log("Erro ao reprocessar arquivo da base:", err?.message || err);
-    res.status(err?.message === "knowledge_source_not_found" ? 404 : 400).json({
-      error: err?.message || "knowledge_reprocess_failed",
-    });
-  }
-});
-
-app.post("/api/admin/rag/reprocess-pending", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  try {
-    const added = await enqueuePendingKnowledgeSourcesBatch(Number(req.body?.limit || BACKGROUND_KNOWLEDGE_SWEEP_BATCH));
-    res.json({
-      ok: true,
-      queued: added,
-      background: {
-        running: knowledgeBackgroundState.running,
-        queued: knowledgeBackgroundState.queue.length,
-        processed: Number(knowledgeBackgroundState.queue_processed || 0),
-        failed: Number(knowledgeBackgroundState.queue_failed || 0),
-        current_source_id: knowledgeBackgroundState.current_source_id || null,
-      },
-    });
-  } catch (err) {
-    res.status(400).json({ error: err?.message || "knowledge_bulk_reprocess_failed" });
-  }
-});
-
-app.get("/api/admin/ai-training/overview", requireAuth(JWT_SECRET), requireRole("admin"), async (req, res) => {
-  const overview = await buildAiTrainingOverview();
-  res.json(overview);
-});
-
-function getAdminRagUploads(req) {
-  const uploads = [];
-
-  if (req.file) uploads.push(req.file);
-
-  if (req.files && typeof req.files === "object") {
-    for (const group of Object.values(req.files)) {
-      if (Array.isArray(group)) uploads.push(...group);
-    }
-  }
-
-  return uploads.filter(Boolean);
-}
-
-function getRagUploadFailureStatus(errors = []) {
-  const codes = [...new Set((errors || []).map((item) => String(item?.error || '').trim()).filter(Boolean))];
-  if (!codes.length) return 500;
-  if (codes.every((code) => code === 'knowledge_file_too_large')) return 413;
-  if (codes.every((code) => code === 'knowledge_file_empty')) return 400;
-  if (codes.every((code) => code === 'unsupported_knowledge_file' || code === 'blocked_knowledge_file')) return 400;
-  return 500;
-}
-
-async function createKnowledgeSourceRecord({
-  originalName,
-  storedName,
-  mimeType,
-  language = null,
-  contentHash = null,
-  departmentName = null,
-  sourceKind = "manual_upload",
-  syncStatus = "processing",
-  openaiFileId = null,
-  vectorStoreFileId = null,
-  uploadedBy = null,
-  processingState = null,
-}) {
-  const safeProcessingState = processingState ? deepSanitizeForPostgres(processingState, { convertBuffersToText: true }) : null;
-  const created = await run(
-    "INSERT INTO knowledge_sources (original_name, stored_name, mime_type, language, content_hash, department_name, source_kind, sync_status, openai_file_id, vector_store_file_id, uploaded_by, processing_state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-    [
-      sanitizeFilename(originalName || "arquivo"),
-      sanitizeFilename(storedName || `knowledge-${Date.now()}`),
-      sanitizePersistedText(mimeType || "", { trim: true, maxLength: 255 }) || null,
-      sanitizePersistedText(language || "", { trim: true, maxLength: 24 }) || null,
-      sanitizePersistedText(contentHash || "", { trim: true, maxLength: 255 }) || null,
-      sanitizePersistedText(departmentName || "", { trim: true, maxLength: 120 }) || null,
-      sanitizePersistedText(sourceKind || "manual_upload", { trim: true, maxLength: 60 }) || "manual_upload",
-      sanitizePersistedText(syncStatus || "processing", { trim: true, maxLength: 32 }) || "processing",
-      openaiFileId,
-      vectorStoreFileId,
-      uploadedBy,
-      safeProcessingState ? safeJsonStringify(safeProcessingState, "{}") : null,
-    ]
-  );
-  return created.lastID;
-}
-
-async function prepareKnowledgeVectorUploadFile(source, transcriptText = "") {
-  const fullPath = getKnowledgeSourceFullPath(source);
-  if (!fullPath || !fs.existsSync(fullPath)) {
-    throw new Error("knowledge_source_file_missing");
-  }
-
-  if (isMediaKnowledgeFile(source.original_name, source.mime_type, fullPath)) {
-    const transcriptPath = getTranscriptFilePathForKnowledge(source.stored_name);
-    const normalizedTranscript = sanitizePersistedText(transcriptText || "", {
-      trim: true,
-      normalizeWhitespace: false,
-      maxLength: 250000,
-    });
-    if (!normalizedTranscript) {
-      throw new Error("transcript_missing_for_vector_store");
-    }
-    fs.writeFileSync(transcriptPath, normalizedTranscript, "utf8");
-    return {
-      uploadPath: transcriptPath,
-      uploadName: buildTranscriptStorageName(source.original_name || source.stored_name),
-      uploadMimeType: "text/plain",
-      transcriptPath,
-    };
-  }
-
-  return {
-    uploadPath: fullPath,
-    uploadName: source.original_name,
-    uploadMimeType: source.mime_type || "application/octet-stream",
-    transcriptPath: null,
-  };
-}
-
-async function ingestKnowledgeUpload(uploaded, userId, options = {}) {
-  const tempPath = uploaded.path || path.join(uploadsDir, uploaded.filename);
-  const safeOriginalName = sanitizeFilename(uploaded.originalname || `arquivo-${Date.now()}`);
-  const sizeBytes = Number(uploaded.size || 0);
-  const departmentName = String(options.departmentName || '').trim() || null;
-  const sourceKind = String(options.sourceKind || 'manual_upload').trim() || 'manual_upload';
-
-  if (sizeBytes <= 0) {
-    deleteFileIfExists(tempPath);
-    throw new Error("knowledge_file_empty");
-  }
-
-  if (sizeBytes > MAX_UPLOAD_SIZE_BYTES) {
-    deleteFileIfExists(tempPath);
-    throw new Error("knowledge_file_too_large");
-  }
-
-  const compatibility = classifyKnowledgeCompatibility({
-    originalName: safeOriginalName,
-    mimeType: uploaded.mimetype || "",
-    filePath: tempPath,
-  });
-  if (!compatibility.allowed) {
-    deleteFileIfExists(tempPath);
-    throw new Error(compatibility.reason);
-  }
-
-  const duplicate = await findDuplicateKnowledgeUpload({
-    sourcePath: tempPath,
-    originalName: safeOriginalName,
-    mimeType: uploaded.mimetype || "",
-    sizeBytes,
-  });
-
-  if (duplicate) {
-    try {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    } catch (err) {
-      uploadLogger.warn("Erro ao descartar duplicado temporario.", {
-        filename: safeOriginalName,
-        message: err?.message || String(err || "temp_duplicate_cleanup_failed"),
-      });
-    }
-
-    await logEvent(userId, "admin_rag_upload_duplicate", {
-      filename: safeOriginalName,
-      duplicate_of: duplicate.relPath,
-      reason: duplicate.reason,
-    });
-
-    return {
-      duplicate: true,
-      original_name: safeOriginalName,
-      duplicate_of: duplicate.relPath,
-      duplicate_reason: duplicate.reason,
-    };
-  }
-
-  const storedName = `${Date.now()}-${uploaded.filename}-${safeOriginalName}`;
-  const finalPath = path.join(knowledgeDir, storedName);
-
-  fs.renameSync(tempPath, finalPath);
-
-  const relPath = path.relative(kbDir, finalPath).replace(/\\/g, "/");
-  const initialState = withKnowledgeStage(createKnowledgeProcessingState(), "upload", {
-    status: "completed",
-    size_bytes: sizeBytes,
-    stored_name: storedName,
-    original_name: safeOriginalName,
-    mime_type: uploaded.mimetype || null,
-    message: "Upload recebido e armazenado no disco persistente.",
-  });
-  const knowledgeSourceId = await createKnowledgeSourceRecord({
-    originalName: safeOriginalName,
-    storedName,
-    mimeType: uploaded.mimetype || null,
-    departmentName,
-    sourceKind,
-    syncStatus: "processing",
-    uploadedBy: userId,
-    processingState: initialState,
-  });
-  await appendKnowledgeProcessingLog(knowledgeSourceId, "upload", "completed", "Upload registrado com sucesso.", {
-    size_bytes: sizeBytes,
-    rel_path: relPath,
-  }, userId);
-
-  let state = initialState;
-  let indexed = null;
-  let openaiFile = null;
-  let vectorStoreFile = null;
-  let transcriptText = "";
-  let transcriptLanguage = "";
-
-  try {
-    const isMedia = isMediaKnowledgeFile(safeOriginalName, uploaded.mimetype || "", finalPath);
-    if (isMedia) {
-      state = withKnowledgeStage(state, "transcript", {
-        status: "processing",
-        message: "Gerando transcricao da midia.",
-      });
-      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-      await appendKnowledgeProcessingLog(knowledgeSourceId, "transcript", "processing", "Processamento de transcricao iniciado.", {}, userId);
-
-      const transcriptResult = await transcribeMedia(finalPath, safeOriginalName, uploaded.mimetype || "");
-      transcriptText = normalizeKnowledgeText(transcriptResult?.text || "");
-      logSanitizationIfNeeded(uploadLogger, "Transcricao exigiu sanitizacao antes da persistencia.", transcriptResult?.text || "", {
-        knowledge_source_id: knowledgeSourceId,
-        original_name: safeOriginalName,
-      });
-      transcriptLanguage = normalizeLanguageCode(transcriptResult?.transcriptLanguage || detectConversationLanguage(transcriptText || safeOriginalName));
-
-      state = withKnowledgeStage(state, "transcript", {
-        status: transcriptText ? "completed" : "failed",
-        source_kind: transcriptResult?.sourceKind || "media",
-        used_audio_extraction: Boolean(transcriptResult?.usedAudioExtraction),
-        language: transcriptLanguage || null,
-        message: transcriptText
-          ? "Transcricao concluida com sucesso."
-          : "Não foi possível gerar texto a partir da mídia.",
-      });
-      await appendKnowledgeProcessingLog(
-        knowledgeSourceId,
-        "transcript",
-        transcriptText ? "completed" : "failed",
-        transcriptText ? "Transcricao concluida." : "Transcricao vazia.",
-        {
-          transcript_language: transcriptLanguage || null,
-          transcript_length: transcriptText.length,
-        },
-        userId
-      );
-    } else {
-      state = withKnowledgeStage(state, "transcript", {
-        status: "skipped",
-        message: "Arquivo textual/documental nao exige transcricao.",
-      });
-    }
-
-    state = withKnowledgeStage(state, "parsing", {
-      status: "processing",
-      message: "Extraindo e normalizando conteudo do arquivo.",
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-    await appendKnowledgeProcessingLog(knowledgeSourceId, "parsing", "processing", "Parsing iniciado.", {}, userId);
-
-    indexed = await upsertIndexedDocument({
-      sourcePath: finalPath,
-      relPath,
-      originalName: safeOriginalName,
-      mimeType: uploaded.mimetype || "",
-      departmentName,
-      sourceKind,
-      extractedTextOverride: transcriptText,
-      detectedLanguage: transcriptLanguage,
-    });
-
-    const parsingIssues = Array.isArray(indexed?.issues) ? indexed.issues : [];
-    state = withKnowledgeStage(state, "parsing", {
-      status: indexed?.extractedText ? "completed" : "failed",
-      language: indexed?.language || null,
-      content_hash: indexed?.contentHash || null,
-      message: indexed?.extractedText
-        ? "Conteudo extraido e normalizado com sucesso."
-        : "Nao houve texto extraido do arquivo.",
-      extracted_length: String(indexed?.extractedText || "").length,
-    });
-    state = withKnowledgeStage(state, "health", {
-      status: parsingIssues.length ? "warning" : "healthy",
-      issues: parsingIssues,
-    });
-    await updateKnowledgeSourceFields(knowledgeSourceId, {
-      language: indexed?.language || null,
-      content_hash: indexed?.contentHash || null,
-      processing_state_json: safeJsonStringify(state, "{}"),
-      sync_status: "processing",
-    });
-    await appendKnowledgeProcessingLog(
-      knowledgeSourceId,
-      "parsing",
-      indexed?.extractedText ? "completed" : "failed",
-      indexed?.extractedText ? "Parsing concluido." : "Parsing sem texto utilizavel.",
-      {
-        issues: parsingIssues,
-        language: indexed?.language || null,
-      },
-      userId
-    );
-
-    state = withKnowledgeStage(state, "chunking", {
-      status: indexed?.chunkCount ? "completed" : "failed",
-      chunk_count: Number(indexed?.chunkCount || 0),
-      message: indexed?.chunkCount
-        ? `${indexed.chunkCount} chunk(s) semantico(s) gerado(s).`
-        : "Nenhum chunk semantico foi gerado.",
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-    await appendKnowledgeProcessingLog(
-      knowledgeSourceId,
-      "chunking",
-      indexed?.chunkCount ? "completed" : "failed",
-      indexed?.chunkCount ? "Chunking concluido." : "Chunking sem resultado.",
-      { chunk_count: Number(indexed?.chunkCount || 0) },
-      userId
-    );
-
-    const embeddingResult = await materializeDocumentEmbeddings(indexed?.documentId);
-    state = withKnowledgeStage(state, "embedding", {
-      status: embeddingResult.total > 0 && embeddingResult.failed === 0 ? "completed" : (embeddingResult.completed > 0 ? "processing" : "failed"),
-      total: embeddingResult.total,
-      completed: embeddingResult.completed,
-      failed: embeddingResult.failed,
-      message: embeddingResult.total
-        ? `${embeddingResult.completed}/${embeddingResult.total} embedding(s) gerado(s).`
-        : "Nenhum chunk disponivel para embedding.",
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-    await appendKnowledgeProcessingLog(
-      knowledgeSourceId,
-      "embedding",
-      state.embedding.status,
-      state.embedding.message,
-      embeddingResult,
-      userId
-    );
-
-    const analysisResult = await runKnowledgeSemanticAnalysisStage({
-      knowledgeSourceId,
-      source: await getKnowledgeSourceById(knowledgeSourceId),
-      state,
-      actorUserId: userId,
-    });
-    state = analysisResult.state;
-
-    if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID) {
-      state = withKnowledgeStage(state, "vector_store", {
-        status: "processing",
-        message: "Enviando conteudo para a Vector Store da OpenAI.",
-      });
-      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-      await appendKnowledgeProcessingLog(knowledgeSourceId, "vector_store", "processing", "Upload para Vector Store iniciado.", {}, userId);
-
-      const sourceRecord = await getKnowledgeSourceById(knowledgeSourceId);
-      const uploadTarget = await prepareKnowledgeVectorUploadFile(sourceRecord, indexed?.extractedText || transcriptText);
-
-      openaiFile = await uploadFileToOpenAI(
-        uploadTarget.uploadPath,
-        uploadTarget.uploadName,
-        process.env.OPENAI_API_KEY,
-        "user_data",
-        uploadTarget.uploadMimeType
-      );
-      vectorStoreFile = await attachFileToVectorStore(
-        openaiFile.id,
-        OPENAI_VECTOR_STORE_ID,
-        process.env.OPENAI_API_KEY
-      );
-
-      state = withKnowledgeStage(state, "vector_store", {
-        status: normalizeStageStatus(vectorStoreFile?.status, "processing") === "completed" ? "completed" : "processing",
-        file_id: openaiFile?.id || null,
-        vector_store_file_id: vectorStoreFile?.id || null,
-        file_status: openaiFile?.status || null,
-        vector_status: vectorStoreFile?.status || null,
-        message: "Arquivo enviado para a Vector Store. Validando disponibilidade.",
-      });
-      await updateKnowledgeSourceFields(knowledgeSourceId, {
-        openai_file_id: openaiFile?.id || null,
-        vector_store_file_id: vectorStoreFile?.id || null,
-        processing_state_json: safeJsonStringify(state, "{}"),
-        sync_status: "processing",
-      });
-      await appendKnowledgeProcessingLog(
-        knowledgeSourceId,
-        "vector_store",
-        "processing",
-        "Arquivo enviado para a OpenAI e anexado a Vector Store.",
-        {
-          openai_file_id: openaiFile?.id || null,
-          vector_store_file_id: vectorStoreFile?.id || null,
-        },
-        userId
-      );
-    } else {
-      state = withKnowledgeStage(state, "vector_store", {
-        status: "skipped",
-        message: "Vector Store nao configurada. O conhecimento fica disponivel via indice local.",
-      });
-    }
-
-    const refreshed = await refreshKnowledgeSourceVectorStatus(await getKnowledgeSourceById(knowledgeSourceId), { force: true });
-    const finalRow = buildKnowledgeAdminRow(refreshed || await getKnowledgeSourceById(knowledgeSourceId));
-    await appendKnowledgeProcessingLog(
-      knowledgeSourceId,
-      "final",
-      finalRow.available_to_ai ? "completed" : finalRow.availability_status,
-      finalRow.processing_state?.final?.message || "Processamento concluido.",
-      {
-        available_to_ai: finalRow.available_to_ai,
-        health_issues: finalRow.health_issues,
-      },
-      userId
-    );
-    await logAiTrainingEvent({
-      userId,
-      knowledgeSourceId,
-      eventType: "knowledge_ingested",
-      eventStatus: finalRow.available_to_ai ? "success" : "warning",
-      title: safeOriginalName,
-      detailText: finalRow.processing_state?.final?.message || "Conhecimento ingerido.",
-      meta: {
-        availability_status: finalRow.availability_status,
-        chunking_status: finalRow.chunking_status,
-        embedding_status: finalRow.embedding_status,
-        vector_store_status: finalRow.vector_store_status,
-      },
-    });
-
-    await logEvent(userId, "admin_rag_upload", {
-      knowledge_source_id: knowledgeSourceId,
-      filename: safeOriginalName,
-      openai_file_id: openaiFile?.id || null,
-      vector_store_file_id: vectorStoreFile?.id || null,
-    });
-
-    return {
-      knowledge_source_id: knowledgeSourceId,
-      original_name: safeOriginalName,
-      stored_name: storedName,
-      local_indexed: Boolean(indexed),
-      language: indexed?.language || null,
-      department_name: departmentName,
-      source_kind: sourceKind,
-      sync_status: finalRow.availability_status,
-      openai_file_id: openaiFile?.id || null,
-      vector_store_file_id: vectorStoreFile?.id || null,
-      processing_state: finalRow.processing_state,
-      parsing_status: finalRow.parsing_status,
-      transcript_status: finalRow.transcript_status,
-      chunking_status: finalRow.chunking_status,
-      embedding_status: finalRow.embedding_status,
-      analysis_status: finalRow.analysis_status,
-      vector_store_status: finalRow.vector_store_status,
-      available_to_ai: finalRow.available_to_ai,
-      last_error: finalRow.last_error,
-    };
-  } catch (err) {
-    jobsLogger.error("Erro no pipeline de conhecimento.", {
-      knowledge_source_id: knowledgeSourceId,
-      original_name: safeOriginalName,
-      message: err?.message || String(err || "knowledge_processing_failed"),
-      code: err?.code || "",
-    });
-    state = withKnowledgeStage(state, "health", {
-      status: "failed",
-      issues: [...new Set([...(state.health?.issues || []), "falha_processamento"])],
-    });
-    const failedStage = state.vector_store?.status === "processing"
-      ? "vector_store"
-      : state.embedding?.status === "processing"
-        ? "embedding"
-        : state.analysis?.status === "processing"
-          ? "analysis"
-        : state.chunking?.status === "processing"
-          ? "chunking"
-          : state.parsing?.status === "processing"
-            ? "parsing"
-            : "upload";
-    state = withKnowledgeStage(state, failedStage, {
-      status: "failed",
-      message: err?.message || "knowledge_processing_failed",
-      error: err?.message || "knowledge_processing_failed",
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "failed");
-    await appendKnowledgeProcessingLog(
-      knowledgeSourceId,
-      failedStage,
-      "failed",
-      err?.message || "knowledge_processing_failed",
-      {},
-      userId
-    );
-    await logAiTrainingEvent({
-      userId,
-      knowledgeSourceId,
-      eventType: "knowledge_ingestion_failed",
-      eventStatus: "error",
-      title: safeOriginalName,
-      detailText: err?.message || "knowledge_processing_failed",
-      meta: {
-        failed_stage: failedStage,
-      },
-    });
-    throw err;
-  }
-}
-
-async function reprocessKnowledgeSourceById(knowledgeSourceId, actorUserId, options = {}) {
-  const source = await getKnowledgeSourceById(knowledgeSourceId);
-  if (!source) throw new Error("knowledge_source_not_found");
-
-  const fullPath = getKnowledgeSourceFullPath(source);
-  if (!fullPath || !fs.existsSync(fullPath)) {
-    throw new Error("knowledge_source_file_missing");
-  }
-
-  let state = withKnowledgeStage(getKnowledgeProcessingState(source), "upload", {
-    status: "completed",
-    message: "Arquivo localizado para reprocessamento.",
-  });
-  await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-  await appendKnowledgeProcessingLog(knowledgeSourceId, "upload", "completed", "Reprocessamento iniciado.", {}, actorUserId);
-
-  let transcriptText = "";
-  let transcriptLanguage = "";
-
-  try {
-    if (isMediaKnowledgeFile(source.original_name, source.mime_type, fullPath)) {
-      state = withKnowledgeStage(state, "transcript", {
-        status: "processing",
-        message: "Reprocessando transcricao da midia.",
-      });
-      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-
-      const transcriptResult = await transcribeMedia(fullPath, source.original_name, source.mime_type || "");
-      transcriptText = normalizeKnowledgeText(transcriptResult?.text || "");
-      logSanitizationIfNeeded(uploadLogger, "Transcricao reprocessada exigiu sanitizacao.", transcriptResult?.text || "", {
-        knowledge_source_id: knowledgeSourceId,
-        original_name: source.original_name || source.stored_name,
-      });
-      transcriptLanguage = normalizeLanguageCode(transcriptResult?.transcriptLanguage || detectConversationLanguage(transcriptText || source.original_name));
-
-      state = withKnowledgeStage(state, "transcript", {
-        status: transcriptText ? "completed" : "failed",
-        language: transcriptLanguage || null,
-        source_kind: transcriptResult?.sourceKind || "media",
-        used_audio_extraction: Boolean(transcriptResult?.usedAudioExtraction),
-        message: transcriptText ? "Transcricao reprocessada com sucesso." : "Transcricao vazia durante o reprocessamento.",
-      });
-      await appendKnowledgeProcessingLog(
-        knowledgeSourceId,
-        "transcript",
-        transcriptText ? "completed" : "failed",
-        transcriptText ? "Transcricao reprocessada." : "Transcricao vazia no reprocessamento.",
-        {
-          transcript_language: transcriptLanguage || null,
-          transcript_length: transcriptText.length,
-        },
-        actorUserId
-      );
-    } else {
-      state = withKnowledgeStage(state, "transcript", {
-        status: "skipped",
-        message: "Arquivo textual/documental nao exige transcricao.",
-      });
-    }
-
-    state = withKnowledgeStage(state, "parsing", {
-      status: "processing",
-      message: "Reprocessando parsing e normalizacao do conteudo.",
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-
-    const indexed = await upsertIndexedDocument({
-      sourcePath: fullPath,
-      relPath: path.relative(kbDir, fullPath).replace(/\\/g, "/"),
-      originalName: source.original_name,
-      mimeType: source.mime_type || "",
-      departmentName: source.department_name || "",
-      sourceKind: source.source_kind || "manual_upload",
-      extractedTextOverride: transcriptText,
-      detectedLanguage: transcriptLanguage,
-    });
-
-    const parsingIssues = Array.isArray(indexed?.issues) ? indexed.issues : [];
-    state = withKnowledgeStage(state, "parsing", {
-      status: indexed?.extractedText ? "completed" : "failed",
-      language: indexed?.language || null,
-      content_hash: indexed?.contentHash || null,
-      extracted_length: String(indexed?.extractedText || "").length,
-      message: indexed?.extractedText ? "Parsing reprocessado com sucesso." : "Reprocessamento sem texto utilizavel.",
-    });
-    state = withKnowledgeStage(state, "health", {
-      status: parsingIssues.length ? "warning" : "healthy",
-      issues: parsingIssues,
-    });
-    await updateKnowledgeSourceFields(knowledgeSourceId, {
-      language: indexed?.language || null,
-      content_hash: indexed?.contentHash || null,
-      processing_state_json: safeJsonStringify(state, "{}"),
-      sync_status: "processing",
-    });
-    await appendKnowledgeProcessingLog(knowledgeSourceId, "parsing", state.parsing.status, state.parsing.message, {
-      issues: parsingIssues,
-      language: indexed?.language || null,
-    }, actorUserId);
-
-    state = withKnowledgeStage(state, "chunking", {
-      status: indexed?.chunkCount ? "completed" : "failed",
-      chunk_count: Number(indexed?.chunkCount || 0),
-      message: indexed?.chunkCount
-        ? `${indexed.chunkCount} chunk(s) semantico(s) regenerado(s).`
-        : "Nenhum chunk foi gerado no reprocessamento.",
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-
-    const embeddingResult = await materializeDocumentEmbeddings(indexed?.documentId);
-    state = withKnowledgeStage(state, "embedding", {
-      status: embeddingResult.total > 0 && embeddingResult.failed === 0 ? "completed" : (embeddingResult.completed > 0 ? "processing" : "failed"),
-      total: embeddingResult.total,
-      completed: embeddingResult.completed,
-      failed: embeddingResult.failed,
-      message: embeddingResult.total
-        ? `${embeddingResult.completed}/${embeddingResult.total} embedding(s) gerado(s) no reprocessamento.`
-        : "Nenhum chunk disponivel para embedding.",
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-    await appendKnowledgeProcessingLog(knowledgeSourceId, "embedding", state.embedding.status, state.embedding.message, embeddingResult, actorUserId);
-
-    const analysisResult = await runKnowledgeSemanticAnalysisStage({
-      knowledgeSourceId,
-      source: await getKnowledgeSourceById(knowledgeSourceId),
-      state,
-      actorUserId,
-    });
-    state = analysisResult.state;
-
-    const canReuseVectorStore = Boolean(options.skipVectorStoreUpload) && Boolean(source.vector_store_file_id);
-    if (process.env.OPENAI_API_KEY && OPENAI_VECTOR_STORE_ID && !canReuseVectorStore) {
-      state = withKnowledgeStage(state, "vector_store", {
-        status: "processing",
-        message: "Reenviando conteudo para a Vector Store.",
-      });
-      await updateKnowledgeSourceState(knowledgeSourceId, state, "processing");
-
-      const uploadTarget = await prepareKnowledgeVectorUploadFile(source, indexed?.extractedText || transcriptText);
-      const openaiFile = await uploadFileToOpenAI(
-        uploadTarget.uploadPath,
-        uploadTarget.uploadName,
-        process.env.OPENAI_API_KEY,
-        "user_data",
-        uploadTarget.uploadMimeType
-      );
-      const vectorStoreFile = await attachFileToVectorStore(
-        openaiFile.id,
-        OPENAI_VECTOR_STORE_ID,
-        process.env.OPENAI_API_KEY
-      );
-
-      state = withKnowledgeStage(state, "vector_store", {
-        status: normalizeStageStatus(vectorStoreFile?.status, "processing") === "completed" ? "completed" : "processing",
-        file_id: openaiFile?.id || null,
-        vector_store_file_id: vectorStoreFile?.id || null,
-        file_status: openaiFile?.status || null,
-        vector_status: vectorStoreFile?.status || null,
-        message: "Arquivo reenviado para a Vector Store.",
-      });
-      await updateKnowledgeSourceFields(knowledgeSourceId, {
-        openai_file_id: openaiFile?.id || null,
-        vector_store_file_id: vectorStoreFile?.id || null,
-        processing_state_json: safeJsonStringify(state, "{}"),
-        sync_status: "processing",
-      });
-      await appendKnowledgeProcessingLog(
-        knowledgeSourceId,
-        "vector_store",
-        "processing",
-        "Reindexacao enviada para a OpenAI.",
-        {
-          openai_file_id: openaiFile?.id || null,
-          vector_store_file_id: vectorStoreFile?.id || null,
-        },
-        actorUserId
-      );
-    } else if (canReuseVectorStore) {
-      const refreshedSource = await refreshKnowledgeSourceVectorStatus(source, { force: false });
-      const refreshedState = getKnowledgeProcessingState(refreshedSource || source);
-      state = withKnowledgeStage(state, "vector_store", {
-        status: normalizeStageStatus(refreshedState.vector_store?.status, "completed"),
-        file_id: refreshedState.vector_store?.file_id || source.openai_file_id || null,
-        vector_store_file_id: refreshedState.vector_store?.vector_store_file_id || source.vector_store_file_id || null,
-        file_status: refreshedState.vector_store?.file_status || null,
-        vector_status: refreshedState.vector_store?.vector_status || null,
-        message: "Vector Store reaproveitada sem reenviar o arquivo.",
-      });
-      await updateKnowledgeSourceFields(knowledgeSourceId, {
-        openai_file_id: source.openai_file_id || null,
-        vector_store_file_id: source.vector_store_file_id || null,
-        processing_state_json: safeJsonStringify(state, "{}"),
-        sync_status: "processing",
-      });
-      await appendKnowledgeProcessingLog(
-        knowledgeSourceId,
-        "vector_store",
-        state.vector_store.status,
-        "Vector Store reaproveitada durante o reprocessamento.",
-        {
-          openai_file_id: source.openai_file_id || null,
-          vector_store_file_id: source.vector_store_file_id || null,
-        },
-        actorUserId
-      );
-    } else {
-      state = withKnowledgeStage(state, "vector_store", {
-        status: "skipped",
-        message: "Vector Store nao configurada. Reprocessamento local concluido.",
-      });
-    }
-
-    const refreshed = await refreshKnowledgeSourceVectorStatus(await getKnowledgeSourceById(knowledgeSourceId), { force: true });
-    const finalRow = buildKnowledgeAdminRow(refreshed || await getKnowledgeSourceById(knowledgeSourceId));
-    await appendKnowledgeProcessingLog(
-      knowledgeSourceId,
-      "final",
-      finalRow.available_to_ai ? "completed" : finalRow.availability_status,
-      finalRow.processing_state?.final?.message || "Reprocessamento concluido.",
-      {
-        available_to_ai: finalRow.available_to_ai,
-        health_issues: finalRow.health_issues,
-      },
-      actorUserId
-    );
-    await logAiTrainingEvent({
-      userId: actorUserId,
-      knowledgeSourceId,
-      eventType: "knowledge_reprocessed",
-      eventStatus: finalRow.available_to_ai ? "success" : "warning",
-      title: source.original_name,
-      detailText: finalRow.processing_state?.final?.message || "Reprocessamento concluido.",
-    });
-    return finalRow;
-  } catch (err) {
-    const failedStage = state.vector_store?.status === "processing"
-      ? "vector_store"
-      : state.embedding?.status === "processing"
-        ? "embedding"
-        : state.analysis?.status === "processing"
-          ? "analysis"
-        : state.chunking?.status === "processing"
-          ? "chunking"
-          : state.parsing?.status === "processing"
-            ? "parsing"
-            : state.transcript?.status === "processing"
-              ? "transcript"
-              : "upload";
-    state = withKnowledgeStage(state, failedStage, {
-      status: "failed",
-      message: err?.message || "knowledge_reprocess_failed",
-      error: err?.message || "knowledge_reprocess_failed",
-    });
-    state = withKnowledgeStage(state, "health", {
-      status: "failed",
-      issues: [...new Set([...(state.health?.issues || []), "falha_reprocessamento"])],
-    });
-    await updateKnowledgeSourceState(knowledgeSourceId, state, "failed");
-    await appendKnowledgeProcessingLog(knowledgeSourceId, failedStage, "failed", err?.message || "knowledge_reprocess_failed", {}, actorUserId);
-    await logAiTrainingEvent({
-      userId: actorUserId,
-      knowledgeSourceId,
-      eventType: "knowledge_reprocess_failed",
-      eventStatus: "error",
-      title: source.original_name,
-      detailText: err?.message || "knowledge_reprocess_failed",
-      meta: {
-        failed_stage: failedStage,
-      },
-    });
-    throw err;
-  }
-}
-
-async function buildAiTrainingOverview() {
-  const [
-    allSourceRows,
-    recentLogs,
-    recentEvents,
-    recentMemoryRows,
-    memoryTopicRows,
-    topUsedRows,
-    totalMemoryRow,
-    documentMemoryRow,
-    conversationalMemoryRow,
-    usedKnowledgeRow,
-  ] = await Promise.all([
-    all(`SELECT ks.id, ks.original_name, ks.stored_name, ks.mime_type, ks.language, ks.department_name, ks.source_kind, ks.sync_status,
-                ks.openai_file_id, ks.vector_store_file_id, ks.uploaded_by, ks.processing_state_json, ks.created_at, ks.updated_at,
-                COUNT(me.id) AS knowledge_memory_total
-           FROM knowledge_sources ks
-      LEFT JOIN memory_entries me
-             ON me.knowledge_source_id = ks.id
-            AND me.memory_scope = ?
-          GROUP BY ks.id, ks.original_name, ks.stored_name, ks.mime_type, ks.language, ks.department_name, ks.source_kind,
-                   ks.sync_status, ks.openai_file_id, ks.vector_store_file_id, ks.uploaded_by, ks.processing_state_json, ks.created_at, ks.updated_at
-          ORDER BY datetime(ks.updated_at) DESC, ks.id DESC`, [KNOWLEDGE_MEMORY_SCOPE]),
-    all(`SELECT id, knowledge_source_id, stage_key, stage_status, message, detail_json, actor_user_id, created_at
-           FROM knowledge_processing_logs
-          ORDER BY datetime(created_at) DESC, id DESC
-          LIMIT 80`),
-    all(`SELECT id, user_id, conversation_id, knowledge_source_id, event_type, event_status, title, detail_text, meta_json, created_at
-           FROM ai_training_events
-          ORDER BY datetime(created_at) DESC, id DESC
-          LIMIT 80`),
-    all(`SELECT id, user_id, conversation_id, knowledge_source_id, memory_scope, memory_kind, title, content_text, topics_json, language, created_at, updated_at
-           FROM memory_entries
-          ORDER BY datetime(updated_at) DESC, id DESC
-          LIMIT 120`),
-    all(`SELECT topics_json, memory_scope, memory_kind FROM memory_entries`),
-    all(`SELECT ai_training_events.knowledge_source_id, COUNT(*) AS total, MAX(knowledge_sources.original_name) AS name
-           FROM ai_training_events
-      LEFT JOIN knowledge_sources ON knowledge_sources.id = ai_training_events.knowledge_source_id
-          WHERE event_type='knowledge_used' AND ai_training_events.knowledge_source_id IS NOT NULL
-          GROUP BY ai_training_events.knowledge_source_id
-          ORDER BY total DESC
-          LIMIT 10`),
-    get("SELECT COUNT(*) AS total FROM memory_entries", []),
-    get("SELECT COUNT(*) AS total FROM memory_entries WHERE memory_scope=?", [KNOWLEDGE_MEMORY_SCOPE]),
-    get("SELECT COUNT(*) AS total FROM memory_entries WHERE memory_scope<>?", [KNOWLEDGE_MEMORY_SCOPE]),
-    get("SELECT COUNT(DISTINCT knowledge_source_id) AS total FROM ai_training_events WHERE event_type='knowledge_used' AND knowledge_source_id IS NOT NULL", []),
-  ]);
-
-  const knowledgeRows = allSourceRows.map((source) => buildKnowledgeAdminRow(source));
-  const counts = summarizeKnowledgeAdminRows(knowledgeRows);
-  const needsReprocessRows = knowledgeRows.filter((row) => needsKnowledgeReprocess(row)).slice(0, 24);
-  const failedRows = knowledgeRows
-    .filter((row) => row.availability_status === "failed" || row.issue_count > 0)
-    .slice(0, 24);
-
-  const topicCounter = new Map();
-  for (const row of memoryTopicRows) {
-    const topics = safeJsonParse(row.topics_json || "[]") || [];
-    topics.forEach((topic) => {
-      const safe = String(topic || "").trim();
-      if (!safe) return;
-      topicCounter.set(safe, (topicCounter.get(safe) || 0) + 1);
-    });
-  }
-
-  const topTopics = [...topicCounter.entries()]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .slice(0, 12)
-    .map(([topic, total]) => ({ topic, total }));
-
-  const sourceLookup = new Map(knowledgeRows.map((row) => [Number(row.id), row]));
-  const topDocuments = topUsedRows.map((row) => ({
-    knowledge_source_id: row.knowledge_source_id,
-    total: Number(row.total || 0),
-    name: row.name || sourceLookup.get(Number(row.knowledge_source_id))?.original_name || `Documento #${row.knowledge_source_id}`,
-  }));
-
-  return {
-    openai: {
-      api_configured: Boolean(process.env.OPENAI_API_KEY),
-      vector_store_configured: Boolean(OPENAI_VECTOR_STORE_ID),
-      vector_store_id: OPENAI_VECTOR_STORE_ID || null,
-      checked_at: new Date().toISOString(),
-    },
-    knowledge: {
-      counts: {
-        ...counts,
-        documents_with_memory: Number(documentMemoryRow?.total || 0),
-        documents_used_in_responses: Number(usedKnowledgeRow?.total || 0),
-      },
-      files: knowledgeRows.slice(0, 40),
-      needs_reprocess: needsReprocessRows,
-      recent_failures: failedRows,
-      top_documents: topDocuments,
-    },
-    processing_logs: recentLogs,
-    memories: {
-      total: Number(totalMemoryRow?.total || 0),
-      document_total: Number(documentMemoryRow?.total || 0),
-      conversational_total: Number(conversationalMemoryRow?.total || 0),
-      recent: recentMemoryRows.slice(0, 20),
-      top_topics: topTopics,
-      by_scope: recentMemoryRows.reduce((acc, row) => {
-        const key = row.memory_scope || "unknown";
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {}),
-    },
-    training_events: {
-      recent: recentEvents,
-      weak_responses: recentEvents.filter((event) => event.event_type === "weak_response").slice(0, 20),
-      memory_hits: recentEvents.filter((event) => event.event_type === "memory_hit").slice(0, 20),
-      knowledge_hits: recentEvents.filter((event) => event.event_type === "knowledge_used").slice(0, 20),
-    },
-    background: {
-      running: knowledgeBackgroundState.running,
-      queued: knowledgeBackgroundState.queue.length,
-      processed: Number(knowledgeBackgroundState.queue_processed || 0),
-      failed: Number(knowledgeBackgroundState.queue_failed || 0),
-      enqueued: Number(knowledgeBackgroundState.queue_enqueued || 0),
-      current_source_id: knowledgeBackgroundState.current_source_id || null,
-      last_started_at: knowledgeBackgroundState.last_started_at || null,
-      last_finished_at: knowledgeBackgroundState.last_finished_at || null,
-      last_error: knowledgeBackgroundState.last_error || "",
-      last_sweep_at: knowledgeBackgroundState.last_sweep_at || null,
-    },
-  };
-}
-
-function enqueueKnowledgeSourceForBackgroundReprocess(knowledgeSourceId, options = {}) {
-  const safeId = Number(knowledgeSourceId || 0);
-  if (!safeId || knowledgeBackgroundState.queuedIds.has(safeId)) return false;
-  knowledgeBackgroundState.queue.push({
-    id: safeId,
-    actorUserId: options.actorUserId || null,
-    reason: options.reason || "background_backfill",
-  });
-  knowledgeBackgroundState.queuedIds.add(safeId);
-  knowledgeBackgroundState.queue_enqueued += 1;
-  setTimeout(() => {
-    runKnowledgeBackgroundWorker().catch((err) => {
-      jobsLogger.error("Erro no worker de reprocessamento em background.", {
-        message: err?.message || String(err || "knowledge_background_worker_failed"),
-      });
-    });
-  }, 0);
-  return true;
-}
-
-async function enqueuePendingKnowledgeSourcesBatch(limit = BACKGROUND_KNOWLEDGE_SWEEP_BATCH) {
-  const rows = await all(
-    `SELECT ks.id, ks.sync_status, ks.vector_store_file_id, ks.processing_state_json, ks.updated_at,
-            COUNT(me.id) AS knowledge_memory_total
-       FROM knowledge_sources ks
-  LEFT JOIN memory_entries me
-         ON me.knowledge_source_id = ks.id
-        AND me.memory_scope = ?
-      GROUP BY ks.id, ks.sync_status, ks.vector_store_file_id, ks.processing_state_json, ks.updated_at
-      ORDER BY datetime(ks.updated_at) DESC, ks.id DESC`,
-    [KNOWLEDGE_MEMORY_SCOPE]
-  );
-
-  let added = 0;
-  for (const row of rows) {
-    if (added >= limit) break;
-    const adminRow = buildKnowledgeAdminRow(row);
-    if (!needsKnowledgeReprocess(adminRow)) continue;
-    if (enqueueKnowledgeSourceForBackgroundReprocess(row.id, { reason: "auto_backfill" })) {
-      added += 1;
-    }
-  }
-
-  knowledgeBackgroundState.last_sweep_at = new Date().toISOString();
-  return added;
-}
-
-async function runKnowledgeBackgroundWorker() {
-  if (knowledgeBackgroundState.running) return;
-  knowledgeBackgroundState.running = true;
-  knowledgeBackgroundState.last_started_at = new Date().toISOString();
-
-  try {
-    while (knowledgeBackgroundState.queue.length) {
-      const nextItem = knowledgeBackgroundState.queue.shift();
-      if (!nextItem) continue;
-      knowledgeBackgroundState.queuedIds.delete(Number(nextItem.id));
-      knowledgeBackgroundState.current_source_id = Number(nextItem.id);
-
-      try {
-        const source = await getKnowledgeSourceById(nextItem.id);
-        const shouldReuseVector = Boolean(source?.vector_store_file_id);
-        jobsLogger.info("Reprocessamento em background iniciado.", {
-          knowledge_source_id: Number(nextItem.id),
-          reason: nextItem.reason || "background_backfill",
-          reuse_vector_store: shouldReuseVector,
-        });
-        await reprocessKnowledgeSourceById(nextItem.id, nextItem.actorUserId, {
-          skipVectorStoreUpload: shouldReuseVector,
-          reason: nextItem.reason || "background_backfill",
-        });
-        knowledgeBackgroundState.queue_processed += 1;
-        knowledgeBackgroundState.last_error = "";
-      } catch (err) {
-        knowledgeBackgroundState.queue_failed += 1;
-        knowledgeBackgroundState.last_error = err?.message || "knowledge_background_reprocess_failed";
-        jobsLogger.error("Falha no reprocessamento em background.", {
-          knowledge_source_id: Number(nextItem.id),
-          reason: nextItem.reason || "background_backfill",
-          message: err?.message || String(err || "knowledge_background_reprocess_failed"),
-          code: err?.code || "",
-        });
-      } finally {
-        knowledgeBackgroundState.current_source_id = null;
-      }
-    }
-  } finally {
-    knowledgeBackgroundState.running = false;
-    knowledgeBackgroundState.last_finished_at = new Date().toISOString();
-  }
-}
-
-function scheduleKnowledgeBackfillSweep(delayMs = BACKGROUND_KNOWLEDGE_SWEEP_INTERVAL_MS) {
-  if (knowledgeBackgroundState.sweepScheduled) return;
-  knowledgeBackgroundState.sweepScheduled = true;
-  setTimeout(async () => {
-    knowledgeBackgroundState.sweepScheduled = false;
-    try {
-      const added = await enqueuePendingKnowledgeSourcesBatch(BACKGROUND_KNOWLEDGE_SWEEP_BATCH);
-      if (knowledgeBackgroundState.queue.length && !knowledgeBackgroundState.running) {
-        runKnowledgeBackgroundWorker().catch((err) => {
-          knowledgeBackgroundState.last_error = err?.message || "knowledge_background_worker_failed";
-          jobsLogger.error("Erro ao reiniciar worker de conhecimento.", {
-            message: err?.message || String(err || "knowledge_background_worker_failed"),
-          });
-        });
-      }
-      if (added > 0 || knowledgeBackgroundState.queue.length) {
-        scheduleKnowledgeBackfillSweep(BACKGROUND_KNOWLEDGE_SWEEP_INTERVAL_MS);
-      } else {
-        scheduleKnowledgeBackfillSweep(BACKGROUND_KNOWLEDGE_IDLE_INTERVAL_MS);
-      }
-    } catch (err) {
-      knowledgeBackgroundState.last_error = err?.message || "knowledge_backfill_sweep_failed";
-      jobsLogger.error("Erro ao varrer base para backfill documental.", {
-        message: err?.message || String(err || "knowledge_backfill_sweep_failed"),
-      });
-      scheduleKnowledgeBackfillSweep(BACKGROUND_KNOWLEDGE_IDLE_INTERVAL_MS);
-    }
-  }, Math.max(1000, Number(delayMs || BACKGROUND_KNOWLEDGE_SWEEP_INTERVAL_MS)));
-}
-
-app.post("/api/admin/rag/upload", requireAuth(JWT_SECRET), requireRole("admin"), ragUploadMiddleware, async (req, res) => {
-  const uploads = getAdminRagUploads(req);
-  if (!uploads.length) return res.status(400).json({ error: "missing_file" });
-
-  const files = [];
-  const duplicates = [];
-  const errors = [];
-
-  const departmentName = String(req.body?.department_name || req.body?.department || "").trim();
-  for (const uploaded of uploads) {
-    try {
-      const result = await ingestKnowledgeUpload(uploaded, req.user.sub, { departmentName, sourceKind: "manual_upload" });
-      if (result?.duplicate) {
-        duplicates.push(result);
-      } else {
-        files.push(result);
-      }
-    } catch (err) {
-      console.log("Erro no upload RAG:", err?.message || err);
-      deleteFileIfExists(uploaded?.path || (uploaded?.filename ? path.join(uploadsDir, uploaded.filename) : ""));
-      errors.push({
-        filename: sanitizeFilename(uploaded?.originalname || uploaded?.filename || "arquivo"),
-        error: err?.message || "rag_upload_failed",
-      });
-    }
-  }
-
-  if (!files.length && !duplicates.length) {
-    return res.status(getRagUploadFailureStatus(errors)).json({
-      error: errors[0]?.error || "rag_upload_failed",
-      errors,
-    });
-  }
-
-  const first = files[0] || null;
-  return res.status(errors.length ? 207 : 200).json({
-    ok: errors.length === 0,
-    uploaded_count: files.length,
-    duplicate_count: duplicates.length,
-    failed_count: errors.length,
-    files,
-    duplicates,
-    errors,
-    knowledge_source_id: first?.knowledge_source_id || null,
-    local_indexed: first?.local_indexed || false,
-    openai_file_id: first?.openai_file_id || null,
-    vector_store_file_id: first?.vector_store_file_id || null,
-  });
-});
 const publicDir = path.join(__dirname, "public");
 
 app.get("/api/intranet/calendar/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
@@ -11925,6 +15382,22 @@ app.get('/api/intranet/sales/bootstrap', requireAuth(JWT_SECRET), requireIntrane
   res.json({ sales });
 });
 
+app.get('/api/intranet/sales/dashboard', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  const user = req.currentUser || await getUserById(req.user.sub);
+  const scope = await getSalesAccessScope(user);
+  if (!scope.enabled) return res.status(403).json({ error: 'sales_access_denied' });
+  const payload = await getSalesSummaryForScope(scope, {
+    closerId: req.query?.closer_id,
+    status: req.query?.status,
+    language: req.query?.language,
+    modality: req.query?.modality,
+    rating: req.query?.rating,
+    search: req.query?.search,
+    limit: Math.min(150, Math.max(1, Number(req.query?.limit || 80))),
+  });
+  res.json({ summary: payload.totals });
+});
+
 app.get('/api/intranet/sales/records', requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
   const user = req.currentUser || await getUserById(req.user.sub);
   const scope = await getSalesAccessScope(user);
@@ -11932,6 +15405,9 @@ app.get('/api/intranet/sales/records', requireAuth(JWT_SECRET), requireIntranetA
   const payload = await getSalesSummaryForScope(scope, {
     closerId: req.query?.closer_id,
     status: req.query?.status,
+    language: req.query?.language,
+    modality: req.query?.modality,
+    rating: req.query?.rating,
     search: req.query?.search,
     limit: Math.min(150, Math.max(1, Number(req.query?.limit || 80))),
   });
@@ -11960,7 +15436,689 @@ app.patch('/api/intranet/sales/records/:id', requireAuth(JWT_SECRET), requireInt
   } catch (err) {
     if (err?.message === 'not_found') return res.status(404).json({ error: 'not_found' });
     if (err?.message === 'forbidden') return res.status(403).json({ error: 'forbidden' });
+    if (err?.message === 'invalid_operational_status' || err?.message === 'invalid_post_sale_rating') {
+      return res.status(400).json({ error: err.message });
+    }
     res.status(400).json({ error: err?.message || 'sales_record_update_failed' });
+  }
+});
+
+function sendStudentHubRouteError(res, err, fallback = "student_hub_request_failed") {
+  const message = err?.message || fallback;
+  if (message === "student_hub_access_denied" || message === "forbidden") {
+    return res.status(403).json({ error: message });
+  }
+  if (
+    message === "not_found"
+    || message === "student_not_found"
+    || message === "lead_not_found"
+    || message === "contract_not_found"
+    || message === "installment_not_found"
+  ) {
+    return res.status(404).json({ error: message === "not_found" ? "not_found" : message });
+  }
+  return res.status(400).json({ error: message || fallback });
+}
+
+function parseStudentHubLimit(value, fallback = 60, max = 160) {
+  const parsed = Number(value || fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(1, Math.round(parsed)));
+}
+
+app.get("/api/intranet/student-hub/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const studentHub = await buildStudentHubBootstrap(user, {
+      view_key: req.query?.view_key,
+      search: req.query?.search,
+      student_status: req.query?.student_status,
+      lead_stage: req.query?.lead_stage,
+      contract_status: req.query?.contract_status,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      limit: parseStudentHubLimit(req.query?.limit, 60, 160),
+    });
+    res.json({ student_hub: studentHub });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_bootstrap_failed");
+  }
+});
+
+app.get("/api/intranet/student-hub/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.query?.view_key || "student-profile");
+    const detail = await getStudentHubStudentDetail(Number(req.params.id), scope);
+    if (!detail) return res.status(404).json({ error: "student_not_found" });
+    res.json(detail);
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_student_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "student-profile");
+    if (!scope.canManageStudentData) return res.status(403).json({ error: "forbidden" });
+    const existing = await get("SELECT * FROM students WHERE id=? LIMIT 1", [Number(req.params.id)]);
+    if (!existing) return res.status(404).json({ error: "student_not_found" });
+    const saved = await saveAcademicStudentRecord({
+      ...existing,
+      ...req.body,
+      id: Number(req.params.id),
+    }, user.id || user.sub);
+    const detail = await getStudentHubStudentDetail(saved.id, scope);
+    res.json({ ok: true, student: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_student_update_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/students/:id/guardians", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "student-profile");
+    if (!scope.canManageStudentData) return res.status(403).json({ error: "forbidden" });
+    const student = await get("SELECT id FROM students WHERE id=? LIMIT 1", [Number(req.params.id)]);
+    if (!student?.id) return res.status(404).json({ error: "student_not_found" });
+    await replaceStudentGuardians(Number(req.params.id), req.body?.guardians || [], user.id || user.sub);
+    const detail = await getStudentHubStudentDetail(Number(req.params.id), scope);
+    res.json({ ok: true, student: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_guardians_update_failed");
+  }
+});
+
+app.get("/api/intranet/student-hub/leads/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.query?.view_key || "commercial-leads");
+    if (!scope.canManageCommercial) return res.status(403).json({ error: "forbidden" });
+    const detail = await getStudentHubLeadDetail(Number(req.params.id), scope);
+    if (!detail) return res.status(404).json({ error: "lead_not_found" });
+    res.json(detail);
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_detail_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/leads", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "commercial-leads");
+    if (!scope.canManageCommercial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveStudentHubLeadRecord(req.body || {}, user, null);
+    res.json({ ok: true, lead: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_create_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/leads/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "commercial-leads");
+    if (!scope.canManageCommercial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveStudentHubLeadRecord(req.body || {}, user, Number(req.params.id));
+    res.json({ ok: true, lead: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_update_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/leads/:id/convert", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "commercial-enrollment-conversion");
+    if (!scope.canConvertLead) return res.status(403).json({ error: "forbidden" });
+    const result = await convertLeadToStudentHubRecord(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_lead_convert_failed");
+  }
+});
+
+app.get("/api/intranet/student-hub/contracts/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.query?.view_key || "financial-contracts");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const detail = await getStudentHubContractDetail(Number(req.params.id), scope);
+    if (!detail) return res.status(404).json({ error: "contract_not_found" });
+    res.json(detail);
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_contract_detail_failed");
+  }
+});
+
+app.post("/api/intranet/student-hub/contracts", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "financial-contracts");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveFinancialContractRecord(req.body || {}, user);
+    res.json({ ok: true, contract: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_contract_create_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/contracts/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "financial-contracts");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const detail = await saveFinancialContractRecord({ ...(req.body || {}), id: Number(req.params.id) }, user);
+    res.json({ ok: true, contract: detail });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_contract_update_failed");
+  }
+});
+
+app.patch("/api/intranet/student-hub/installments/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveStudentHubScope(user, req.body?.view_key || "financial-installments");
+    if (!scope.canManageFinancial) return res.status(403).json({ error: "forbidden" });
+    const installment = await updateFinancialInstallmentRecord(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, installment });
+  } catch (err) {
+    sendStudentHubRouteError(res, err, "student_hub_installment_update_failed");
+  }
+});
+
+function sendAcademicRouteError(res, err, fallback = "academic_request_failed") {
+  const message = err?.message || fallback;
+  if (message === "academic_access_denied" || message === "forbidden") {
+    return res.status(403).json({ error: message });
+  }
+  if (
+    message === "not_found"
+    || message === "student_not_found"
+    || message === "enrollment_not_found"
+    || message === "class_not_found"
+    || message === "teacher_profile_not_found"
+  ) {
+    return res.status(404).json({ error: message === "not_found" ? "not_found" : message });
+  }
+  return res.status(400).json({ error: message || fallback });
+}
+
+function parseAcademicLimit(value, fallback = 60, max = 180) {
+  return Math.min(max, Math.max(1, Number(value || fallback)));
+}
+
+app.get("/api/intranet/academic/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const academic = await buildAcademicBootstrap(user, req.query || {});
+    res.json({ academic });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_bootstrap_failed");
+  }
+});
+
+app.post("/api/intranet/academic/import", requireAuth(JWT_SECRET), requireIntranetAccess, academicImportUploadMiddleware, async (req, res) => {
+  const uploaded = [
+    ...(Array.isArray(req.files?.academic_workbook) ? req.files.academic_workbook : []),
+    ...(Array.isArray(req.files?.academic_workbooks) ? req.files.academic_workbooks : []),
+    ...(Array.isArray(req.files?.workbook) ? req.files.workbook : []),
+    ...(Array.isArray(req.files?.file) ? req.files.file : []),
+    ...(Array.isArray(req.files?.files) ? req.files.files : []),
+  ].filter((item) => item?.path);
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canImport) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    if (!uploaded.length) {
+      return res.status(400).json({ error: "missing_academic_workbook" });
+    }
+    const result = await importAcademicWorkbooksBatch({
+      workbookFiles: uploaded.map((item) => ({
+        path: item.path,
+        originalname: item.originalname || path.basename(item.path),
+      })),
+      actorUserId: user.id || user.sub || null,
+    });
+    const academic = await buildAcademicBootstrap(user, {});
+    res.json({ ok: true, result, academic });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_import_failed");
+  } finally {
+    for (const file of uploaded) {
+      if (!file?.path) continue;
+      fs.promises.unlink(file.path).catch(() => {});
+    }
+  }
+});
+
+app.get("/api/intranet/academic/students", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const students = await listAcademicStudents(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      termCode: req.query?.term_code,
+      limit: parseAcademicLimit(req.query?.limit, 80, 240),
+    });
+    res.json({ students });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_students_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/students", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const student = await saveAcademicStudentRecord(req.body || {}, user.id || user.sub || null);
+    await replaceStudentGuardians(student.id, req.body?.guardians || [], user.id || user.sub || null);
+    const detail = await getAcademicStudentDetail(student.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_create_failed");
+  }
+});
+
+app.get("/api/intranet/academic/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicStudentDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "student_not_found" });
+    }
+    res.json(detail);
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/academic/students/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const student = await saveAcademicStudentRecord({
+      ...(req.body || {}),
+      id: Number(req.params.id),
+    }, user.id || user.sub || null);
+    if (Array.isArray(req.body?.guardians)) {
+      await replaceStudentGuardians(student.id, req.body.guardians, user.id || user.sub || null);
+    }
+    const detail = await getAcademicStudentDetail(student.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_update_failed");
+  }
+});
+
+app.get("/api/intranet/academic/students/:id/attendance", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicStudentDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "student_not_found" });
+    }
+    const items = await all(
+      `SELECT ar.*, c.name AS class_name
+         FROM attendance_records ar
+         JOIN enrollments e ON e.id = ar.enrollment_id
+         LEFT JOIN classes c ON c.id = ar.class_id
+        WHERE e.student_id=?
+        ORDER BY ar.class_date DESC, ar.id DESC
+        LIMIT ?`,
+      [Number(req.params.id), parseAcademicLimit(req.query?.limit, 120, 400)]
+    );
+    res.json({ student: detail.student, attendance: items });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_student_attendance_failed");
+  }
+});
+
+app.get("/api/intranet/academic/enrollments", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const enrollments = await listAcademicEnrollments(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      classId: req.query?.class_id,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      teacherName: req.query?.teacher,
+      termCode: req.query?.term_code,
+      limit: parseAcademicLimit(req.query?.limit, 100, 260),
+    });
+    res.json({ enrollments });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollments_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/enrollments", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const enrollment = await saveAcademicEnrollmentRecord(req.body || {}, user);
+    const detail = await getAcademicEnrollmentDetail(enrollment.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollment_create_failed");
+  }
+});
+
+app.get("/api/intranet/academic/enrollments/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicEnrollmentDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "enrollment_not_found" });
+    }
+    res.json(detail);
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollment_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/academic/enrollments/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const enrollment = await saveAcademicEnrollmentRecord({
+      ...(req.body || {}),
+      id: Number(req.params.id),
+    }, user);
+    const detail = await getAcademicEnrollmentDetail(enrollment.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_enrollment_update_failed");
+  }
+});
+
+app.post("/api/intranet/academic/enrollments/:id/transfer-class", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const detail = await transferAcademicEnrollmentClass(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_transfer_failed");
+  }
+});
+
+app.post("/api/intranet/academic/enrollments/:id/change-schedule", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const detail = await changeAcademicEnrollmentSchedule(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_schedule_change_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const classes = await listAcademicClasses(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      language: req.query?.language,
+      modality: req.query?.modality,
+      teacherName: req.query?.teacher,
+      termCode: req.query?.term_code,
+      limit: parseAcademicLimit(req.query?.limit, 80, 200),
+    });
+    res.json({ classes });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_classes_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classRow = await ensureAcademicClassRecord(req.body || {});
+    await syncAcademicClassSchedules(classRow.id, Array.isArray(req.body?.schedules) ? req.body.schedules : []);
+    const teacherUserIds = [
+      ...(Array.isArray(req.body?.teacher_user_ids) ? req.body.teacher_user_ids : []),
+      req.body?.teacher_user_id,
+    ].map((item) => Number(item || 0)).filter(Boolean);
+    for (const teacherUserId of [...new Set(teacherUserIds)]) {
+      await ensureClassTeacherLink(classRow.id, teacherUserId, {
+        role_in_class: req.body?.role_in_class || "teacher",
+        start_date: req.body?.teacher_start_date,
+        end_date: req.body?.teacher_end_date,
+        is_active: req.body?.teacher_is_active !== false,
+      });
+    }
+    const detail = await getAcademicClassDetail(classRow.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_create_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicClassDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "class_not_found" });
+    }
+    res.json(detail);
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_detail_failed");
+  }
+});
+
+app.patch("/api/intranet/academic/classes/:id", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classRow = await ensureAcademicClassRecord({
+      ...(req.body || {}),
+      id: Number(req.params.id),
+    });
+    if (Array.isArray(req.body?.schedules)) {
+      await syncAcademicClassSchedules(classRow.id, req.body.schedules);
+    }
+    const detail = await getAcademicClassDetail(classRow.id, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_update_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/schedules", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!(await canAccessAcademicClass(scope, Number(req.params.id)))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const schedules = await listClassSchedulesByClassId(Number(req.params.id));
+    res.json({ schedules });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_schedules_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes/:id/teachers", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classId = Number(req.params.id);
+    let teacherUserId = Number(req.body?.user_id || 0) || null;
+    if (!teacherUserId && Number(req.body?.teacher_profile_id || 0)) {
+      const profile = await get("SELECT user_id FROM teacher_profiles WHERE id=? LIMIT 1", [Number(req.body.teacher_profile_id)]);
+      teacherUserId = Number(profile?.user_id || 0) || null;
+    }
+    if (!teacherUserId) {
+      return res.status(400).json({ error: "teacher_profile_not_found" });
+    }
+    await ensureClassTeacherLink(classId, teacherUserId, req.body || {});
+    const detail = await getAcademicClassDetail(classId, scope);
+    res.json({ ok: true, ...detail });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_teacher_link_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/students", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicClassDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "class_not_found" });
+    }
+    res.json({ class: detail.class, students: detail.students });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_students_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/sessions", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const detail = await getAcademicClassDetail(Number(req.params.id), scope);
+    if (!detail) {
+      return res.status(404).json({ error: "class_not_found" });
+    }
+    res.json({ class: detail.class, sessions: detail.sessions });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_class_sessions_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes/:id/sessions", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const session = await saveAcademicClassSession(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, session });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_session_save_failed");
+  }
+});
+
+app.get("/api/intranet/academic/classes/:id/attendance", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const classId = Number(req.params.id);
+    if (!(await canAccessAcademicClass(scope, classId))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const classDate = normalizeAcademicDateInput(req.query?.class_date) || brazilDateKey();
+    const items = await all(
+      `SELECT ar.*, s.full_name AS student_name
+         FROM attendance_records ar
+         JOIN enrollments e ON e.id = ar.enrollment_id
+         JOIN students s ON s.id = e.student_id
+        WHERE ar.class_id=? AND ar.class_date=?
+        ORDER BY lower(s.full_name) ASC`,
+      [classId, classDate]
+    );
+    res.json({ class_id: classId, class_date: classDate, attendance: items });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_attendance_list_failed");
+  }
+});
+
+app.post("/api/intranet/academic/classes/:id/attendance", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const attendance = await saveAcademicAttendance(Number(req.params.id), req.body || {}, user);
+    res.json({ ok: true, attendance });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_attendance_save_failed");
+  }
+});
+
+app.get("/api/intranet/academic/teachers", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const teachers = await listAcademicTeacherProfiles(scope);
+    res.json({ teachers });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_teachers_list_failed");
+  }
+});
+
+app.get("/api/intranet/academic/me/classes", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    const classes = await listAcademicClasses(scope, {
+      search: req.query?.search,
+      status: req.query?.status,
+      limit: parseAcademicLimit(req.query?.limit, 80, 200),
+    });
+    res.json({ classes });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_teacher_classes_failed");
+  }
+});
+
+app.get("/api/intranet/academic/dashboard/pedagogical", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (!scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const dashboard = await buildAcademicDashboard(scope);
+    res.json({ dashboard });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_dashboard_failed");
+  }
+});
+
+app.get("/api/intranet/academic/dashboard/teacher", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
+  try {
+    const user = req.currentUser || await getUserById(req.user.sub);
+    const scope = await resolveAcademicScope(user);
+    if (scope.kind !== "teacher" && !scope.canManageAll) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const dashboard = await buildAcademicDashboard(scope);
+    res.json({ dashboard });
+  } catch (err) {
+    sendAcademicRouteError(res, err, "academic_teacher_dashboard_failed");
   }
 });
 
@@ -12142,30 +16300,32 @@ app.post("/api/intranet/pedagogico/whatsapp/campaigns/:id/start", requireAuth(JW
 });
 
 app.get("/api/intranet/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
-  const payload = await buildIntranetPayload(req.user.sub);
-  res.json(payload || { user: null, intranet: null, department_catalog: [] });
+  try {
+    const payload = await buildIntranetPayload(req.user.sub);
+    res.json(payload || { user: null, intranet: null, department_catalog: [] });
+  } catch (error) {
+    console.error("[intranet.bootstrap] request_failed", {
+      message: error?.message || String(error || "unknown_error"),
+    });
+    res.status(500).json({ error: error?.message || "intranet_bootstrap_failed" });
+  }
 });
 
-app.get("/api/intranet/training/bootstrap", requireAuth(JWT_SECRET), requireIntranetAccess, async (req, res) => {
-  const user = req.currentUser || await getUserById(req.user.sub);
-  if (!user || user.role !== "admin") return res.status(403).json({ error: "forbidden" });
-  const overview = await buildAiTrainingOverview();
-  res.json({ training: overview });
-});
+function redirectAuthenticatedHome(req, res) {
+  const user = req.session?.user || tryDecodeSession(req);
+  if (!user) return res.redirect("/login.html");
+  return res.redirect("/intranet.html");
+}
 
-app.get("/", (req, res) => res.redirect("/index.html"));
+app.get("/", redirectAuthenticatedHome);
 app.get("/login.html", (req, res) => sendNoCacheFile(res, path.join(publicDir, "login.html")));
 
-app.get("/index.html", (req, res) => {
-  const user = tryDecodeSession(req);
-  if (!user) return res.redirect("/login.html");
-  return sendNoCacheFile(res, path.join(publicDir, "index.html"));
-});
+app.get("/index.html", redirectAuthenticatedHome);
 
 app.get("/admin.html", (req, res) => {
   const user = tryDecodeSession(req);
   if (!user) return res.redirect("/login.html");
-  if (user.role !== "admin") return res.redirect("/index.html");
+  if (user.role !== "admin") return res.redirect("/intranet.html");
   return sendNoCacheFile(res, path.join(publicDir, "admin.html"));
 });
 
@@ -12173,7 +16333,7 @@ app.get("/intranet.html", async (req, res) => {
   const session = tryDecodeSession(req);
   if (!session) return res.redirect("/login.html");
   const user = await getUserById(session.sub);
-  if (!user || !hasIntranetAccess(user)) return res.redirect("/index.html");
+  if (!user || !hasIntranetAccess(user)) return res.redirect("/login.html");
   return sendNoCacheFile(res, path.join(publicDir, "intranet.html"));
 });
 
@@ -12204,6 +16364,9 @@ async function runStartupBootstrap() {
     await ensureCalendarEventTypes();
     await syncLegacyUserDepartmentData();
     await ensureFixedDepartments();
+    await ensureOperationalDepartmentUsers();
+    await ensureAcademicClassSessionsSeed();
+    await ensureAcademicTimelineBackfill();
 
     const incompatibleCleanup = await purgeIncompatibleKnowledgeAssets(null);
     if (
@@ -12215,8 +16378,6 @@ async function runStartupBootstrap() {
       startupLogger.info("Limpeza de arquivos incompatíveis concluida.", incompatibleCleanup);
     }
 
-    scheduleKnowledgeBackfillSweep(3 * 1000);
-    triggerTalkersKnowledgeSync();
   })().catch((err) => {
     startupLogger.error("Falha no bootstrap assincrono do servidor.", {
       message: err?.message || String(err || "startup_bootstrap_failed"),
@@ -12234,29 +16395,38 @@ function validateRuntimeConfiguration() {
     issues.push("JWT_SECRET ausente em producao");
   }
 
-  if (DB_CLIENT === "postgres" && !String(process.env.DATABASE_URL || "").trim()) {
-    issues.push("DATABASE_URL ausente para Postgres");
+  if (IS_PRODUCTION && !DATABASE_URL_PRESENT) {
+    issues.push("DATABASE_URL ausente em producao");
+  }
+
+  if (IS_PRODUCTION && DB_CLIENT !== "postgres") {
+    issues.push("cliente efetivo do banco nao esta em Postgres em producao");
   }
 
   if (MAX_UPLOAD_SIZE_BYTES <= 0) {
     issues.push("MAX_UPLOAD_SIZE_MB invalido");
   }
 
-  if (issues.length) {
-    startupLogger.error("Falha de configuracao critica na inicializacao.", {
-      issues,
-      db_client: DB_CLIENT,
-      is_production: IS_PRODUCTION,
-    });
-    throw new Error(`runtime_configuration_invalid: ${issues.join("; ")}`);
+    if (issues.length) {
+      startupLogger.error("Falha de configuracao critica na inicializacao.", {
+        issues,
+        db_client: DB_CLIENT,
+        db_runtime: DB_RUNTIME_CONFIG,
+        is_production: IS_PRODUCTION,
+      });
+      throw new Error(`runtime_configuration_invalid: ${issues.join("; ")}`);
+    }
   }
-}
 
 function startServer() {
   validateRuntimeConfiguration();
   startupLogger.info("Inicializando servidor.", {
-    db_client: process.env.DB_CLIENT || DB_CLIENT,
-    database_url_present: Boolean(process.env.DATABASE_URL),
+    db_client_requested: REQUESTED_DB_CLIENT || null,
+    db_client_selected: DB_CLIENT,
+    database_url_present: DATABASE_URL_PRESENT,
+    sqlite_path: DB_CLIENT === "sqlite" ? DB_RUNTIME_CONFIG.sqlite_path : null,
+    postgres_host: DB_CLIENT === "postgres" ? POSTGRES_HOST || null : null,
+    data_dir: DATA_DIR,
     max_upload_size_mb: MAX_UPLOAD_SIZE_MB,
     max_concurrent_jobs: MAX_CONCURRENT_JOBS,
   });

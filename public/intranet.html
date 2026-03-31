@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Intranet Talkers</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=20260330-sidebar-fix" />
 </head>
 <body class="intranet-shell">
   <div class="intranet-app">
@@ -13,7 +13,7 @@
         <img class="logo-sm" src="/logo.png" alt="Logo" />
         <div class="intranet-brand-copy">
           <div class="intranet-brand-title" id="intranetBrandTitle">Intranet Talkers</div>
-          <div class="intranet-brand-sub" id="intranetBrandSub">Ambiente corporativo interno</div>
+          <div class="intranet-brand-sub" id="intranetBrandSub">Portal corporativo interno</div>
         </div>
         <button class="icon-btn intranet-sidebar-toggle" id="btnSidebarCollapse" type="button" aria-label="Recolher menu lateral">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -34,8 +34,9 @@
         <div class="intranet-sidebar-links intranet-sidebar-utility-feed" id="sidebarUtilityFeed"></div>
       </div>
 
-      <div class="intranet-sidebar-footer">
-        <a class="btn intranet-back-btn" href="/index.html">Voltar ao chat</a>
+      <div class="intranet-sidebar-footer" style="display:flex; gap:10px; flex-wrap:wrap;">
+        <a class="btn" href="/admin.html" id="sidebarAdminLink" hidden>Admin</a>
+        <button class="btn" id="sidebarLogoutBtn" type="button">Sair</button>
       </div>
     </aside>
 
@@ -52,19 +53,20 @@
         </button>
 
         <div>
-          <div class="intranet-eyebrow" id="intranetTopbarEyebrow">Workspace corporativo</div>
+          <div class="intranet-eyebrow" id="intranetTopbarEyebrow">Portal corporativo</div>
           <h1 class="intranet-page-title" id="intranetGreeting">Intranet Talkers</h1>
         </div>
 
         <div class="intranet-topbar-actions">
           <div id="intranetLanguageSwitcher"></div>
-          <a class="btn" href="/index.html">Voltar ao chat</a>
+          <a class="btn" href="/admin.html" id="topbarAdminLink" hidden>Admin</a>
+          <button class="btn" id="topbarLogoutBtn" type="button">Sair</button>
         </div>
       </header>
 
       <section class="intranet-hero intranet-view" id="home" data-view="home">
         <div>
-          <div class="intranet-hero-badge" id="intranetHeroBadge">IA + conteúdo corporativo</div>
+          <div class="intranet-hero-badge" id="intranetHeroBadge">Portal interno</div>
           <h2 class="intranet-hero-title" id="heroTitle">Carregando workspace...</h2>
           <p class="intranet-hero-text" id="heroDescription">Montando a visão personalizada da intranet.</p>
         </div>
@@ -400,8 +402,8 @@
       <section class="intranet-section sales-section intranet-view" id="sales" data-view="sales" hidden>
         <div class="intranet-section-head intranet-section-head-stack">
           <div>
-            <div class="intranet-section-eyebrow">Comercial e pós-venda</div>
-            <h3 class="intranet-section-title">Operação de matrículas por closer</h3>
+            <div class="intranet-section-eyebrow">Comercial &gt; Pós-venda</div>
+            <h3 class="intranet-section-title">Operação de pós-venda por closer</h3>
           </div>
         </div>
 
@@ -422,8 +424,20 @@
             </select>
           </div>
           <div>
+            <label for="salesLanguageFilter">Idioma</label>
+            <select id="salesLanguageFilter">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label for="salesModalityFilter">Modalidade</label>
+            <select id="salesModalityFilter">
+              <option value="">Todas</option>
+            </select>
+          </div>
+          <div>
             <label for="salesSearchInput">Busca</label>
-            <input id="salesSearchInput" class="intranet-search" placeholder="Aluno, curso, closer ou midia" />
+            <input id="salesSearchInput" class="intranet-search" placeholder="Nome, telefone, idioma, closer ou mídia" />
           </div>
           <div class="intranet-topbar-actions">
             <button class="btn" id="btnRefreshSales" type="button">Atualizar</button>
@@ -435,31 +449,52 @@
           <aside class="intranet-sales-detail" id="salesDetailPanel">
             <div class="intranet-sales-detail-head">
               <div>
-                <div class="intranet-section-eyebrow">Histórico do registro</div>
-                <h4 id="salesDetailTitle">Selecione uma matrícula</h4>
+                <div class="intranet-section-eyebrow">Detalhe do pós-venda</div>
+                <h4 id="salesDetailTitle">Selecione um registro</h4>
               </div>
             </div>
             <div class="intranet-sales-meta" id="salesDetailMeta"></div>
             <form class="intranet-sales-detail-form" id="salesDetailForm">
               <div>
                 <label for="salesOperationalStatus">Status operacional</label>
-                <input id="salesOperationalStatus" placeholder="Ex.: Em andamento" />
+                <select id="salesOperationalStatus">
+                  <option value="">Selecione</option>
+                  <option value="Novo">Novo</option>
+                  <option value="Pendente">Pendente</option>
+                  <option value="Em andamento">Em andamento</option>
+                  <option value="Realizado">Realizado</option>
+                  <option value="Sem retorno">Sem retorno</option>
+                  <option value="Reagendado">Reagendado</option>
+                </select>
               </div>
               <div>
-                <label for="salesNextAction">Proxima acao</label>
-                <input id="salesNextAction" placeholder="Ex.: Ligar amanha" />
+                <label for="salesPostSaleRating">Avaliação qualitativa</label>
+                <select id="salesPostSaleRating">
+                  <option value="">Sem avaliação</option>
+                  <option value="ruim">Ruim</option>
+                  <option value="bom">Bom</option>
+                  <option value="otimo">Ótimo</option>
+                </select>
+              </div>
+              <div>
+                <label for="salesNextAction">Próxima ação</label>
+                <input id="salesNextAction" placeholder="Ex.: Ligar amanhã" />
               </div>
               <div>
                 <label for="salesNextActionDate">Data da próxima ação</label>
                 <input id="salesNextActionDate" type="date" />
               </div>
               <div>
+                <label for="salesFeedback">Feedback do pós-venda</label>
+                <textarea id="salesFeedback" placeholder="Registre o retorno, a percepção do aluno ou o resultado do contato"></textarea>
+              </div>
+              <div>
                 <label for="salesFollowUpNotes">Notas de follow-up</label>
-                <textarea id="salesFollowUpNotes" placeholder="Registre o andamento comercial ou de pós-venda"></textarea>
+                <textarea id="salesFollowUpNotes" placeholder="Registre o andamento operacional do caso"></textarea>
               </div>
               <div>
                 <label for="salesObservations">Observações</label>
-                <textarea id="salesObservations" placeholder="Informações complementares do caso"></textarea>
+                <textarea id="salesObservations" placeholder="Informações complementares, impedimentos ou contexto importante"></textarea>
               </div>
               <div class="intranet-topbar-actions">
                 <button class="btn" id="btnSaveSalesRecord" type="submit">Salvar atualização</button>
@@ -467,41 +502,6 @@
             </form>
             <div class="intranet-sales-history" id="salesHistoryList"></div>
           </aside>
-        </div>
-      </section>
-
-      <section class="intranet-section intranet-view" id="training" data-view="training" hidden>
-        <div class="intranet-section-head intranet-section-head-stack">
-          <div>
-            <div class="intranet-section-eyebrow">Treinamento da IA</div>
-            <h3 class="intranet-section-title">Saude da base de conhecimento e memoria operacional</h3>
-          </div>
-        </div>
-
-        <div class="intranet-training-grid">
-          <div class="intranet-training-summary" id="trainingSummaryCards"></div>
-          <div class="intranet-training-panel">
-            <div class="intranet-block-title">Documentos mais usados</div>
-            <div id="trainingTopDocuments" class="intranet-chip-list"></div>
-            <div class="intranet-block-title" style="margin-top:14px;">Temas recorrentes</div>
-            <div id="trainingTopTopics" class="intranet-chip-list"></div>
-          </div>
-        </div>
-
-        <div class="intranet-training-layout">
-          <div class="intranet-training-panel">
-            <div class="intranet-block-title">Arquivos com atenção</div>
-            <div id="trainingFailuresList" class="intranet-training-list"></div>
-          </div>
-          <div class="intranet-training-panel">
-            <div class="intranet-block-title">Memorias recentes da IA</div>
-            <div id="trainingMemoriesList" class="intranet-training-list"></div>
-          </div>
-        </div>
-
-        <div class="intranet-training-panel">
-          <div class="intranet-block-title">Eventos recentes</div>
-          <div id="trainingEventsList" class="intranet-training-list"></div>
         </div>
       </section>
 
@@ -621,6 +621,6 @@
   </div>
 
   <script src="/i18n.js?v=20260316d"></script>
-  <script src="/intranet.js?v=20260316d"></script>
+  <script src="/intranet.js?v=20260330dbfix"></script>
 </body>
 </html>

@@ -1,0 +1,2211 @@
+const RAG_BATCH_SIZE = 1;
+const MAX_RAG_FILE_BYTES = 25 * 1024 * 1024;
+const RAG_ALLOWED_EXTS = new Set([".pdf", ".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".json", ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".wma", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg"]);
+const SECTION_STORAGE_KEY = "talkers-admin-sections";
+
+let pendingRagFiles = [];
+let ragUploadInProgress = false;
+let departmentCatalog = [];
+let cachedUsers = [];
+let closerCatalog = [];
+let salesOverview = null;
+let trainingOverview = null;
+let submenuCatalog = [];
+let announcementCatalog = [];
+let systemLogsState = null;
+let collapsedSections = new Set();
+let activeAdminTab = 'users';
+
+const i18n = () => window.TalkersI18n;
+const t = (key, params = {}, fallback = '') => {
+  const translated = i18n()?.t?.(key, params, fallback);
+  return translated ?? fallback ?? key;
+};
+const currentLocale = () => i18n()?.getLocale?.() || 'pt-BR';
+
+function summarizeApiErrorPayload(payload, status) {
+  const raw = String(payload || '').trim();
+  if (!raw) return `HTTP ${status}`;
+  if (/<!doctype html/i.test(raw) || /<html/i.test(raw)) {
+    if (status >= 500) return `HTTP ${status} - serviço indisponível temporariamente`;
+    return `HTTP ${status} - resposta inválida do servidor`;
+  }
+  return raw;
+}
+
+async function api(path, opts = {}) {
+  const headers = opts.body instanceof FormData
+    ? { ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) }
+    : { 'Content-Type': 'application/json', ...(i18n()?.buildHeaders?.() || {}), ...(opts.headers || {}) };
+
+  const res = await fetch(path, {
+    credentials: 'include',
+    headers,
+    ...opts,
+  });
+
+  const txt = await res.text();
+  let json = null;
+  try { json = txt ? JSON.parse(txt) : null; } catch {}
+  if (!res.ok) throw new Error(json?.error || summarizeApiErrorPayload(txt, res.status) || `HTTP ${res.status}`);
+  return json;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function compareAlpha(a, b) {
+  return String(a || '').localeCompare(String(b || ''), currentLocale(), {
+    sensitivity: 'base',
+    numeric: true,
+  });
+}
+
+function sortAlphabetically(items = [], resolver) {
+  return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
+    const leftValue = resolver ? resolver(left) : left;
+    const rightValue = resolver ? resolver(right) : right;
+    return compareAlpha(leftValue, rightValue);
+  });
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString(currentLocale());
+  } catch {
+    return String(value || '-');
+  }
+}
+
+function applyAdminTranslations() {
+  document.title = `${t('admin.title')} - Talkers IA`;
+  const pageTitle = document.getElementById('adminPageTitle');
+  if (pageTitle) pageTitle.textContent = t('admin.title');
+  const subtitle = document.getElementById('adminPageSubtitle');
+  if (subtitle) subtitle.textContent = t('admin.subtitle');
+  const backBtn = document.getElementById('adminBackBtn');
+  if (backBtn) backBtn.textContent = t('common.back');
+  const tabs = {
+    adminTabUsers: ['admin.tabs.users', 'Usuários'],
+    adminTabDepartments: ['admin.tabs.departments', 'Departamentos'],
+    adminTabKnowledge: ['admin.tabs.knowledge', 'Base de conhecimento'],
+    adminTabTraining: ['admin.tabs.training', 'Treinamento da IA'],
+    adminTabCockpit: ['admin.tabs.cockpit', 'Cockpit'],
+    adminTabLogs: ['admin.tabs.logs', 'Logs do sistema'],
+  };
+  Object.entries(tabs).forEach(([id, [key, fallback]]) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = t(key, {}, fallback);
+  });
+}
+
+function formatStageLabel(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  const labels = {
+    pending: 'Pendente',
+    processing: 'Processando',
+    completed: 'Concluido',
+    skipped: 'Ignorado',
+    failed: 'Falha',
+    available: 'Disponivel',
+    local: 'Local',
+    synced: 'Sincronizado',
+    warning: 'Atenção',
+    info: 'Informativo',
+    success: 'Sucesso',
+    healthy: 'Saudavel',
+  };
+  return labels[normalized] || (value || '-');
+}
+
+function getStatusBadgeClass(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['completed', 'available', 'synced', 'success', 'healthy'].includes(normalized)) return 'badge admin';
+  if (['processing', 'pending'].includes(normalized)) return 'badge';
+  if (['warning'].includes(normalized)) return 'badge warning';
+  if (['failed', 'error'].includes(normalized)) return 'badge danger';
+  return 'badge';
+}
+
+function setMsg(text, isError = false) {
+  const el = document.getElementById('msg');
+  el.className = isError ? 'error' : 'muted small';
+  el.textContent = text || '';
+}
+
+function describeRagUploadError(error) {
+  const code = String(error?.message || '').trim();
+  if (!code) return 'Falha ao carregar os arquivos.';
+  if (code === 'knowledge_file_too_large' || code === 'LIMIT_FILE_SIZE') {
+    return 'Um ou mais arquivos passaram de 25 MB e foram recusados pelo servidor.';
+  }
+  if (code === 'unsupported_knowledge_file') {
+    return 'Um ou mais arquivos não são suportados para a base interna.';
+  }
+  if (code === 'rag_batch_too_large') {
+    return 'O navegador tentou enviar um lote maior do que o servidor aceita. Atualize a pagina e tente novamente.';
+  }
+  if (code === 'rag_upload_failed') {
+    return 'O lote falhou durante a indexacao no servidor.';
+  }
+  return code;
+}
+
+function formatBytes(bytes = 0) {
+  const value = Number(bytes || 0);
+  if (!value) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = value;
+  let unitIndex = 0;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  const precision = size >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function sanitizeDisplayName(name = 'arquivo') {
+  return String(name || 'arquivo').replace(/[\\/:*?"<>|]+/g, '_');
+}
+
+function getFileDisplayName(file) {
+  return file.webkitRelativePath || file.name || 'arquivo';
+}
+
+function getFileExtension(name = '') {
+  const normalized = String(name || '').toLowerCase();
+  const dotIndex = normalized.lastIndexOf('.');
+  return dotIndex >= 0 ? normalized.slice(dotIndex) : '';
+}
+
+function getFileKey(file) {
+  return [
+    getFileDisplayName(file).toLowerCase(),
+    Number(file.size || 0),
+    Number(file.lastModified || 0),
+    String(file.type || '').toLowerCase(),
+  ].join('::');
+}
+
+function splitRagFilesBySize(files) {
+  const accepted = [];
+  const rejectedBySize = [];
+  const rejectedByType = [];
+  const rejectedByDuplicate = [];
+  const seenKeys = new Set();
+
+  for (const file of Array.from(files || [])) {
+    const ext = getFileExtension(getFileDisplayName(file));
+
+    if (!RAG_ALLOWED_EXTS.has(ext)) {
+      rejectedByType.push(file);
+      continue;
+    }
+
+    if (Number(file.size || 0) > MAX_RAG_FILE_BYTES) {
+      rejectedBySize.push(file);
+      continue;
+    }
+
+    const key = getFileKey(file);
+    if (seenKeys.has(key)) {
+      rejectedByDuplicate.push(file);
+      continue;
+    }
+
+    seenKeys.add(key);
+    accepted.push(file);
+  }
+
+  return { accepted, rejectedBySize, rejectedByType, rejectedByDuplicate };
+}
+
+function chunkFiles(files, batchSize = RAG_BATCH_SIZE) {
+  const out = [];
+  for (let index = 0; index < files.length; index += batchSize) {
+    out.push(files.slice(index, index + batchSize));
+  }
+  return out;
+}
+
+function setRagDocumentCount(total = 0) {
+  const safeTotal = Number(total || 0);
+  const label = safeTotal === 1 ? '1 documento' : `${safeTotal} documentos`;
+  document.getElementById('ragDocCountBadge').textContent = label;
+  document.getElementById('ragListCount').textContent = `${label} na base`;
+}
+
+function setRagUploadState(text, tone = 'neutral') {
+  const el = document.getElementById('ragUploadState');
+  const palette = {
+    neutral: { background: '#fff', border: 'var(--border)', color: '#475467' },
+    loading: { background: '#ecfeff', border: '#a5f3fc', color: '#155e75' },
+    success: { background: '#ecfdf3', border: '#abefc6', color: '#067647' },
+    error: { background: '#fef3f2', border: '#fecdca', color: '#b42318' },
+  };
+  const style = palette[tone] || palette.neutral;
+  el.textContent = text;
+  el.style.background = style.background;
+  el.style.borderColor = style.border;
+  el.style.color = style.color;
+}
+
+function setRagUploadProgress(done = 0, total = 0, visible = false) {
+  const el = document.getElementById('ragUploadProgress');
+  if (!visible || total <= 0) {
+    el.style.display = 'none';
+    el.textContent = '0 | 0 documentos carregados';
+    return;
+  }
+
+  el.style.display = 'block';
+  el.textContent = `${done} | ${total} documentos carregados`;
+}
+
+function renderRagSelection() {
+  const summary = document.getElementById('ragSelectionSummary');
+  const list = document.getElementById('ragSelectionList');
+  const uploadBtn = document.getElementById('btnUploadRag');
+
+  if (ragUploadInProgress) {
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Enviando...';
+  }
+
+  if (!pendingRagFiles.length) {
+    summary.textContent = ragUploadInProgress ? 'Upload em andamento...' : 'Nenhum arquivo selecionado.';
+    list.innerHTML = '';
+    if (!ragUploadInProgress) {
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Enviar arquivos';
+    }
+    return;
+  }
+
+  const totalSize = pendingRagFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
+  const label = pendingRagFiles.length === 1 ? 'arquivo selecionado' : 'arquivos selecionados';
+  const totalBatches = chunkFiles(pendingRagFiles).length;
+  summary.textContent = `${pendingRagFiles.length} ${label} (${formatBytes(totalSize)}). ${totalBatches} lote(s) de envio.`;
+
+  list.innerHTML = '';
+  pendingRagFiles.slice(0, 8).forEach((file) => {
+    const item = document.createElement('div');
+    item.className = 'admin-selection-item';
+    item.textContent = `${getFileDisplayName(file)} (${formatBytes(file.size)})`;
+    list.appendChild(item);
+  });
+
+  if (pendingRagFiles.length > 8) {
+    const more = document.createElement('div');
+    more.className = 'small muted';
+    more.textContent = `+ ${pendingRagFiles.length - 8} arquivo(s) na fila`;
+    list.appendChild(more);
+  }
+
+  if (!ragUploadInProgress) {
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = pendingRagFiles.length === 1 ? 'Enviar arquivo' : `Enviar ${pendingRagFiles.length} arquivos`;
+  }
+}
+
+function setPendingRagFiles(files, sourceLabel = 'Arquivos') {
+  const { accepted, rejectedBySize, rejectedByType, rejectedByDuplicate } = splitRagFilesBySize(files);
+  pendingRagFiles = accepted;
+  renderRagSelection();
+
+  const rejectedSizeNames = rejectedBySize.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+  const rejectedTypeNames = rejectedByType.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+  const rejectedDuplicateNames = rejectedByDuplicate.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+  const rejectedTotal = rejectedBySize.length + rejectedByType.length + rejectedByDuplicate.length;
+
+  if (!accepted.length && !rejectedTotal) {
+    setRagUploadState('Nenhum arquivo selecionado.');
+    setMsg('');
+    return { acceptedCount: 0, rejectedCount: 0 };
+  }
+
+  const rejectedSizeLabel = rejectedBySize.length ? ` ${rejectedBySize.length} acima de 25 MB foram descartados.` : '';
+  const rejectedTypeLabel = rejectedByType.length ? ` ${rejectedByType.length} arquivo(s) de formato não suportado foram ignorados.` : '';
+  const rejectedDuplicateLabel = rejectedByDuplicate.length ? ` ${rejectedByDuplicate.length} arquivo(s) duplicado(s) na fila foram ignorados.` : '';
+
+  if (accepted.length) {
+    const acceptedLabel = accepted.length === 1 ? '1 arquivo pronto para envio.' : `${accepted.length} arquivos prontos para envio.`;
+    setRagUploadState(`${sourceLabel} carregado(s) na fila. ${acceptedLabel}${rejectedSizeLabel}${rejectedTypeLabel}${rejectedDuplicateLabel}`);
+  } else {
+    setRagUploadState('Nenhum arquivo elegivel para envio. Revise tamanho, formato e duplicidade dos arquivos.', 'error');
+  }
+
+  const notices = [];
+  if (rejectedBySize.length) {
+    notices.push(`${rejectedBySize.length} arquivo(s) acima de 25 MB foram descartados automaticamente${rejectedSizeNames.length ? `: ${rejectedSizeNames.join(', ')}` : ''}.`);
+  }
+  if (rejectedByDuplicate.length) {
+    notices.push(`${rejectedByDuplicate.length} arquivo(s) repetido(s) na selecao foram ignorados automaticamente${rejectedDuplicateNames.length ? `: ${rejectedDuplicateNames.join(', ')}` : ''}.`);
+  }
+  if (rejectedByType.length) {
+    notices.push(`${rejectedByType.length} arquivo(s) de formato não suportado foram ignorados${rejectedTypeNames.length ? `: ${rejectedTypeNames.join(', ')}` : ''}.`);
+  }
+
+  setMsg(notices.join(' '), Boolean(rejectedBySize.length || rejectedByType.length));
+  return { acceptedCount: accepted.length, rejectedCount: rejectedTotal };
+}
+
+function getDepartmentOptions(includeInactive = false) {
+  return sortAlphabetically(
+    (departmentCatalog || []).filter((department) => includeInactive || department.is_active !== false),
+    (department) => department?.name || department?.slug || ''
+  );
+}
+
+function renderDepartmentsGrid() {
+  const wrap = document.getElementById('departmentsGrid');
+  const selected = new Set(Array.from(wrap.querySelectorAll('input:checked')).map((input) => String(input.value)));
+  wrap.innerHTML = '';
+
+  const options = getDepartmentOptions(false);
+  options.forEach((department) => {
+    const label = document.createElement('label');
+    label.className = 'department-check';
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.name = 'departments';
+    input.value = department.name;
+    input.checked = selected.has(String(department.name));
+
+    const copy = document.createElement('span');
+    copy.className = 'department-check-copy';
+    copy.innerHTML = `
+      <strong>${department.name}</strong>
+      <small>${department.description || 'Área preparada para novos módulos e permissões.'}</small>
+    `;
+
+    label.appendChild(input);
+    label.appendChild(copy);
+    wrap.appendChild(label);
+  });
+}
+
+function renderDepartmentSelect() {
+  const select = document.getElementById('ragDepartment');
+  if (select) {
+    const previousValue = select.value;
+    select.innerHTML = '<option value="">Geral / corporativo</option>';
+
+    getDepartmentOptions(false).forEach((department) => {
+      const option = document.createElement('option');
+      option.value = department.name;
+      option.textContent = department.name;
+      select.appendChild(option);
+    });
+
+    if (Array.from(select.options).some((option) => option.value === previousValue)) {
+      select.value = previousValue;
+    }
+  }
+
+  const submenuSelect = document.getElementById('submenuDepartmentId');
+  if (submenuSelect) {
+    const previousValue = submenuSelect.value;
+    submenuSelect.innerHTML = '<option value="">Selecione</option>';
+    getDepartmentOptions(true).forEach((department) => {
+      const option = document.createElement('option');
+      option.value = String(department.id);
+      option.textContent = department.name;
+      submenuSelect.appendChild(option);
+    });
+    if (Array.from(submenuSelect.options).some((option) => option.value === previousValue)) {
+      submenuSelect.value = previousValue;
+    }
+  }
+
+  const announcementWrap = document.getElementById('announcementDepartments');
+  if (announcementWrap) {
+    const selected = new Set(Array.from(announcementWrap.querySelectorAll('input:checked')).map((input) => String(input.value)));
+    announcementWrap.innerHTML = '';
+    getDepartmentOptions(true).forEach((department) => {
+      const label = document.createElement('label');
+      label.className = 'department-check';
+      label.innerHTML = `
+        <input type="checkbox" value="${escapeHtml(department.id)}" ${selected.has(String(department.id)) ? 'checked' : ''} />
+        <span class="department-check-copy">
+          <strong>${escapeHtml(department.name)}</strong>
+          <small>${escapeHtml(department.description || 'Comunicado segmentado para esta area.')}</small>
+        </span>
+      `;
+      announcementWrap.appendChild(label);
+    });
+  }
+
+  syncAnnouncementAudienceControls();
+}
+
+function renderDepartmentTable() {
+  const body = document.getElementById('departmentsBody');
+  body.innerHTML = '';
+  document.getElementById('departmentCountLabel').textContent = departmentCatalog.length === 1
+    ? '1 departamento cadastrado'
+    : `${departmentCatalog.length} departamentos cadastrados`;
+
+  if (!departmentCatalog.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'small muted';
+    td.textContent = 'Nenhum departamento cadastrado ainda.';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+
+  sortAlphabetically(departmentCatalog, (department) => department?.name || department?.slug || '').forEach((department) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${department.name}</td>
+      <td class="small muted">${department.slug || '-'}</td>
+      <td><span class="badge ${department.is_active ? 'admin' : ''}">${department.is_active ? 'Ativo' : 'Inativo'}</span></td>
+      <td class="small muted">${Number(department.total_users || 0)}</td>
+      <td class="small muted">${department.description || 'Sem descrição'}</td>
+      <td></td>
+    `;
+
+    const actionsCell = tr.lastElementChild;
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateDepartmentForm(department);
+    actionsCell.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger';
+    deleteBtn.textContent = 'Excluir';
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Deseja excluir o departamento "${department.name}"?`)) return;
+      try {
+        await api(`/api/admin/departments/${department.id}`, { method: 'DELETE' });
+        setMsg(`Departamento ${department.name} excluido com sucesso.`);
+        await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadSystemLogs()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actionsCell.appendChild(deleteBtn);
+    body.appendChild(tr);
+  });
+}
+
+function getSelectedAnnouncementDepartments() {
+  return Array.from(document.querySelectorAll('#announcementDepartments input:checked')).map((input) => Number(input.value));
+}
+
+function setSelectedAnnouncementDepartments(departmentIds = []) {
+  const safe = new Set((departmentIds || []).map((item) => String(item)));
+  document.querySelectorAll('#announcementDepartments input').forEach((input) => {
+    input.checked = safe.has(String(input.value));
+  });
+}
+
+function resetSubmenuForm() {
+  if (!document.getElementById('editingSubmenuId')) return;
+  document.getElementById('editingSubmenuId').value = '';
+  document.getElementById('submenuFormTitle').textContent = 'Submenus dos departamentos';
+  document.getElementById('submenuDepartmentId').value = '';
+  document.getElementById('submenuTitle').value = '';
+  document.getElementById('submenuSlug').value = '';
+  document.getElementById('submenuViewKey').value = '';
+  document.getElementById('submenuDescription').value = '';
+  document.getElementById('submenuIcon').value = '';
+  document.getElementById('submenuIsActive').checked = true;
+  document.getElementById('btnCancelSubmenuEdit').style.display = 'none';
+  document.getElementById('btnSaveSubmenu').textContent = 'Salvar submenu';
+}
+
+function populateSubmenuForm(submenu) {
+  if (!submenu) return;
+  document.getElementById('editingSubmenuId').value = String(submenu.id || '');
+  document.getElementById('submenuFormTitle').textContent = `Editar submenu #${submenu.id}`;
+  document.getElementById('submenuDepartmentId').value = String(submenu.department_id || '');
+  document.getElementById('submenuTitle').value = submenu.title || '';
+  document.getElementById('submenuSlug').value = submenu.slug || '';
+  document.getElementById('submenuViewKey').value = submenu.view_key || '';
+  document.getElementById('submenuDescription').value = submenu.description || '';
+  document.getElementById('submenuIcon').value = submenu.icon || '';
+  document.getElementById('submenuIsActive').checked = submenu.is_active !== false;
+  document.getElementById('btnCancelSubmenuEdit').style.display = '';
+  document.getElementById('btnSaveSubmenu').textContent = 'Salvar alterações';
+  setAdminTab('departments');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderSubmenuTable() {
+  const body = document.getElementById('submenusBody');
+  if (!body) return;
+  body.innerHTML = '';
+  document.getElementById('submenuCountLabel').textContent = submenuCatalog.length === 1
+    ? '1 submenu cadastrado'
+    : `${submenuCatalog.length} submenus cadastrados`;
+
+  if (!submenuCatalog.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhum submenu cadastrado ainda.</td></tr>';
+    return;
+  }
+
+  sortAlphabetically(
+    submenuCatalog,
+    (submenu) => `${submenu?.department_name || ''} ${submenu?.title || submenu?.slug || ''}`
+  ).forEach((submenu) => {
+    const department = departmentCatalog.find((item) => Number(item.id) === Number(submenu.department_id));
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(submenu.department_name || department?.name || '-')}</td>
+      <td>${escapeHtml(submenu.title || '-')}</td>
+      <td class="small muted">${escapeHtml(submenu.slug || '-')}</td>
+      <td><span class="badge ${submenu.is_active !== false ? 'admin' : ''}">${submenu.is_active !== false ? 'Ativo' : 'Inativo'}</span></td>
+      <td class="small muted">${escapeHtml(submenu.description || 'Sem descrição')}</td>
+      <td class="admin-inline-actions"></td>
+    `;
+    const actions = tr.lastElementChild;
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateSubmenuForm(submenu);
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger';
+    deleteBtn.textContent = 'Excluir';
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Deseja excluir o submenu "${submenu.title}"?`)) return;
+      try {
+        await api(`/api/admin/department-submenus/${submenu.id}`, { method: 'DELETE' });
+        setMsg(`Submenu ${submenu.title} excluido com sucesso.`);
+        await Promise.all([loadSubmenus(), loadSystemLogs()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actions.appendChild(deleteBtn);
+
+    body.appendChild(tr);
+  });
+}
+
+async function loadSubmenus() {
+  const { submenus } = await api('/api/admin/department-submenus');
+  submenuCatalog = sortAlphabetically(
+    submenus || [],
+    (submenu) => `${submenu?.department_name || ''} ${submenu?.title || submenu?.slug || ''}`
+  );
+  renderSubmenuTable();
+}
+
+function resetAnnouncementForm() {
+  if (!document.getElementById('editingAnnouncementId')) return;
+  document.getElementById('editingAnnouncementId').value = '';
+  document.getElementById('announcementFormTitle').textContent = 'Comunicados internos';
+  document.getElementById('announcementTitle').value = '';
+  document.getElementById('announcementSummary').value = '';
+  document.getElementById('announcementContent').value = '';
+  document.getElementById('announcementType').value = 'announcement';
+  document.getElementById('announcementPriority').value = 'normal';
+  document.getElementById('announcementAudienceScope').value = 'all';
+  document.getElementById('announcementStartsAt').value = '';
+  document.getElementById('announcementEndsAt').value = '';
+  document.getElementById('announcementIsActive').checked = true;
+  document.getElementById('btnCancelAnnouncementEdit').style.display = 'none';
+  document.getElementById('btnSaveAnnouncement').textContent = 'Salvar comunicado';
+  setSelectedAnnouncementDepartments([]);
+}
+
+function toDateTimeLocalValue(value) {
+  if (!value) return '';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  } catch {
+    return '';
+  }
+}
+
+function populateAnnouncementForm(announcement) {
+  if (!announcement) return;
+  document.getElementById('editingAnnouncementId').value = String(announcement.id || '');
+  document.getElementById('announcementFormTitle').textContent = `Editar comunicado #${announcement.id}`;
+  document.getElementById('announcementTitle').value = announcement.title || '';
+  document.getElementById('announcementSummary').value = announcement.summary_text || '';
+  document.getElementById('announcementContent').value = announcement.content_text || '';
+  document.getElementById('announcementType').value = announcement.announcement_type || 'announcement';
+  document.getElementById('announcementPriority').value = announcement.priority || 'normal';
+  document.getElementById('announcementAudienceScope').value = announcement.audience_scope || 'all';
+  document.getElementById('announcementStartsAt').value = toDateTimeLocalValue(announcement.starts_at);
+  document.getElementById('announcementEndsAt').value = toDateTimeLocalValue(announcement.ends_at);
+  document.getElementById('announcementIsActive').checked = announcement.is_active !== false;
+  setSelectedAnnouncementDepartments(announcement.department_ids || []);
+  syncAnnouncementAudienceControls();
+  document.getElementById('btnCancelAnnouncementEdit').style.display = '';
+  document.getElementById('btnSaveAnnouncement').textContent = 'Salvar alterações';
+  setAdminTab('departments');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderAnnouncementsTable() {
+  const body = document.getElementById('announcementsBody');
+  if (!body) return;
+  body.innerHTML = '';
+  document.getElementById('announcementsCountLabel').textContent = announcementCatalog.length === 1
+    ? '1 comunicado publicado'
+    : `${announcementCatalog.length} comunicados publicados`;
+
+  if (!announcementCatalog.length) {
+    body.innerHTML = '<tr><td colspan="5" class="small muted">Nenhum comunicado interno publicado ainda.</td></tr>';
+    return;
+  }
+
+  announcementCatalog.forEach((announcement) => {
+    const audience = announcement.audience_scope === 'departments'
+      ? `Departamentos: ${(announcement.department_names || []).join(', ') || '-'}`
+      : 'Todos os usuários';
+    const schedule = [announcement.starts_at ? formatDateTime(announcement.starts_at) : 'Agora', announcement.ends_at ? formatDateTime(announcement.ends_at) : 'Sem fim'].join(' - ');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(announcement.title || '-')}</td>
+      <td class="small muted">${escapeHtml(audience)}</td>
+      <td><span class="badge ${announcement.is_active !== false ? 'admin' : ''}">${announcement.is_active !== false ? 'Ativo' : 'Inativo'}</span></td>
+      <td class="small muted">${escapeHtml(schedule)}</td>
+      <td class="admin-inline-actions"></td>
+    `;
+    const actions = tr.lastElementChild;
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateAnnouncementForm(announcement);
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger';
+    deleteBtn.textContent = 'Excluir';
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Deseja excluir o comunicado "${announcement.title}"?`)) return;
+      try {
+        await api(`/api/admin/intranet/announcements/${announcement.id}`, { method: 'DELETE' });
+        setMsg(`Comunicado ${announcement.title} excluido com sucesso.`);
+        await Promise.all([loadAnnouncements(), loadSystemLogs()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actions.appendChild(deleteBtn);
+
+    body.appendChild(tr);
+  });
+}
+
+async function loadAnnouncements() {
+  const { announcements } = await api('/api/admin/intranet/announcements');
+  announcementCatalog = announcements || [];
+  renderAnnouncementsTable();
+}
+
+function renderSystemLogsTable(bodyId, items = [], formatter, emptyText) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  body.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    body.innerHTML = `<tr><td colspan="5" class="small muted">${emptyText}</td></tr>`;
+    return;
+  }
+  items.forEach((item) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = formatter(item);
+    body.appendChild(tr);
+  });
+}
+
+function syncResponsiveTableLabels(root = document) {
+  Array.from(root.querySelectorAll('.admin-panel .table')).forEach((table) => {
+    const headers = Array.from(table.querySelectorAll('thead th')).map((header) => header.textContent.trim() || 'Detalhe');
+    Array.from(table.querySelectorAll('tbody tr')).forEach((row) => {
+      Array.from(row.children).forEach((cell, index) => {
+        if (cell.tagName !== 'TD') return;
+        if (cell.hasAttribute('colspan')) {
+          cell.setAttribute('data-label', '');
+          return;
+        }
+        cell.setAttribute('data-label', headers[index] || 'Detalhe');
+      });
+    });
+  });
+}
+
+let responsiveTableObserver = null;
+function startResponsiveTableObserver() {
+  if (responsiveTableObserver) return;
+  const target = document.querySelector('.admin-content-grid') || document.body;
+  responsiveTableObserver = new MutationObserver(() => syncResponsiveTableLabels(target));
+  responsiveTableObserver.observe(target, { childList: true, subtree: true });
+  syncResponsiveTableLabels(target);
+}
+
+async function loadSystemLogs() {
+  const logs = await api('/api/admin/system-logs');
+  systemLogsState = logs;
+
+  const auditRows = logs.audit_logs || [];
+  const processingRows = logs.processing_logs || [];
+  const trainingRows = logs.training_logs || [];
+  const calendarRows = logs.calendar_logs || [];
+
+  document.getElementById('auditLogsCountLabel').textContent = `${auditRows.length} log(s) recente(s)`;
+  document.getElementById('processingLogsCountLabel').textContent = `${processingRows.length} log(s) recente(s)`;
+  document.getElementById('trainingLogsCountLabel').textContent = `${trainingRows.length} evento(s) recente(s)`;
+  document.getElementById('calendarLogsCountLabel').textContent = `${calendarRows.length} log(s) recente(s)`;
+
+  renderSystemLogsTable('auditLogsBody', auditRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.actor_name || 'Sistema')}</td>
+    <td>${escapeHtml(item.action || '-')}</td>
+    <td class="small muted">${escapeHtml(item.meta_json || '')}</td>
+  `, 'Nenhum log administrativo recente.');
+
+  renderSystemLogsTable('processingLogsBody', processingRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.file_name || '-')}</td>
+    <td>${escapeHtml(item.stage_key || '-')}</td>
+    <td>${escapeHtml(item.stage_status || '-')}</td>
+    <td class="small muted">${escapeHtml(item.message || '-')}</td>
+  `, 'Nenhum log de processamento recente.');
+
+  renderSystemLogsTable('systemTrainingLogsBody', trainingRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.actor_name || 'Sistema')}</td>
+    <td>${escapeHtml(item.event_type || item.title || '-')}</td>
+    <td>${escapeHtml(item.event_status || '-')}</td>
+    <td class="small muted">${escapeHtml(item.detail_text || '-')}</td>
+  `, 'Nenhum evento recente de treinamento.');
+
+  renderSystemLogsTable('calendarLogsBody', calendarRows, (item) => `
+    <td>${escapeHtml(formatDateTime(item.created_at))}</td>
+    <td>${escapeHtml(item.event_title || '-')}</td>
+    <td>${escapeHtml(item.action || '-')}</td>
+    <td>${escapeHtml(item.field_name || '-')}</td>
+    <td class="small muted">${escapeHtml(item.new_value || item.old_value || '-')}</td>
+  `, 'Nenhum log recente da agenda.');
+}
+
+function getSelectedDepartments() {
+  return Array.from(document.querySelectorAll('input[name="departments"]:checked')).map((input) => input.value);
+}
+
+function setSelectedDepartments(departments = []) {
+  const safe = new Set(Array.isArray(departments) ? departments : []);
+  document.querySelectorAll('input[name="departments"]').forEach((input) => {
+    input.checked = safe.has(input.value);
+  });
+}
+
+function resetUserForm() {
+  document.getElementById('editingUserId').value = '';
+  document.getElementById('userFormTitle').textContent = 'Criar usuário';
+  document.getElementById('btnSaveUser').textContent = 'Criar usuário';
+  document.getElementById('btnCancelEdit').style.display = 'none';
+  document.getElementById('name').value = '';
+  document.getElementById('email').value = '';
+  document.getElementById('password').value = '';
+  document.getElementById('role').value = 'user';
+  document.getElementById('jobTitle').value = '';
+  document.getElementById('unitName').value = '';
+  document.getElementById('canAccessIntranet').checked = false;
+  setSelectedDepartments([]);
+}
+
+function populateUserForm(user) {
+  document.getElementById('editingUserId').value = String(user.id);
+  document.getElementById('userFormTitle').textContent = `Editar usuário #${user.id}`;
+  document.getElementById('btnSaveUser').textContent = 'Salvar alterações';
+  document.getElementById('btnCancelEdit').style.display = '';
+  document.getElementById('name').value = user.name || '';
+  document.getElementById('email').value = user.email || '';
+  document.getElementById('password').value = '';
+  document.getElementById('role').value = user.role || 'user';
+  document.getElementById('jobTitle').value = user.job_title || '';
+  document.getElementById('unitName').value = user.unit_name || '';
+  document.getElementById('canAccessIntranet').checked = Boolean(user.can_access_intranet);
+  setSelectedDepartments(user.departments || []);
+}
+
+function resetDepartmentForm() {
+  document.getElementById('editingDepartmentId').value = '';
+  document.getElementById('departmentFormTitle').textContent = 'Criar departamento';
+  document.getElementById('btnSaveDepartment').textContent = 'Criar departamento';
+  document.getElementById('btnCancelDepartmentEdit').style.display = 'none';
+  document.getElementById('departmentName').value = '';
+  document.getElementById('departmentSlug').value = '';
+  document.getElementById('departmentDescription').value = '';
+  document.getElementById('departmentIcon').value = '';
+  document.getElementById('departmentIsActive').checked = true;
+}
+
+function populateDepartmentForm(department) {
+  document.getElementById('editingDepartmentId').value = String(department.id);
+  document.getElementById('departmentFormTitle').textContent = `Editar departamento #${department.id}`;
+  document.getElementById('btnSaveDepartment').textContent = 'Salvar departamento';
+  document.getElementById('btnCancelDepartmentEdit').style.display = '';
+  document.getElementById('departmentName').value = department.name || '';
+  document.getElementById('departmentSlug').value = department.slug || '';
+  document.getElementById('departmentDescription').value = department.description || '';
+  document.getElementById('departmentIcon').value = department.icon || '';
+  document.getElementById('departmentIsActive').checked = department.is_active !== false;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function formatDepartmentLabel(user) {
+  const departments = Array.isArray(user.departments) ? user.departments : [];
+  return departments.length ? departments.join(', ') : (user.department || 'Sem departamento');
+}
+
+function loadSectionState() {
+  try {
+    const raw = localStorage.getItem(SECTION_STORAGE_KEY);
+    collapsedSections = new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    collapsedSections = new Set();
+  }
+}
+
+function persistSectionState() {
+  try {
+    localStorage.setItem(SECTION_STORAGE_KEY, JSON.stringify(Array.from(collapsedSections)));
+  } catch {}
+}
+
+function syncSectionToggles() {
+  document.querySelectorAll('[data-section-body]').forEach((body) => {
+    const key = body.getAttribute('data-section-body');
+    body.hidden = collapsedSections.has(key);
+  });
+
+  document.querySelectorAll('[data-toggle-section]').forEach((button) => {
+    const key = button.getAttribute('data-toggle-section');
+    const collapsed = collapsedSections.has(key);
+    button.textContent = collapsed ? '+' : '-';
+    button.setAttribute('aria-label', collapsed ? 'Expandir secao' : 'Recolher secao');
+  });
+}
+
+function bindSectionToggles() {
+  document.querySelectorAll('[data-toggle-section]').forEach((button) => {
+    button.onclick = () => {
+      const key = button.getAttribute('data-toggle-section');
+      if (collapsedSections.has(key)) {
+        collapsedSections.delete(key);
+      } else {
+        collapsedSections.add(key);
+      }
+      persistSectionState();
+      syncSectionToggles();
+    };
+  });
+}
+
+function setAdminTab(tabKey = 'users') {
+  activeAdminTab = tabKey;
+  document.querySelectorAll('[data-admin-tab]').forEach((button) => {
+    button.classList.toggle('is-active', button.getAttribute('data-admin-tab') === tabKey);
+  });
+
+  document.querySelectorAll('[data-admin-tab-panel]').forEach((panel) => {
+    const isActive = panel.getAttribute('data-admin-tab-panel') === tabKey;
+    panel.classList.toggle('is-active', isActive);
+    panel.hidden = !isActive;
+  });
+
+  document.querySelectorAll('[data-admin-chunk]').forEach((chunk) => {
+    const allowedTabs = String(chunk.getAttribute('data-admin-chunk') || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    chunk.hidden = !allowedTabs.includes(tabKey);
+  });
+
+  if (tabKey === 'cockpit') {
+    loadAdminCockpit().catch(() => {});
+  }
+}
+
+function bindAdminTabs() {
+  document.querySelectorAll('[data-admin-tab]').forEach((button) => {
+    button.onclick = () => setAdminTab(button.getAttribute('data-admin-tab') || 'users');
+  });
+}
+
+function syncAnnouncementAudienceControls() {
+  const scope = document.getElementById('announcementAudienceScope')?.value || 'all';
+  const container = document.getElementById('announcementDepartments');
+  if (!container) return;
+  const shouldDisable = scope !== 'departments';
+  container.querySelectorAll('input').forEach((input) => {
+    input.disabled = shouldDisable;
+    if (shouldDisable) input.checked = false;
+  });
+  container.style.opacity = shouldDisable ? '.6' : '1';
+}
+
+async function loadDepartments() {
+  const { departments } = await api('/api/admin/departments');
+  departmentCatalog = sortAlphabetically(departments || [], (department) => department?.name || department?.slug || '');
+  renderDepartmentsGrid();
+  renderDepartmentSelect();
+  renderDepartmentTable();
+}
+
+async function loadUsers() {
+  const { users } = await api('/api/admin/users');
+  cachedUsers = sortAlphabetically(users || [], (user) => user?.name || user?.email || '');
+  const body = document.getElementById('usersBody');
+  body.innerHTML = '';
+  document.getElementById('usersCountLabel').textContent = cachedUsers.length === 1
+    ? '1 usuário preservado'
+    : `${cachedUsers.length} usuários preservados`;
+
+  for (const user of cachedUsers) {
+    const tr = document.createElement('tr');
+
+    const tdId = document.createElement('td');
+    tdId.textContent = user.id;
+
+    const tdName = document.createElement('td');
+    tdName.textContent = user.name;
+
+    const tdEmail = document.createElement('td');
+    tdEmail.textContent = user.email;
+
+    const tdRole = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (user.role === 'admin' ? 'admin' : '');
+    badge.textContent = user.role;
+    tdRole.appendChild(badge);
+
+    const tdDepartments = document.createElement('td');
+    tdDepartments.className = 'small muted';
+    tdDepartments.textContent = formatDepartmentLabel(user);
+
+    const tdIntranet = document.createElement('td');
+    const intranetBadge = document.createElement('span');
+    intranetBadge.className = 'badge ' + (user.can_access_intranet ? 'admin' : '');
+    intranetBadge.textContent = user.can_access_intranet ? 'Liberado' : 'Bloqueado';
+    tdIntranet.appendChild(intranetBadge);
+
+    const tdStatus = document.createElement('td');
+    tdStatus.className = 'small muted';
+    tdStatus.textContent = 'Preservado';
+
+    const tdActions = document.createElement('td');
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn';
+    editBtn.textContent = 'Editar';
+    editBtn.onclick = () => populateUserForm(user);
+    tdActions.appendChild(editBtn);
+
+    tr.appendChild(tdId);
+    tr.appendChild(tdName);
+    tr.appendChild(tdEmail);
+    tr.appendChild(tdRole);
+    tr.appendChild(tdDepartments);
+    tr.appendChild(tdIntranet);
+    tr.appendChild(tdStatus);
+    tr.appendChild(tdActions);
+    body.appendChild(tr);
+  }
+
+  renderCloserUserOptions();
+}
+
+async function loadRagStatus() {
+  const status = await api('/api/admin/rag/status');
+  const el = document.getElementById('ragStatus');
+  const counts = status.counts || {};
+  const available = Number(status.available_to_ai || counts.available || 0);
+  const failed = Number(status.recent_failures || counts.failed || 0);
+  const processing = Number(counts.processing || 0);
+  const analyzed = Number(counts.analyzed || 0);
+  const processed = Number(counts.processed || 0);
+  const needsReprocess = Number(counts.needs_reprocess || status.needs_reprocess || 0);
+  const background = status.background || {};
+  el.textContent = status.vector_store_configured
+    ? `Vector Store ativa (${status.vector_store_id}). ${processed} arquivo(s) processado(s), ${analyzed} analisado(s), ${available} disponível(is) para a IA, ${processing} em processamento e ${needsReprocess} pendente(s) de reprocessamento.`
+    : `Vector Store não configurada. O índice local segue ativo com ${processed} arquivo(s) processado(s), ${analyzed} analisado(s), ${available} disponível(is) para a IA, ${processing} em processamento e ${Math.max(needsReprocess, failed)} item(ns) exigindo atenção.`;
+  const backgroundText = background.running
+    ? `Fila em background ativa. ${Number(background.queued || 0)} na fila, ${Number(background.processed || 0)} processado(s) e ${Number(background.failed || 0)} falha(s).`
+    : `Fila em background pronta. ${Number(background.queued || 0)} aguardando, ${Number(background.processed || 0)} processado(s) e ${Number(background.failed || 0)} falha(s).`;
+  document.getElementById('ragBackgroundState').textContent = background.last_error
+    ? `${backgroundText} Ultima falha: ${background.last_error}.`
+    : backgroundText;
+}
+
+async function loadRagFiles() {
+  const { files, total } = await api('/api/admin/rag/files');
+  const body = document.getElementById('ragFilesBody');
+  body.innerHTML = '';
+  setRagDocumentCount(total);
+
+  if (!files.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 13;
+    td.className = 'small muted';
+    td.textContent = 'Nenhum documento carregado na base ainda.';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+
+  for (const file of files) {
+    const tr = document.createElement('tr');
+    const lastError = file.last_error ? escapeHtml(file.last_error) : '-';
+    tr.innerHTML = `
+      <td>${escapeHtml(file.original_name)}</td>
+      <td class="small muted">${escapeHtml(file.mime_type || '-')}</td>
+      <td class="small muted">${escapeHtml(file.department_name || 'Geral')}</td>
+      <td class="small muted">${escapeHtml(file.language || '-')}</td>
+      <td><span class="${getStatusBadgeClass(file.parsing_status)}">${escapeHtml(formatStageLabel(file.parsing_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.transcript_status)}">${escapeHtml(formatStageLabel(file.transcript_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.chunking_status)}">${escapeHtml(formatStageLabel(file.chunking_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.embedding_status)}">${escapeHtml(formatStageLabel(file.embedding_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.analysis_status)}">${escapeHtml(formatStageLabel(file.analysis_status))}</span></td>
+      <td><span class="${getStatusBadgeClass(file.vector_store_status)}">${escapeHtml(formatStageLabel(file.vector_store_status))}</span></td>
+      <td title="${lastError}"><span class="${getStatusBadgeClass(file.availability_status)}">${escapeHtml(formatStageLabel(file.availability_status))}</span></td>
+      <td class="small muted">${escapeHtml(formatDateTime(file.created_at))}</td>
+      <td class="admin-inline-actions"></td>
+    `;
+    const actionsCell = tr.lastElementChild;
+    const reprocessBtn = document.createElement('button');
+    reprocessBtn.type = 'button';
+    reprocessBtn.className = 'btn';
+    reprocessBtn.textContent = 'Reprocessar';
+    reprocessBtn.onclick = async () => {
+      reprocessBtn.disabled = true;
+      reprocessBtn.textContent = 'Reprocessando...';
+      try {
+        await api(`/api/admin/rag/files/${file.id}/reprocess`, { method: 'POST' });
+        setMsg(`Reprocessamento iniciado para ${file.original_name}.`);
+        await Promise.all([loadRagStatus(), loadRagFiles(), loadAiTrainingOverview()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      } finally {
+        reprocessBtn.disabled = false;
+        reprocessBtn.textContent = 'Reprocessar';
+      }
+    };
+    actionsCell.appendChild(reprocessBtn);
+
+    const logsBtn = document.createElement('button');
+    logsBtn.type = 'button';
+    logsBtn.className = 'btn';
+    logsBtn.textContent = 'Logs';
+    logsBtn.onclick = async () => {
+      try {
+        const result = await api(`/api/admin/rag/files/${file.id}/logs`);
+        const logLines = (result.logs || []).slice(0, 5).map((item) => `${formatDateTime(item.created_at)} - ${item.stage_key} [${item.stage_status}] ${item.message || ''}`);
+        const eventLines = (result.training_events || []).slice(0, 3).map((item) => `${formatDateTime(item.created_at)} - ${item.event_type} [${item.event_status}] ${item.detail_text || ''}`);
+        const lines = [...logLines, ...eventLines];
+        setMsg(lines.length ? lines.join(' | ') : 'Nenhum log recente para este arquivo.');
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      }
+    };
+    actionsCell.appendChild(logsBtn);
+    body.appendChild(tr);
+  }
+}
+
+function renderTrainingOverviewCards(overview = {}) {
+  const wrap = document.getElementById('trainingOverviewCards');
+  wrap.innerHTML = '';
+
+  const knowledgeCounts = overview.knowledge?.counts || {};
+  const memories = overview.memories || {};
+  const events = overview.training_events || {};
+  const cards = [
+    { label: 'Arquivos na base', value: Number(knowledgeCounts.total || 0), tone: 'primary' },
+    { label: 'Arquivos processados', value: Number(knowledgeCounts.processed || 0), tone: 'neutral' },
+    { label: 'Arquivos analisados', value: Number(knowledgeCounts.analyzed || 0), tone: 'success' },
+    { label: 'Disponíveis para IA', value: Number(knowledgeCounts.available || 0), tone: 'success' },
+    { label: 'Memórias documentais', value: Number(memories.document_total || 0), tone: 'primary' },
+    { label: 'Arquivos usados em respostas', value: Number(knowledgeCounts.documents_used_in_responses || 0), tone: 'neutral' },
+    { label: 'Para reprocessar', value: Number(knowledgeCounts.needs_reprocess || 0), tone: 'warning' },
+    { label: 'Respostas fracas', value: Array.isArray(events.weak_responses) ? events.weak_responses.length : 0, tone: 'danger' },
+  ];
+
+  cards.forEach((card) => {
+    const article = document.createElement('article');
+    article.className = `admin-metric-card ${card.tone || 'neutral'}`;
+    article.innerHTML = `<div class="admin-metric-value">${escapeHtml(card.value)}</div><div class="admin-metric-label">${escapeHtml(card.label)}</div>`;
+    wrap.appendChild(article);
+  });
+}
+
+function renderTrainingTopDocuments(items = []) {
+  const wrap = document.getElementById('trainingTopDocuments');
+  wrap.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    wrap.innerHTML = '<div class="small muted">Nenhum documento usado recentemente pela IA.</div>';
+    return;
+  }
+
+  items.slice(0, 10).forEach((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'admin-chip-card';
+    chip.innerHTML = `<strong>${escapeHtml(item.name || `Documento #${item.knowledge_source_id || '-'}`)}</strong><span>${Number(item.total || 0)} uso(s)</span>`;
+    wrap.appendChild(chip);
+  });
+}
+
+function renderTrainingTopTopics(items = []) {
+  const wrap = document.getElementById('trainingTopTopics');
+  wrap.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    wrap.innerHTML = '<div class="small muted">Nenhum tema recorrente consolidado ainda.</div>';
+    return;
+  }
+
+  items.slice(0, 12).forEach((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'admin-chip-card';
+    chip.innerHTML = `<strong>${escapeHtml(item.topic || '-')}</strong><span>${Number(item.total || 0)} ocorrencia(s)</span>`;
+    wrap.appendChild(chip);
+  });
+}
+
+function renderTrainingFailures(items = []) {
+  const body = document.getElementById('trainingFailuresBody');
+  body.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhum arquivo com falha ou indisponibilidade no momento.</td></tr>';
+    return;
+  }
+
+  items.slice(0, 20).forEach((item) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(item.original_name || '-')}</td>
+      <td><span class="${getStatusBadgeClass(item.availability_status)}">${escapeHtml(formatStageLabel(item.availability_status))}</span></td>
+      <td class="small muted">${escapeHtml(item.last_error || item.health_issues?.join(', ') || '-')}</td>
+      <td class="admin-inline-actions"></td>
+    `;
+    const actionsCell = tr.lastElementChild;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.textContent = 'Reprocessar';
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/admin/rag/files/${item.id}/reprocess`, { method: 'POST' });
+        setMsg(`Reprocessamento solicitado para ${item.original_name}.`);
+        await Promise.all([loadRagStatus(), loadRagFiles(), loadAiTrainingOverview()]);
+      } catch (err) {
+        setMsg('Erro: ' + err.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    actionsCell.appendChild(btn);
+    body.appendChild(tr);
+  });
+}
+
+function renderTrainingMemories(memories = []) {
+  const body = document.getElementById('trainingMemoriesBody');
+  body.innerHTML = '';
+  if (!Array.isArray(memories) || !memories.length) {
+    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhuma memória persistida ainda.</td></tr>';
+    return;
+  }
+
+  memories.slice(0, 20).forEach((memory) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(memory.title || '-')}</td>
+      <td class="small muted">${escapeHtml(memory.memory_scope || '-')}</td>
+      <td class="small muted">${escapeHtml(memory.language || '-')}</td>
+      <td class="small muted">${escapeHtml(formatDateTime(memory.updated_at || memory.created_at))}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function renderTrainingEvents(events = []) {
+  const body = document.getElementById('trainingEventsBody');
+  body.innerHTML = '';
+  if (!Array.isArray(events) || !events.length) {
+    body.innerHTML = '<tr><td colspan="4" class="small muted">Nenhum evento recente de treinamento foi registrado ainda.</td></tr>';
+    return;
+  }
+
+  events.slice(0, 20).forEach((event) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="small muted">${escapeHtml(formatDateTime(event.created_at))}</td>
+      <td>${escapeHtml(event.title || event.event_type || '-')}</td>
+      <td><span class="${getStatusBadgeClass(event.event_status)}">${escapeHtml(formatStageLabel(event.event_status || 'info'))}</span></td>
+      <td class="small muted">${escapeHtml(event.detail_text || '-')}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+async function loadAiTrainingOverview() {
+  const overview = await api('/api/admin/ai-training/overview');
+  trainingOverview = overview;
+
+  const knowledgeTotal = Number(overview.knowledge?.counts?.total || 0);
+  const knowledgeProcessed = Number(overview.knowledge?.counts?.processed || 0);
+  const knowledgeAnalyzed = Number(overview.knowledge?.counts?.analyzed || 0);
+  const knowledgeAvailable = Number(overview.knowledge?.counts?.available || 0);
+  const documentMemoryTotal = Number(overview.memories?.document_total || 0);
+  const failureItems = Array.isArray(overview.knowledge?.needs_reprocess) && overview.knowledge.needs_reprocess.length
+    ? overview.knowledge.needs_reprocess
+    : (overview.knowledge?.recent_failures || []);
+  const failureTotal = Math.max(Number(overview.knowledge?.counts?.needs_reprocess || 0), failureItems.length);
+  document.getElementById('trainingCountLabel').textContent = `${knowledgeTotal} arquivo(s), ${knowledgeProcessed} processado(s), ${knowledgeAnalyzed} analisado(s), ${documentMemoryTotal} memória(s) documental(is) e ${failureTotal} item(ns) para reprocessar`;
+
+  renderTrainingOverviewCards(overview);
+  renderTrainingTopDocuments(overview.knowledge?.top_documents || []);
+  renderTrainingTopTopics(overview.memories?.top_topics || []);
+  renderTrainingFailures(failureItems);
+  renderTrainingMemories(overview.memories?.recent || []);
+  renderTrainingEvents(overview.training_events?.recent || []);
+}
+
+function renderCockpitList(containerId, items = []) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  (items || []).forEach((item) => {
+    const block = document.createElement('div');
+    block.className = 'admin-cockpit-list-item';
+    block.innerHTML = `
+      <div>
+        <strong>${escapeHtml(item.label || '-')}</strong>
+        <div class="small muted">${escapeHtml(item.description || '')}</div>
+      </div>
+      <span class="badge ${item.tone || ''}">${escapeHtml(item.value || '-')}</span>
+    `;
+    wrap.appendChild(block);
+  });
+}
+
+function renderCockpitGauge(chat = {}) {
+  const averageSeconds = Number(chat.average_response_ms || 0) / 1000;
+  const gauge = document.getElementById('cockpitChatGauge');
+  const value = document.getElementById('cockpitChatGaugeValue');
+  const status = document.getElementById('cockpitChatGaugeStatus');
+  const hint = document.getElementById('cockpitChatGaugeHint');
+  const metrics = document.getElementById('cockpitChatMetrics');
+  if (!gauge || !value || !status || !hint || !metrics) return;
+
+  const severity = String(chat.severity || 'normal');
+  const severityMap = {
+    fast: { label: 'Muito rápido', gauge: 18 },
+    normal: { label: 'Normal', gauge: 42 },
+    slow: { label: 'Lento', gauge: 68 },
+    critical: { label: 'Crítico', gauge: 92 },
+  };
+  const current = severityMap[severity] || severityMap.normal;
+  gauge.style.setProperty('--gauge-value', String(current.gauge));
+  value.textContent = `${averageSeconds.toFixed(1)}s`;
+  status.textContent = current.label;
+  hint.textContent = 'Tempo médio de resposta';
+
+  const metricCards = [
+    { label: 'Última resposta', value: `${(Number(chat.last_response_ms || 0) / 1000).toFixed(1)}s` },
+    { label: 'Latência API', value: `${Math.round(Number(chat.average_api_latency_ms || 0))} ms` },
+    { label: 'Processamento interno', value: `${Math.round(Number(chat.average_internal_ms || 0))} ms` },
+    { label: 'Montagem de contexto', value: `${Math.round(Number(chat.average_context_ms || 0))} ms` },
+    { label: 'Persistência', value: `${Math.round(Number(chat.average_persistence_ms || 0))} ms` },
+    { label: 'Memória RSS', value: formatBytes(Number(chat.memory_rss_bytes || 0)) },
+    { label: 'Uso de memória', value: `${Number(chat.memory_percent || 0).toFixed(1)}%` },
+    { label: 'Carga CPU (1m)', value: String(chat.cpu_load_1m ?? '-') },
+    { label: 'Requisições simultâneas', value: String(chat.concurrent_requests ?? 0) },
+    { label: 'Buscas web', value: `${Number(chat.total_web_search_calls || 0)}` },
+    { label: 'APIs de dados', value: `${Number(chat.total_data_api_calls || 0)}` },
+    { label: 'Base Talkers', value: `${Number(chat.total_talkers_public_hits || 0)}` },
+    { label: 'Prompt médio', value: `${Math.round(Number(chat.average_prompt_chars || 0))} chars` },
+    { label: 'Payload médio', value: formatBytes(Number(chat.average_payload_bytes || 0)) },
+    { label: 'Resposta média', value: formatBytes(Number(chat.average_response_bytes || 0)) },
+  ];
+  metrics.innerHTML = '';
+  metricCards.forEach((item) => {
+    const article = document.createElement('article');
+    article.innerHTML = `<strong>${escapeHtml(item.value)}</strong><span>${escapeHtml(item.label)}</span>`;
+    metrics.appendChild(article);
+  });
+}
+
+async function loadAdminCockpit() {
+  const { cockpit } = await api('/api/admin/cockpit');
+  const payload = cockpit || {};
+  const storage = payload.storage || {};
+  const database = payload.database || {};
+  const openai = payload.openai || {};
+  const whatsapp = payload.whatsapp || {};
+  const application = payload.application || {};
+  const queues = payload.queues?.knowledge_background || {};
+  const whatsappQueue = payload.queues?.whatsapp_campaigns || {};
+  const alerts = payload.alerts || {};
+  const talkersBase = payload.talkers_public_base || openai.talkers_public_base || {};
+  const summaryWrap = document.getElementById('cockpitSummaryCards');
+  const summaryCards = [
+    { label: 'Storage', value: storage.current || '-' },
+    { label: 'Banco', value: database.client || '-' },
+    { label: 'OpenAI', value: openai.status || '-' },
+    { label: 'Base Talkers', value: `${Number(talkersBase.source_count || 0)} fontes` },
+    { label: 'WhatsApp', value: whatsapp.integration?.status_label || '-' },
+    { label: 'Status geral', value: application.status || '-' },
+  ];
+  summaryWrap.innerHTML = '';
+  summaryCards.forEach((item) => {
+    const card = document.createElement('article');
+    card.className = 'admin-metric-card neutral';
+    card.innerHTML = `<div class="admin-metric-value">${escapeHtml(item.value)}</div><div class="admin-metric-label">${escapeHtml(item.label)}</div>`;
+    summaryWrap.appendChild(card);
+  });
+
+  document.getElementById('cockpitSummaryLabel').textContent = `Storage ${storage.current || '-'} • Banco ${database.client || '-'} • OpenAI ${openai.status || '-'} • Base Talkers ${Number(talkersBase.source_count || 0)} fonte(s) • ${Number(alerts.recent_errors_total || 0)} alerta(s) recente(s)`;
+
+  renderCockpitList('cockpitStorageList', [
+    { label: 'Storage atual', value: storage.current || '-', description: storage.technical_note || '' },
+    { label: 'Caminho de upload', value: storage.upload_path || '-', description: storage.knowledge_path || '' },
+    { label: 'Tipo', value: storage.type || '-', description: storage.alert || '' },
+  ]);
+
+  renderCockpitList('cockpitAppList', [
+    { label: 'Banco conectado', value: database.client || '-', description: database.target || '' },
+    { label: 'Ambiente', value: database.environment || application.environment || '-', description: database.availability_note || '' },
+    { label: 'Uptime', value: `${Math.round(Number(application.uptime_seconds || 0) / 60)} min`, description: application.base_url || '' },
+  ]);
+
+  renderCockpitList('cockpitIntegrationsList', [
+    { label: 'OpenAI API', value: openai.api_key_status || (openai.api_configured ? 'Ativo' : 'Inativo'), description: openai.prompt_configured ? `Prompt: ${openai.prompt_id || 'configurado'}` : 'Sem prompt reutilizável ativo' },
+    { label: 'Modelo e endpoint', value: openai.model || '-', description: openai.responses_api_active ? 'Responses API ativa com streaming.' : 'Responses API indisponível.' },
+    { label: 'Vector Store', value: openai.vector_store_configured ? 'Ativo' : 'Inativo', description: openai.vector_store_id || 'Sem ID configurado' },
+    { label: 'Arquivos disponíveis para IA', value: String(openai.knowledge_available_total || 0), description: `${String(openai.knowledge_files_total || 0)} arquivo(s) no total` },
+    { label: 'Busca externa e APIs', value: openai.external_search_enabled ? 'Ativo' : 'Inativo', description: openai.current_data_tools_enabled ? 'Web search, dados públicos e APIs de contexto atual habilitados.' : 'Ferramentas externas indisponíveis.' },
+    { label: 'Base pública da Talkers', value: `${Number(talkersBase.source_count || 0)} fonte(s)`, description: talkersBase.technical_note || ((talkersBase.categories || []).join(' • ') || 'Base institucional pronta para sincronização.') },
+    { label: 'WhatsApp provider', value: whatsapp.integration?.status_label || '-', description: whatsapp.integration?.technical_note || 'Sem integração ativa para disparo real no momento.' },
+  ]);
+
+  renderCockpitList('cockpitAlertsList', [
+    { label: 'Fila de conhecimento', value: queues.running ? 'Ativa' : 'Pronta', description: `${Number(queues.queued || 0)} na fila • ${Number(queues.processed || 0)} processados` },
+    { label: 'Fila de WhatsApp', value: String(whatsappQueue.pending || 0), description: `${Number(whatsappQueue.sending || 0)} enviando • ${Number(whatsappQueue.failed || 0)} com erro` },
+    { label: 'Erros recentes', value: String(alerts.recent_errors_total || 0), description: `Processamento: ${Number(alerts.processing_failures_7d || 0)} • Treinamento: ${Number(alerts.training_failures_7d || 0)}` },
+    { label: 'Alertas do chat', value: (alerts.chat || []).length ? 'Atenção' : 'Normal', description: (alerts.chat || []).join(' • ') || 'Sem gargalos relevantes detectados agora.' },
+  ]);
+
+  renderCockpitGauge(payload.chat_performance || {});
+}
+
+function renderCloserUserOptions() {
+  const closerSelect = document.getElementById('closerUserId');
+  const previousCloserValue = closerSelect.value;
+  closerSelect.innerHTML = '<option value="">Sem vínculo direto</option>';
+  cachedUsers.forEach((user) => {
+    const option = document.createElement('option');
+    option.value = String(user.id);
+    option.textContent = `${user.name} - ${user.email}`;
+    closerSelect.appendChild(option);
+  });
+  if (Array.from(closerSelect.options).some((option) => option.value === previousCloserValue)) {
+    closerSelect.value = previousCloserValue;
+  }
+
+  const closerFilter = document.getElementById('salesFilterCloser');
+  const previousFilterValue = closerFilter.value;
+  closerFilter.innerHTML = '<option value="">Todas</option>';
+  closerCatalog.forEach((closer) => {
+    const option = document.createElement('option');
+    option.value = String(closer.id);
+    option.textContent = closer.display_name || closer.official_name;
+    closerFilter.appendChild(option);
+  });
+  if (Array.from(closerFilter.options).some((option) => option.value === previousFilterValue)) {
+    closerFilter.value = previousFilterValue;
+  }
+}
+
+function resetCloserForm() {
+  document.getElementById('editingCloserId').value = '';
+  document.getElementById('closerFormTitle').textContent = 'Cadastrar closer';
+  document.getElementById('btnSaveCloser').textContent = 'Salvar closer';
+  document.getElementById('btnCancelCloserEdit').style.display = 'none';
+  document.getElementById('closerOfficialName').value = '';
+  document.getElementById('closerDisplayName').value = '';
+  document.getElementById('closerUserId').value = '';
+  document.getElementById('closerStatus').value = 'active';
+  document.getElementById('closerAliases').value = '';
+  document.getElementById('closerNotes').value = '';
+}
+
+function populateCloserForm(closer) {
+  document.getElementById('editingCloserId').value = String(closer.id);
+  document.getElementById('closerFormTitle').textContent = `Editar closer #${closer.id}`;
+  document.getElementById('btnCancelCloserEdit').style.display = '';
+  document.getElementById('closerOfficialName').value = closer.official_name || '';
+  document.getElementById('closerDisplayName').value = closer.display_name || '';
+  document.getElementById('closerUserId').value = closer.user_id ? String(closer.user_id) : '';
+  document.getElementById('closerStatus').value = closer.status || 'active';
+  document.getElementById('closerAliases').value = (closer.aliases || []).map((item) => item.alias_name || item).join(', ');
+  document.getElementById('closerNotes').value = closer.notes || '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderCloserTable() {
+  const body = document.getElementById('closersBody');
+  body.innerHTML = '';
+  document.getElementById('closerCountLabel').textContent = closerCatalog.length === 1
+    ? '1 closer cadastrada'
+    : `${closerCatalog.length} closers cadastradas`;
+
+  if (!closerCatalog.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma closer cadastrada ainda.</td></tr>';
+    return;
+  }
+
+  closerCatalog.forEach((closer) => {
+    const aliases = (closer.aliases || []).map((item) => item.alias_name || item).filter(Boolean);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(closer.official_name)}</td>
+      <td class="small muted">${escapeHtml(closer.display_name || closer.official_name)}</td>
+      <td class="small muted">${escapeHtml(closer.user_name || closer.user_email || 'Sem vínculo')}</td>
+      <td class="small muted">${escapeHtml(aliases.join(', ') || '-')}</td>
+      <td><span class="badge ${closer.status !== 'inactive' ? 'admin' : ''}">${closer.status === 'inactive' ? 'Inativa' : 'Ativa'}</span></td>
+      <td><button class="btn" type="button" data-edit-closer="${closer.id}">Editar</button></td>
+    `;
+    body.appendChild(tr);
+  });
+
+  body.querySelectorAll('[data-edit-closer]').forEach((button) => {
+    button.onclick = () => {
+      const closer = closerCatalog.find((item) => Number(item.id) === Number(button.getAttribute('data-edit-closer')));
+      if (closer) populateCloserForm(closer);
+    };
+  });
+}
+
+function renderSalesStatusOptions(summary = {}) {
+  const select = document.getElementById('salesFilterStatus');
+  const previousValue = select.value;
+  select.innerHTML = '<option value="">Todos</option>';
+  Object.entries(summary || {}).forEach(([status, total]) => {
+    const option = document.createElement('option');
+    option.value = status;
+    option.textContent = `${status} (${total})`;
+    select.appendChild(option);
+  });
+  if (Array.from(select.options).some((option) => option.value === previousValue)) {
+    select.value = previousValue;
+  }
+}
+
+function renderSalesOverviewCards(summary = {}, recentRuns = []) {
+  const wrap = document.getElementById('salesOverviewCards');
+  wrap.innerHTML = '';
+  const cards = [
+    { label: 'Matriculas', value: Number(summary.total || 0), tone: 'primary' },
+    { label: 'Closers', value: Array.isArray(summary.by_closer) ? summary.by_closer.length : 0, tone: 'neutral' },
+    { label: 'Importacoes', value: Array.isArray(recentRuns) ? recentRuns.length : 0, tone: 'neutral' },
+  ];
+  Object.entries(summary.statuses || {}).slice(0, 3).forEach(([status, total]) => {
+    cards.push({ label: status, value: Number(total || 0), tone: 'success' });
+  });
+  cards.forEach((card) => {
+    const article = document.createElement('article');
+    article.className = `admin-metric-card ${card.tone || 'neutral'}`;
+    article.innerHTML = `<div class="admin-metric-value">${escapeHtml(card.value)}</div><div class="admin-metric-label">${escapeHtml(card.label)}</div>`;
+    wrap.appendChild(article);
+  });
+}
+
+function renderSalesCloserSummary(byCloser = []) {
+  const wrap = document.getElementById('salesCloserSummary');
+  wrap.innerHTML = '';
+  if (!Array.isArray(byCloser) || !byCloser.length) {
+    wrap.innerHTML = '<div class="small muted">Nenhuma distribuicao por closer disponivel ainda.</div>';
+    return;
+  }
+  byCloser.slice(0, 8).forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'admin-chip-card';
+    button.innerHTML = `<strong>${escapeHtml(item.closer_name || 'Sem closer')}</strong><span>${Number(item.total || 0)} matrícula(s)</span>`;
+    button.onclick = () => {
+      document.getElementById('salesFilterCloser').value = item.closer_id ? String(item.closer_id) : '';
+      loadSalesRecords();
+    };
+    wrap.appendChild(button);
+  });
+}
+
+function renderSalesRuns(runs = []) {
+  const body = document.getElementById('salesRunsBody');
+  body.innerHTML = '';
+  if (!Array.isArray(runs) || !runs.length) {
+    body.innerHTML = '<tr><td colspan="7" class="small muted">Nenhuma importacao registrada ainda.</td></tr>';
+    return;
+  }
+  runs.forEach((run) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="small muted">${escapeHtml(formatDateTime(run.created_at))}</td>
+      <td>${escapeHtml(run.source_workbook || '-')}</td>
+      <td class="small muted">${Number(run.total_rows || 0)}</td>
+      <td class="small muted">${Number(run.inserted_rows || 0)}</td>
+      <td class="small muted">${Number(run.updated_rows || 0)}</td>
+      <td class="small muted">${Number(run.duplicate_rows || 0)}</td>
+      <td><span class="badge ${run.status === 'completed' ? 'admin' : ''}">${escapeHtml(run.status || 'unknown')}</span></td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function renderSalesRecords(records = []) {
+  const body = document.getElementById('salesRecordsBody');
+  body.innerHTML = '';
+  document.getElementById('salesCountLabel').textContent = records.length === 1
+    ? '1 matricula exibida nos filtros atuais'
+    : `${records.length} matriculas exibidas nos filtros atuais`;
+
+  if (!Array.isArray(records) || !records.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma matricula encontrada para os filtros atuais.</td></tr>';
+    return;
+  }
+
+  records.forEach((record) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(record.student_name || '-')}</td>
+      <td class="small muted">${escapeHtml(record.course_name || '-')}</td>
+      <td class="small muted">${escapeHtml(record.closer_name || record.closer_normalized || record.closer_original || 'Sem closer')}</td>
+      <td class="small muted">${escapeHtml(record.sale_date || '-')}</td>
+      <td><span class="badge ${record.operational_status === 'Concluido' ? 'admin' : ''}">${escapeHtml(record.operational_status || 'Novo')}</span></td>
+      <td class="small muted">${escapeHtml(record.media_source || record.source_workbook || '-')}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function renderSalesLogs(logs = []) {
+  const body = document.getElementById('salesLogsBody');
+  body.innerHTML = '';
+  document.getElementById('salesLogsCountLabel').textContent = logs.length === 1
+    ? '1 log comercial recente'
+    : `${logs.length} logs comerciais recentes`;
+
+  if (!Array.isArray(logs) || !logs.length) {
+    body.innerHTML = '<tr><td colspan="6" class="small muted">Nenhuma alteração comercial registrada ainda.</td></tr>';
+    return;
+  }
+
+  logs.forEach((log) => {
+    const detail = [];
+    if (log.field_name) detail.push(`Campo: ${log.field_name}`);
+    if (log.old_value || log.new_value) detail.push(`${log.old_value || '-'} -> ${log.new_value || '-'}`);
+    if (log.origin) detail.push(`Origem: ${log.origin}`);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="small muted">${escapeHtml(formatDateTime(log.created_at))}</td>
+      <td class="small muted">${escapeHtml(log.actor_name || 'Sistema')}</td>
+      <td>${escapeHtml(log.action || '-')}</td>
+      <td class="small muted">${escapeHtml(log.entity_type || '-')} ${log.entity_id ? `#${log.entity_id}` : ''}</td>
+      <td class="small muted">${escapeHtml(log.field_name || '-')}</td>
+      <td class="small muted">${escapeHtml(detail.join(' | ') || '-')}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function updateSalesWorkbookLabels() {
+  const salesFile = document.getElementById('salesWorkbookInput').files[0];
+  const postSaleFile = document.getElementById('postSaleWorkbookInput').files[0];
+  document.getElementById('salesWorkbookLabel').textContent = salesFile ? `${salesFile.name} (${formatBytes(salesFile.size)})` : 'Nenhuma planilha de vendas selecionada.';
+  document.getElementById('postSaleWorkbookLabel').textContent = postSaleFile ? `${postSaleFile.name} (${formatBytes(postSaleFile.size)})` : 'Nenhuma planilha de pos-venda selecionada.';
+}
+
+function setSalesImportState(text, tone = 'neutral') {
+  const el = document.getElementById('salesImportState');
+  const palette = {
+    neutral: { background: '#fff', border: 'var(--border)', color: '#475467' },
+    loading: { background: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+    success: { background: '#ecfdf3', border: '#abefc6', color: '#067647' },
+    error: { background: '#fef3f2', border: '#fecdca', color: '#b42318' },
+  };
+  const style = palette[tone] || palette.neutral;
+  el.textContent = text;
+  el.style.background = style.background;
+  el.style.borderColor = style.border;
+  el.style.color = style.color;
+}
+
+async function loadClosers() {
+  const { closers } = await api('/api/admin/closers');
+  closerCatalog = closers || [];
+  renderCloserUserOptions();
+  renderCloserTable();
+}
+
+async function loadSalesOverview() {
+  const data = await api('/api/admin/sales/overview');
+  salesOverview = data;
+  if (Array.isArray(data.closers)) {
+    closerCatalog = data.closers;
+    renderCloserUserOptions();
+    renderCloserTable();
+  }
+  renderSalesOverviewCards(data.summary || {}, data.recent_runs || []);
+  renderSalesCloserSummary((data.summary || {}).by_closer || []);
+  renderSalesRuns(data.recent_runs || []);
+  renderSalesStatusOptions((data.summary || {}).statuses || {});
+}
+
+async function loadSalesRecords() {
+  const params = new URLSearchParams();
+  const closerId = document.getElementById('salesFilterCloser').value;
+  const status = document.getElementById('salesFilterStatus').value;
+  const search = document.getElementById('salesFilterSearch').value.trim();
+  if (closerId) params.set('closer_id', closerId);
+  if (status) params.set('status', status);
+  if (search) params.set('search', search);
+  params.set('limit', '120');
+  const { records } = await api(`/api/admin/sales/records?${params.toString()}`);
+  renderSalesRecords(records || []);
+}
+
+async function loadSalesLogs() {
+  const { logs } = await api('/api/admin/sales/logs');
+  renderSalesLogs(logs || []);
+}
+
+document.getElementById('btnPickRagFiles').onclick = () => {
+  document.getElementById('ragFiles').click();
+};
+
+document.getElementById('btnPickRagFolder').onclick = () => {
+  document.getElementById('ragFolder').click();
+};
+
+document.getElementById('ragFiles').addEventListener('change', (event) => {
+  setPendingRagFiles(event.target.files, 'Arquivos');
+  document.getElementById('ragFolder').value = '';
+  setRagUploadProgress(0, pendingRagFiles.length, false);
+});
+
+document.getElementById('ragFolder').addEventListener('change', (event) => {
+  setPendingRagFiles(event.target.files, 'Pasta');
+  document.getElementById('ragFiles').value = '';
+  setRagUploadProgress(0, pendingRagFiles.length, false);
+});
+
+document.getElementById('btnPickSalesWorkbook').onclick = () => {
+  document.getElementById('salesWorkbookInput').click();
+};
+
+document.getElementById('btnPickPostSaleWorkbook').onclick = () => {
+  document.getElementById('postSaleWorkbookInput').click();
+};
+
+document.getElementById('salesWorkbookInput').addEventListener('change', updateSalesWorkbookLabels);
+document.getElementById('postSaleWorkbookInput').addEventListener('change', updateSalesWorkbookLabels);
+document.getElementById('salesFilterCloser').addEventListener('change', loadSalesRecords);
+document.getElementById('salesFilterStatus').addEventListener('change', loadSalesRecords);
+document.getElementById('salesFilterSearch').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    loadSalesRecords();
+  }
+});
+
+document.getElementById('btnRefreshSales').onclick = async () => {
+  await Promise.all([loadSalesOverview(), loadSalesRecords(), loadSalesLogs()]);
+  setMsg('Painel comercial atualizado.');
+};
+
+document.getElementById('btnCancelEdit').onclick = () => {
+  resetUserForm();
+  setMsg('Edicao cancelada.');
+};
+
+document.getElementById('btnCancelDepartmentEdit').onclick = () => {
+  resetDepartmentForm();
+  setMsg('Edicao do departamento cancelada.');
+};
+
+document.getElementById('btnCancelCloserEdit').onclick = () => {
+  resetCloserForm();
+  setMsg('Edicao da closer cancelada.');
+};
+
+document.getElementById('btnSaveUser').onclick = async () => {
+  const editingUserId = document.getElementById('editingUserId').value;
+  const payload = {
+    name: document.getElementById('name').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    password: document.getElementById('password').value,
+    role: document.getElementById('role').value,
+    departments: getSelectedDepartments(),
+    can_access_intranet: document.getElementById('canAccessIntranet').checked,
+    job_title: document.getElementById('jobTitle').value.trim(),
+    unit_name: document.getElementById('unitName').value.trim(),
+  };
+
+  if (!payload.name || !payload.email || (!editingUserId && !payload.password)) {
+    setMsg('Preencha nome, email e senha obrigatoria para criar.', true);
+    return;
+  }
+
+  try {
+    if (editingUserId) {
+      await api(`/api/admin/users/${editingUserId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Usuário atualizado com sucesso.');
+    } else {
+      await api('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Usuário criado com sucesso.');
+    }
+
+    resetUserForm();
+    await Promise.all([loadUsers(), loadDepartments(), loadSubmenus(), loadSystemLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnSaveDepartment').onclick = async () => {
+  const departmentId = document.getElementById('editingDepartmentId').value;
+  const payload = {
+    name: document.getElementById('departmentName').value.trim(),
+    slug: document.getElementById('departmentSlug').value.trim(),
+    description: document.getElementById('departmentDescription').value.trim(),
+    icon: document.getElementById('departmentIcon').value.trim(),
+    is_active: document.getElementById('departmentIsActive').checked,
+  };
+
+  if (!payload.name) {
+    setMsg('Informe o nome do departamento.', true);
+    return;
+  }
+
+  try {
+    if (departmentId) {
+      await api(`/api/admin/departments/${departmentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Departamento atualizado com sucesso.');
+    } else {
+      await api('/api/admin/departments', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Departamento criado com sucesso.');
+    }
+
+    resetDepartmentForm();
+    await Promise.all([loadDepartments(), loadUsers(), loadSubmenus(), loadSystemLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnCancelSubmenuEdit').onclick = () => {
+  resetSubmenuForm();
+  setMsg('Edicao do submenu cancelada.');
+};
+
+document.getElementById('btnSaveSubmenu').onclick = async () => {
+  const submenuId = document.getElementById('editingSubmenuId').value;
+  const payload = {
+    department_id: Number(document.getElementById('submenuDepartmentId').value || 0),
+    title: document.getElementById('submenuTitle').value.trim(),
+    slug: document.getElementById('submenuSlug').value.trim(),
+    view_key: document.getElementById('submenuViewKey').value.trim(),
+    description: document.getElementById('submenuDescription').value.trim(),
+    icon: document.getElementById('submenuIcon').value.trim(),
+    is_active: document.getElementById('submenuIsActive').checked,
+  };
+
+  if (!payload.department_id || !payload.title) {
+    setMsg('Selecione o departamento e informe o titulo do submenu.', true);
+    return;
+  }
+
+  try {
+    if (submenuId) {
+      await api(`/api/admin/department-submenus/${submenuId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Submenu atualizado com sucesso.');
+    } else {
+      await api('/api/admin/department-submenus', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Submenu criado com sucesso.');
+    }
+
+    resetSubmenuForm();
+    await Promise.all([loadSubmenus(), loadSystemLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnCancelAnnouncementEdit').onclick = () => {
+  resetAnnouncementForm();
+  syncAnnouncementAudienceControls();
+  setMsg('Edicao do comunicado cancelada.');
+};
+
+document.getElementById('announcementAudienceScope').addEventListener('change', syncAnnouncementAudienceControls);
+
+document.getElementById('btnSaveAnnouncement').onclick = async () => {
+  const announcementId = document.getElementById('editingAnnouncementId').value;
+  const scope = document.getElementById('announcementAudienceScope').value;
+  const payload = {
+    title: document.getElementById('announcementTitle').value.trim(),
+    summary_text: document.getElementById('announcementSummary').value.trim(),
+    content_text: document.getElementById('announcementContent').value.trim(),
+    announcement_type: document.getElementById('announcementType').value,
+    priority: document.getElementById('announcementPriority').value,
+    audience_scope: scope,
+    department_ids: scope === 'departments' ? getSelectedAnnouncementDepartments() : [],
+    starts_at: document.getElementById('announcementStartsAt').value || '',
+    ends_at: document.getElementById('announcementEndsAt').value || '',
+    is_active: document.getElementById('announcementIsActive').checked,
+  };
+
+  if (!payload.title) {
+    setMsg('Informe o titulo do comunicado.', true);
+    return;
+  }
+
+  if (scope === 'departments' && !payload.department_ids.length) {
+    setMsg('Selecione ao menos um departamento para um comunicado segmentado.', true);
+    return;
+  }
+
+  try {
+    if (announcementId) {
+      await api(`/api/admin/intranet/announcements/${announcementId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Comunicado atualizado com sucesso.');
+    } else {
+      await api('/api/admin/intranet/announcements', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Comunicado publicado com sucesso.');
+    }
+
+    resetAnnouncementForm();
+    syncAnnouncementAudienceControls();
+    await Promise.all([loadAnnouncements(), loadSystemLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnSaveCloser').onclick = async () => {
+  const closerId = document.getElementById('editingCloserId').value;
+  const payload = {
+    official_name: document.getElementById('closerOfficialName').value.trim(),
+    display_name: document.getElementById('closerDisplayName').value.trim(),
+    user_id: document.getElementById('closerUserId').value || '',
+    status: document.getElementById('closerStatus').value,
+    aliases: document.getElementById('closerAliases').value,
+    notes: document.getElementById('closerNotes').value.trim(),
+  };
+
+  if (!payload.official_name) {
+    setMsg('Informe o nome oficial da closer.', true);
+    return;
+  }
+
+  try {
+    if (closerId) {
+      await api(`/api/admin/closers/${closerId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Closer atualizada com sucesso.');
+    } else {
+      await api('/api/admin/closers', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMsg('Closer criada com sucesso.');
+    }
+
+    resetCloserForm();
+    await Promise.all([loadClosers(), loadSalesOverview(), loadSalesRecords(), loadSalesLogs()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  }
+};
+
+document.getElementById('btnImportSales').onclick = async () => {
+  const salesWorkbook = document.getElementById('salesWorkbookInput').files[0];
+  const postSaleWorkbook = document.getElementById('postSaleWorkbookInput').files[0];
+
+  if (!salesWorkbook) {
+    setMsg('Selecione a planilha principal de vendas antes de importar.', true);
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append('sales_workbook', salesWorkbook, salesWorkbook.name);
+  if (postSaleWorkbook) {
+    fd.append('post_sale_workbook', postSaleWorkbook, postSaleWorkbook.name);
+  }
+
+  const button = document.getElementById('btnImportSales');
+  button.disabled = true;
+  button.textContent = 'Importando...';
+  setSalesImportState('Processando planilhas e vinculando closers...', 'loading');
+
+  try {
+    const result = await api('/api/admin/sales/import', {
+      method: 'POST',
+      body: fd,
+    });
+    const summary = result.summary || {};
+    setSalesImportState(`${Number(summary.inserted_rows || 0)} nova(s), ${Number(summary.updated_rows || 0)} atualizada(s) e ${Number(summary.duplicate_rows || 0)} duplicada(s) ignorada(s).`, 'success');
+    setMsg('Importacao comercial concluida com sucesso.');
+    document.getElementById('salesWorkbookInput').value = '';
+    document.getElementById('postSaleWorkbookInput').value = '';
+    updateSalesWorkbookLabels();
+    await loadSystemLogs();
+  } catch (err) {
+    setSalesImportState('Falha na importacao: ' + err.message, 'error');
+    setMsg('Erro: ' + err.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Importar planilhas';
+  }
+};
+
+document.getElementById('btnUploadRag').onclick = async () => {
+  if (!pendingRagFiles.length || ragUploadInProgress) {
+    if (!pendingRagFiles.length) setMsg('Selecione um ou mais arquivos para enviar.', true);
+    return;
+  }
+
+  const sizeCheck = splitRagFilesBySize(pendingRagFiles);
+  if (sizeCheck.rejectedBySize.length || sizeCheck.rejectedByType.length || sizeCheck.rejectedByDuplicate.length) {
+    pendingRagFiles = sizeCheck.accepted;
+    renderRagSelection();
+  }
+
+  const queue = [...sizeCheck.accepted];
+  if (!queue.length) {
+    setMsg('Todos os arquivos selecionados foram descartados por exceder 25 MB, formato não suportado ou duplicidade na fila.', true);
+    setRagUploadState('Nenhum arquivo elegivel para envio. Ajuste a selecao e tente novamente.', 'error');
+    return;
+  }
+
+  const departmentName = document.getElementById('ragDepartment').value.trim();
+  const batches = chunkFiles(queue);
+  const totalPlanned = queue.length;
+  const failedFiles = [];
+  let uploadedCount = 0;
+  let duplicateCount = 0;
+  let completedFileCount = 0;
+
+  ragUploadInProgress = true;
+  renderRagSelection();
+  setRagUploadProgress(0, totalPlanned, true);
+  setRagUploadState(`Preparando ${totalPlanned} arquivo(s) em ${batches.length} lote(s)...`, 'loading');
+
+  try {
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+      const batch = batches[batchIndex];
+      const fd = new FormData();
+      if (departmentName) fd.append('department_name', departmentName);
+      batch.forEach((file) => {
+        fd.append('files', file, getFileDisplayName(file));
+      });
+
+      setRagUploadState(`Carregando lote ${batchIndex + 1} de ${batches.length}...`, 'loading');
+      const result = await api('/api/admin/rag/upload', {
+        method: 'POST',
+        body: fd,
+      });
+
+      const batchUploaded = Number(result?.uploaded_count || result?.files?.length || 0);
+      const batchDuplicates = Number(result?.duplicate_count || result?.duplicates?.length || 0);
+      const batchErrors = Array.isArray(result?.errors) ? result.errors : [];
+
+      uploadedCount += batchUploaded;
+      duplicateCount += batchDuplicates;
+      completedFileCount += batch.length;
+      setRagUploadProgress(completedFileCount, totalPlanned, true);
+
+      if (batchErrors.length) {
+        const failedNameSet = new Set(batchErrors.map((item) => sanitizeDisplayName(item.filename)));
+        for (const file of batch) {
+          if (failedNameSet.has(sanitizeDisplayName(getFileDisplayName(file)))) {
+            failedFiles.push(file);
+          }
+        }
+      }
+    }
+
+    pendingRagFiles = failedFiles;
+    document.getElementById('ragFiles').value = '';
+    document.getElementById('ragFolder').value = '';
+
+    const failedCount = failedFiles.length;
+    const failedNames = failedFiles.slice(0, 3).map((file) => sanitizeDisplayName(getFileDisplayName(file)));
+    const uploadedLabel = uploadedCount === 1 ? '1 arquivo enviado para a base com sucesso.' : `${uploadedCount} arquivos enviados para a base com sucesso.`;
+    const duplicateLabel = duplicateCount ? ` ${duplicateCount} duplicado(s) foram ignorados automaticamente.` : '';
+    const errorDetail = failedCount ? ` ${failedCount} arquivo(s) falharam${failedNames.length ? `: ${failedNames.join(', ')}` : ''}.` : '';
+
+    setMsg(`${uploadedLabel}${duplicateLabel}${errorDetail}`, failedCount > 0);
+    setRagUploadState(
+      failedCount > 0
+        ? `${uploadedCount} arquivo(s) carregado(s), ${duplicateCount} duplicado(s) ignorado(s) e ${failedCount} ainda precisa(m) de nova tentativa.`
+        : `${uploadedCount} arquivo(s) carregado(s) e indexado(s) com sucesso.${duplicateCount ? ` ${duplicateCount} duplicado(s) foram ignorado(s).` : ''}`,
+      failedCount > 0 ? 'error' : 'success'
+    );
+
+    await Promise.all([loadRagStatus(), loadRagFiles(), loadAiTrainingOverview()]);
+  } catch (err) {
+    const remainingQueue = queue.slice(completedFileCount);
+    pendingRagFiles = [...failedFiles, ...remainingQueue];
+    const friendlyError = describeRagUploadError(err);
+    setMsg(`Erro: ${friendlyError}`, true);
+    setRagUploadState(
+      completedFileCount > 0
+        ? `Upload interrompido apos processar ${completedFileCount} de ${totalPlanned} documento(s). Revise os restantes e tente novamente.`
+        : 'Falha ao carregar os arquivos. Revise a selecao e tente novamente.',
+      'error'
+    );
+  } finally {
+    ragUploadInProgress = false;
+    renderRagSelection();
+    setRagUploadProgress(completedFileCount, totalPlanned, totalPlanned > 0);
+  }
+};
+
+document.getElementById('btnQueueKnowledgeBackfill').onclick = async () => {
+  const button = document.getElementById('btnQueueKnowledgeBackfill');
+  button.disabled = true;
+  button.textContent = 'Enfileirando...';
+  try {
+    const result = await api('/api/admin/rag/reprocess-pending', {
+      method: 'POST',
+      body: JSON.stringify({ limit: 250 }),
+    });
+    const queued = Number(result?.queued || 0);
+    setMsg(queued > 0
+      ? `${queued} arquivo(s) pendente(s) foram colocados na fila de reprocessamento.`
+      : 'Nenhum arquivo adicional precisava entrar na fila de reprocessamento agora.');
+    await Promise.all([loadRagStatus(), loadRagFiles(), loadAiTrainingOverview()]);
+  } catch (err) {
+    setMsg('Erro: ' + err.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Reprocessar pendentes';
+  }
+};
+
+async function initAdmin() {
+  await i18n()?.ready?.();
+  i18n()?.renderLanguageSwitcher?.('adminLanguageSwitcher', { compact: true, showLabel: false });
+  applyAdminTranslations();
+  i18n()?.onChange?.((locale) => {
+    applyAdminTranslations();
+    fetch('/api/me/preferences', {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(i18n()?.buildHeaders?.() || {}),
+      },
+      body: JSON.stringify({ preferred_locale: locale }),
+    }).catch(() => {});
+  });
+
+  loadSectionState();
+  bindSectionToggles();
+  syncSectionToggles();
+  startResponsiveTableObserver();
+  bindAdminTabs();
+  setAdminTab('users');
+  renderRagSelection();
+  setRagUploadState('Pronto para novos envios.');
+  setRagUploadProgress(0, 0, false);
+  setSalesImportState('Pronto para importar matriculas e vincular por closer.');
+  resetUserForm();
+  resetDepartmentForm();
+  resetSubmenuForm();
+  resetAnnouncementForm();
+  syncAnnouncementAudienceControls();
+  resetCloserForm();
+  updateSalesWorkbookLabels();
+
+  Promise.all([
+    loadDepartments(),
+    loadUsers(),
+    loadSubmenus(),
+    loadRagStatus(),
+    loadRagFiles(),
+    loadAdminCockpit(),
+    loadSystemLogs(),
+    loadAiTrainingOverview().catch((err) => {
+      document.getElementById('trainingCountLabel').textContent = 'Painel de treinamento indisponivel no momento';
+      setMsg('Aviso: não foi possível carregar o painel de treinamento: ' + err.message, true);
+    }),
+  ])
+    .catch((err) => setMsg('Erro ao carregar admin: ' + err.message, true));
+
+  window.setInterval(() => {
+    loadAdminCockpit().catch(() => {});
+  }, 15000);
+}
+
+initAdmin();
+

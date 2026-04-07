@@ -23,7 +23,7 @@
 - `DATA_DIR`: banco SQLite, uploads e cache local. No Render, use `/var/data`.
 - `INDEX_FOLDER`: pasta indexada para a base documental local. No Render, use `/var/data/kb`.
 - `DRIVE_FOLDER_ID` e `DRIVE_SERVICE_ACCOUNT_JSON`: opcionais para sincronizar documentos do Google Drive.
-- `DATABASE_URL`: hoje e apenas ignorada por esta versao; o projeto ainda nao usa Postgres.
+- `DATABASE_URL`: habilita Postgres quando `DB_CLIENT=postgres` ou quando o projeto detecta essa configuracao automaticamente.
 
 ## Fluxo recomendado de setup
 1. Configure as envs do `.env.example` ou do `render.yaml`.
@@ -38,4 +38,5 @@
 - Se `OPENAI_PROMPT_ID` estiver configurado, o backend envia esse prompt reutilizavel junto das chamadas da Responses API. Se a OpenAI recusar o prompt, o servidor faz fallback automatico para o fluxo padrao sem derrubar o chat.
 - Arquivos enviados no admin tambem alimentam o indice local da empresa.
 - Quando um PDF escaneado nao tiver texto legivel localmente, o backend tenta OCR por rasterizacao e tambem envia o arquivo bruto para a OpenAI quando couber no limite configurado.
-- Se `DATABASE_URL` estiver presente em producao, o servidor registra um aviso nos logs para deixar claro que o banco ativo continua sendo o SQLite persistido em disco.
+- Se `DB_CLIENT=sqlite` e `DATABASE_URL` tambem estiver presente, o servidor registra um aviso para evitar ambiguidade operacional.
+- Se `DB_CLIENT=postgres`, o bootstrap roda sobre o banco relacional e tenta migrar dados legados do SQLite quando possivel.

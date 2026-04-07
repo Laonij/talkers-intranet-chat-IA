@@ -361,26 +361,87 @@ function getAdminBootstrapBlocker() {
   return null;
 }
 
-async function ensureAdmin() {
+function passwordHashLooksValid(hash = "") {
+  return /^\$2[aby]\$\d{2}\$/.test(String(hash || "").trim());
+}
+
+async function createBootstrapAdmin() {
+  const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+  const created = await run(
+    "INSERT INTO users (email, name, password_hash, role, can_access_intranet) VALUES (?, ?, ?, 'admin', ?)",
+    [ADMIN_EMAIL, ADMIN_NAME, hash, true]
+  );
+
+  await logEvent(created.lastID, "admin_bootstrap_created", { email: ADMIN_EMAIL });
+  return created.lastID;
+}
+
+async function repairBootstrapAdmin(existingUser, options = {}) {
+  const safeUser = existingUser && typeof existingUser === "object" ? existingUser : null;
+  if (!safeUser?.id) return null;
+
+  const updates = [];
+  const params = [];
+
+  if (String(safeUser.role || "").trim().toLowerCase() !== "admin") {
+    updates.push("role='admin'");
+  }
+
+  if (!String(safeUser.name || "").trim()) {
+    updates.push("name=?");
+    params.push(ADMIN_NAME);
+  }
+
+  if (!coerceDbBoolean(safeUser.can_access_intranet)) {
+    updates.push("can_access_intranet=?");
+    params.push(true);
+  }
+
+  if (options.resetPassword === true) {
+    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+    updates.push("password_hash=?");
+    params.push(hash);
+  } else if (!passwordHashLooksValid(safeUser.password_hash)) {
+    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+    updates.push("password_hash=?");
+    params.push(hash);
+  }
+
+  if (!updates.length) return safeUser.id;
+
+  await run(`UPDATE users SET ${updates.join(", ")} WHERE id=?`, [...params, safeUser.id]);
+  await logEvent(safeUser.id, "admin_bootstrap_repaired", {
+    email: ADMIN_EMAIL,
+    reset_password: Boolean(options.resetPassword),
+    updated_fields: updates.map((item) => item.split("=")[0]),
+  });
+  return safeUser.id;
+}
+
+async function ensureAdmin(options = {}) {
   try {
     const blocker = getAdminBootstrapBlocker();
     if (blocker) {
       console.log(blocker);
-      return;
+      return null;
     }
 
-    const existing = await get("SELECT id FROM users WHERE email=?", [ADMIN_EMAIL]);
-    if (existing) return;
-
-    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-    const created = await run(
-      "INSERT INTO users (email, name, password_hash, role, can_access_intranet) VALUES (?, ?, ?, 'admin', ?)",
-      [ADMIN_EMAIL, ADMIN_NAME, hash, true]
+    const existing = await get(
+      "SELECT id, email, name, password_hash, role, can_access_intranet FROM users WHERE email=?",
+      [ADMIN_EMAIL]
     );
+    if (!existing) {
+      return await createBootstrapAdmin();
+    }
 
-    await logEvent(created.lastID, "admin_bootstrap_created", { email: ADMIN_EMAIL });
+    if (options.repair !== false) {
+      return await repairBootstrapAdmin(existing, { resetPassword: Boolean(options.resetPassword) });
+    }
+
+    return existing.id;
   } catch (err) {
     console.log("Falha ao criar admin:", err?.message || err);
+    return null;
   }
 }
 
@@ -8315,6 +8376,25 @@ app.use((req, res, next) => {
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'self'",
+      "img-src 'self' data: blob:",
+      "media-src 'self' data: blob:",
+      "style-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline'",
+      "connect-src 'self' https://api.openai.com",
+      "font-src 'self' data:",
+      "object-src 'none'",
+    ].join("; ")
+  );
+  if (isHttps(req)) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
   next();
 });
 app.use(express.json({ limit: `${MAX_UPLOAD_SIZE_MB}mb` }));
@@ -8729,6 +8809,8 @@ app.get("/api/health", (req, res) => {
 });
 
 app.post("/api/login", async (req, res) => {
+  await runStartupBootstrap().catch(() => null);
+
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
 
@@ -8736,10 +8818,24 @@ app.post("/api/login", async (req, res) => {
     return res.status(400).json({ error: "missing_email_or_password" });
   }
 
-  const user = await get("SELECT * FROM users WHERE email=?", [email]);
+  const isBootstrapAdminAttempt = email === ADMIN_EMAIL && password === ADMIN_PASSWORD;
+  let user = await get("SELECT * FROM users WHERE email=?", [email]);
+  if (!user && isBootstrapAdminAttempt) {
+    await ensureAdmin({ repair: true, resetPassword: true });
+    user = await get("SELECT * FROM users WHERE email=?", [email]);
+  }
   if (!user) return res.status(401).json({ error: "invalid_credentials" });
 
-  const ok = await bcrypt.compare(password, user.password_hash);
+  let ok = passwordHashLooksValid(user.password_hash)
+    ? await bcrypt.compare(password, user.password_hash)
+    : false;
+  if (!ok && isBootstrapAdminAttempt) {
+    await ensureAdmin({ repair: true, resetPassword: true });
+    user = await get("SELECT * FROM users WHERE email=?", [email]);
+    if (user?.password_hash && passwordHashLooksValid(user.password_hash)) {
+      ok = await bcrypt.compare(password, user.password_hash);
+    }
+  }
   if (!ok) return res.status(401).json({ error: "invalid_credentials" });
 
   const sessionUser = await getUserById(user.id) || user;
@@ -12221,6 +12317,7 @@ async function runStartupBootstrap() {
     startupLogger.error("Falha no bootstrap assincrono do servidor.", {
       message: err?.message || String(err || "startup_bootstrap_failed"),
     });
+    startupBootstrapPromise = null;
     return null;
   });
 
@@ -12261,20 +12358,18 @@ function startServer() {
     max_concurrent_jobs: MAX_CONCURRENT_JOBS,
   });
 
+  runStartupBootstrap().catch((err) => {
+    startupLogger.error("Falha no bootstrap antecipado.", {
+      message: err?.message || String(err || "startup_bootstrap_failed"),
+    });
+  });
+
   app.listen(PORT, () => {
     startupLogger.info("Servidor HTTP iniciado.", {
       port: PORT,
       base_url: BASE_URL,
       db_client: DB_CLIENT,
     });
-
-    setTimeout(() => {
-      runStartupBootstrap().catch((err) => {
-        startupLogger.error("Falha no bootstrap pos-start.", {
-          message: err?.message || String(err || "startup_bootstrap_failed"),
-        });
-      });
-    }, 2000);
   });
 }
 
